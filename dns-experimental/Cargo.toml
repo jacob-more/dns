@@ -1,0 +1,16 @@
+[package]
+name = "dns-experimental"
+version = "0.1.0"
+edition = "2021"
+
+description = """
+A place to test ideas and verify that current implementations are working as intended.
+"""
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dns-lib = { path = "../dns-lib" }
+dns-cache = { path = "../dns-cache" }
+dns-client = { path = "../dns-client" }
+dns-server = { path = "../dns-server" }

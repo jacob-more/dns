@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "dns-lib",
+    "dns-macros",
+    "dns-cache",
+    "dns-server",
+    "dns-client",
+]
