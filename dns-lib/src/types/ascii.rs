@@ -353,7 +353,7 @@ pub mod constants {
     pub const ASCII_LATIN_SMALL_LETTER_Y_WITH_ACUTE: AsciiChar          = 253;
     pub const ASCII_LATIN_SMALL_LETTER_THORN: AsciiChar                 = 254;
     pub const ASCII_LATIN_SMALL_LETTER_Y_WITH_DIAERESIS: AsciiChar      = 255;
-    
+
     pub const EMPTY_ASCII_STRING: AsciiString = AsciiString { string: vec![] };
 }
 
@@ -746,7 +746,7 @@ mod upper_lower_case_tests {
         let ascii_mixed_case_alphanumeric = AsciiString::from_utf8(MIXED_CASE_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
         let ascii_upper_case_alphanumeric = AsciiString::from_utf8(UPPER_STRING_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
         let ascii_lower_case_alphanumeric = AsciiString::from_utf8(LOWER_STRING_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
-        
+
         let ascii_mixed_case_non_alphanumeric = AsciiString::from_utf8(MIXED_CASE_NON_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
         let ascii_upper_case_non_alphanumeric = AsciiString::from_utf8(UPPER_STRING_NON_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
         let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
@@ -779,7 +779,7 @@ mod upper_lower_case_tests {
         let ascii_mixed_case_alphanumeric = AsciiString::from_utf8(MIXED_CASE_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
         let ascii_upper_case_alphanumeric = AsciiString::from_utf8(UPPER_STRING_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
         let ascii_lower_case_alphanumeric = AsciiString::from_utf8(LOWER_STRING_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
-        
+
         let ascii_mixed_case_non_alphanumeric = AsciiString::from_utf8(MIXED_CASE_NON_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
         let ascii_upper_case_non_alphanumeric = AsciiString::from_utf8(UPPER_STRING_NON_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
         let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
@@ -812,7 +812,7 @@ mod upper_lower_case_tests {
         let ascii_mixed_case_alphanumeric = AsciiString::from_utf8(MIXED_CASE_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
         let ascii_upper_case_alphanumeric = AsciiString::from_utf8(UPPER_STRING_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
         let ascii_lower_case_alphanumeric = AsciiString::from_utf8(LOWER_STRING_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
-        
+
         let ascii_mixed_case_non_alphanumeric = AsciiString::from_utf8(MIXED_CASE_NON_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
         let ascii_upper_case_non_alphanumeric = AsciiString::from_utf8(UPPER_STRING_NON_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
         let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
@@ -845,7 +845,7 @@ mod upper_lower_case_tests {
         let ascii_mixed_case_alphanumeric = AsciiString::from_utf8(MIXED_CASE_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
         let ascii_upper_case_alphanumeric = AsciiString::from_utf8(UPPER_STRING_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
         let ascii_lower_case_alphanumeric = AsciiString::from_utf8(LOWER_STRING_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
-        
+
         let ascii_mixed_case_non_alphanumeric = AsciiString::from_utf8(MIXED_CASE_NON_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
         let ascii_upper_case_non_alphanumeric = AsciiString::from_utf8(UPPER_STRING_NON_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
         let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
