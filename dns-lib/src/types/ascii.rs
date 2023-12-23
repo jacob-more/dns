@@ -24,6 +24,10 @@ impl Display for AsciiError {
 
 pub type AsciiChar = u8;
 
+// TODO: I am not sure whether it is better to do large match statements, like I have now that match
+//       each letter to their uppercase/lowercase counterparts or use ranges A..=Z and add/subtract
+//       32. Both solutions have merits but I don't know which is better.
+
 #[inline]
 pub const fn ascii_char_as_lower(character: AsciiChar) -> AsciiChar {
     match character {
@@ -356,16 +360,7 @@ pub mod constants {
 #[inline]
 pub fn is_numeric(character: AsciiChar) -> bool {
     return match character {
-        ASCII_ZERO  => true,
-        ASCII_ONE   => true,
-        ASCII_TWO   => true,
-        ASCII_THREE => true,
-        ASCII_FOUR  => true,
-        ASCII_FIVE  => true,
-        ASCII_SIX   => true,
-        ASCII_SEVEN => true,
-        ASCII_EIGHT => true,
-        ASCII_NINE  => true,
+        ASCII_ZERO..=ASCII_NINE => true,
         _ => false,
     };
 }
@@ -401,10 +396,11 @@ impl AsciiString {
     pub fn from_utf8(string: &str) -> Result<Self, AsciiError> {
         let mut ascii_characters = Vec::with_capacity(string.len());
         for character in string.chars() {
-            if character.is_ascii() {
-                ascii_characters.push(character as u8);
-            } else {
+            let u32_character = character as u32;
+            if ((u8::MIN as u32) > u32_character) || ((u8::MAX as u32) < u32_character) {
                 return Err(AsciiError::BadChar);
+            } else {
+                ascii_characters.push(character as u8);
             }
         }
         return Ok(Self {string: ascii_characters});
@@ -553,30 +549,34 @@ impl AsciiString {
 
     #[inline]
     pub fn as_lower(&self) -> Self {
-        let mut lowercase_string: Vec<AsciiChar> = Vec::with_capacity(self.string.len()); 
-        for &character in &self.string {
-            lowercase_string.push(ascii_char_as_lower(character))
+        Self {
+            string: self.string.iter()
+                .map(|character| ascii_char_as_lower(*character))
+                .collect()
         }
-        return Self { string: lowercase_string };
     }
 
     #[inline]
     pub fn lower(&mut self) {
-        self.string = self.as_lower().string;
+        for character in self.string.iter_mut() {
+            *character = ascii_char_as_lower(*character)
+        }
     }
 
     #[inline]
     pub fn as_upper(&self) -> Self {
-        let mut uppercase_string: Vec<AsciiChar> = Vec::with_capacity(self.string.len()); 
-        for &character in &self.string {
-            uppercase_string.push(ascii_char_as_upper(character))
+        Self {
+            string: self.string.iter()
+                .map(|character| ascii_char_as_upper(*character))
+                .collect()
         }
-        return Self { string: uppercase_string };
     }
 
     #[inline]
     pub fn upper(&mut self) {
-        self.string = self.as_upper().string;
+        for character in self.string.iter_mut() {
+            *character = ascii_char_as_upper(*character)
+        }
     }
 
     #[inline]
@@ -585,23 +585,10 @@ impl AsciiString {
             return false;
         }
 
-        for &character in &self.string {
-            match character {
-                ASCII_ZERO  => continue,
-                ASCII_ONE   => continue,
-                ASCII_TWO   => continue,
-                ASCII_THREE => continue,
-                ASCII_FOUR  => continue,
-                ASCII_FIVE  => continue,
-                ASCII_SIX   => continue,
-                ASCII_SEVEN => continue,
-                ASCII_EIGHT => continue,
-                ASCII_NINE  => continue,
-                _ => return false,
-            }
-        }
-
-        return true;
+        return self.string.iter().all(|character| match character {
+            ASCII_ZERO..=ASCII_NINE => true,
+            _ => false,
+        });
     }
 
     #[inline]
@@ -610,78 +597,12 @@ impl AsciiString {
             return false;
         }
 
-        for &character in &self.string {
-            match character {
-                ASCII_ZERO  => continue,
-                ASCII_ONE   => continue,
-                ASCII_TWO   => continue,
-                ASCII_THREE => continue,
-                ASCII_FOUR  => continue,
-                ASCII_FIVE  => continue,
-                ASCII_SIX   => continue,
-                ASCII_SEVEN => continue,
-                ASCII_EIGHT => continue,
-                ASCII_NINE  => continue,
-
-                ASCII_UPPERCASE_A => continue,
-                ASCII_UPPERCASE_B => continue,
-                ASCII_UPPERCASE_C => continue,
-                ASCII_UPPERCASE_D => continue,
-                ASCII_UPPERCASE_E => continue,
-                ASCII_UPPERCASE_F => continue,
-                ASCII_UPPERCASE_G => continue,
-                ASCII_UPPERCASE_H => continue,
-                ASCII_UPPERCASE_I => continue,
-                ASCII_UPPERCASE_J => continue,
-                ASCII_UPPERCASE_K => continue,
-                ASCII_UPPERCASE_L => continue,
-                ASCII_UPPERCASE_M => continue,
-                ASCII_UPPERCASE_N => continue,
-                ASCII_UPPERCASE_O => continue,
-                ASCII_UPPERCASE_P => continue,
-                ASCII_UPPERCASE_Q => continue,
-                ASCII_UPPERCASE_R => continue,
-                ASCII_UPPERCASE_S => continue,
-                ASCII_UPPERCASE_T => continue,
-                ASCII_UPPERCASE_U => continue,
-                ASCII_UPPERCASE_V => continue,
-                ASCII_UPPERCASE_W => continue,
-                ASCII_UPPERCASE_X => continue,
-                ASCII_UPPERCASE_Y => continue,
-                ASCII_UPPERCASE_Z => continue,
-
-                ASCII_LOWERCASE_A => continue,
-                ASCII_LOWERCASE_B => continue,
-                ASCII_LOWERCASE_C => continue,
-                ASCII_LOWERCASE_D => continue,
-                ASCII_LOWERCASE_E => continue,
-                ASCII_LOWERCASE_F => continue,
-                ASCII_LOWERCASE_G => continue,
-                ASCII_LOWERCASE_H => continue,
-                ASCII_LOWERCASE_I => continue,
-                ASCII_LOWERCASE_J => continue,
-                ASCII_LOWERCASE_K => continue,
-                ASCII_LOWERCASE_L => continue,
-                ASCII_LOWERCASE_M => continue,
-                ASCII_LOWERCASE_N => continue,
-                ASCII_LOWERCASE_O => continue,
-                ASCII_LOWERCASE_P => continue,
-                ASCII_LOWERCASE_Q => continue,
-                ASCII_LOWERCASE_R => continue,
-                ASCII_LOWERCASE_S => continue,
-                ASCII_LOWERCASE_T => continue,
-                ASCII_LOWERCASE_U => continue,
-                ASCII_LOWERCASE_V => continue,
-                ASCII_LOWERCASE_W => continue,
-                ASCII_LOWERCASE_X => continue,
-                ASCII_LOWERCASE_Y => continue,
-                ASCII_LOWERCASE_Z => continue,
-                
-                _ => return false,
-            }
-        }
-
-        return true;
+        return self.string.iter().all(|character| match character {
+            ASCII_ZERO..=ASCII_NINE => true,
+            ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
+            ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
+            _ => false,
+        });
     }
 
     #[inline]
@@ -690,51 +611,11 @@ impl AsciiString {
             return false;
         }
 
-        for &character in &self.string {
-            match character {
-                ASCII_ZERO  => continue,
-                ASCII_ONE   => continue,
-                ASCII_TWO   => continue,
-                ASCII_THREE => continue,
-                ASCII_FOUR  => continue,
-                ASCII_FIVE  => continue,
-                ASCII_SIX   => continue,
-                ASCII_SEVEN => continue,
-                ASCII_EIGHT => continue,
-                ASCII_NINE  => continue,
-
-                ASCII_LOWERCASE_A => continue,
-                ASCII_LOWERCASE_B => continue,
-                ASCII_LOWERCASE_C => continue,
-                ASCII_LOWERCASE_D => continue,
-                ASCII_LOWERCASE_E => continue,
-                ASCII_LOWERCASE_F => continue,
-                ASCII_LOWERCASE_G => continue,
-                ASCII_LOWERCASE_H => continue,
-                ASCII_LOWERCASE_I => continue,
-                ASCII_LOWERCASE_J => continue,
-                ASCII_LOWERCASE_K => continue,
-                ASCII_LOWERCASE_L => continue,
-                ASCII_LOWERCASE_M => continue,
-                ASCII_LOWERCASE_N => continue,
-                ASCII_LOWERCASE_O => continue,
-                ASCII_LOWERCASE_P => continue,
-                ASCII_LOWERCASE_Q => continue,
-                ASCII_LOWERCASE_R => continue,
-                ASCII_LOWERCASE_S => continue,
-                ASCII_LOWERCASE_T => continue,
-                ASCII_LOWERCASE_U => continue,
-                ASCII_LOWERCASE_V => continue,
-                ASCII_LOWERCASE_W => continue,
-                ASCII_LOWERCASE_X => continue,
-                ASCII_LOWERCASE_Y => continue,
-                ASCII_LOWERCASE_Z => continue,
-                
-                _ => return false,
-            }
-        }
-
-        return true;
+        return self.string.iter().all(|character| match character {
+            ASCII_ZERO..=ASCII_NINE => true,
+            ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
+            _ => false,
+        });
     }
 
     #[inline]
@@ -743,51 +624,11 @@ impl AsciiString {
             return false;
         }
 
-        for &character in &self.string {
-            match character {
-                ASCII_ZERO  => continue,
-                ASCII_ONE   => continue,
-                ASCII_TWO   => continue,
-                ASCII_THREE => continue,
-                ASCII_FOUR  => continue,
-                ASCII_FIVE  => continue,
-                ASCII_SIX   => continue,
-                ASCII_SEVEN => continue,
-                ASCII_EIGHT => continue,
-                ASCII_NINE  => continue,
-
-                ASCII_UPPERCASE_A => continue,
-                ASCII_UPPERCASE_B => continue,
-                ASCII_UPPERCASE_C => continue,
-                ASCII_UPPERCASE_D => continue,
-                ASCII_UPPERCASE_E => continue,
-                ASCII_UPPERCASE_F => continue,
-                ASCII_UPPERCASE_G => continue,
-                ASCII_UPPERCASE_H => continue,
-                ASCII_UPPERCASE_I => continue,
-                ASCII_UPPERCASE_J => continue,
-                ASCII_UPPERCASE_K => continue,
-                ASCII_UPPERCASE_L => continue,
-                ASCII_UPPERCASE_M => continue,
-                ASCII_UPPERCASE_N => continue,
-                ASCII_UPPERCASE_O => continue,
-                ASCII_UPPERCASE_P => continue,
-                ASCII_UPPERCASE_Q => continue,
-                ASCII_UPPERCASE_R => continue,
-                ASCII_UPPERCASE_S => continue,
-                ASCII_UPPERCASE_T => continue,
-                ASCII_UPPERCASE_U => continue,
-                ASCII_UPPERCASE_V => continue,
-                ASCII_UPPERCASE_W => continue,
-                ASCII_UPPERCASE_X => continue,
-                ASCII_UPPERCASE_Y => continue,
-                ASCII_UPPERCASE_Z => continue,
-                
-                _ => return false,
-            }
-        }
-
-        return true;
+        return self.string.iter().all(|character| match character {
+            ASCII_ZERO..=ASCII_NINE => true,
+            ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
+            _ => false,
+        });
     }
 }
 
