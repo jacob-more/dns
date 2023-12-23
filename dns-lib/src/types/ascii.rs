@@ -643,3 +643,226 @@ impl Add for AsciiString {
         Self { string: string, }
     }
 }
+
+#[cfg(test)]
+mod upper_lower_case_tests {
+    use super::AsciiString;
+
+    const MIXED_CASE_STRING: &str = "This Is A Test aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ 0123456789 !@#$%^&*()";
+    const UPPER_STRING: &str = "THIS IS A TEST AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPPQQRRSSTTUUVVWWXXYYZZ 0123456789 !@#$%^&*()";
+    const LOWER_STRING: &str = "this is a test aabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz 0123456789 !@#$%^&*()";
+
+    #[test]
+    fn test_as_upper_success() {
+        // Setup
+        let ascii_mixed_case = AsciiString::from_utf8(MIXED_CASE_STRING).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case = AsciiString::from_utf8(UPPER_STRING).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case = AsciiString::from_utf8(LOWER_STRING).expect("The lower case string could not convert from utf8 to ascii");
+
+        let expected_string = AsciiString::from_utf8(UPPER_STRING).expect("The upper case string could not convert from utf8 to ascii");
+
+        // Test & Check
+        assert_eq!(expected_string, ascii_mixed_case.as_upper());
+        assert_eq!(expected_string, ascii_upper_case.as_upper());
+        assert_eq!(expected_string, ascii_lower_case.as_upper());
+    }
+
+    #[test]
+    fn test_upper_success() {
+        // Setup
+        let mut ascii_mixed_case = AsciiString::from_utf8(MIXED_CASE_STRING).expect("The mixed case string could not convert from utf8 to ascii");
+        let mut ascii_upper_case = AsciiString::from_utf8(UPPER_STRING).expect("The upper case string could not convert from utf8 to ascii");
+        let mut ascii_lower_case = AsciiString::from_utf8(LOWER_STRING).expect("The lower case string could not convert from utf8 to ascii");
+
+        let expected_string = AsciiString::from_utf8(UPPER_STRING).expect("The upper case string could not convert from utf8 to ascii");
+
+        // Test & Check
+        ascii_mixed_case.upper();
+        ascii_upper_case.upper();
+        ascii_lower_case.upper();
+
+        assert_eq!(expected_string, ascii_mixed_case);
+        assert_eq!(expected_string, ascii_upper_case);
+        assert_eq!(expected_string, ascii_lower_case);
+    }
+
+    #[test]
+    fn test_as_lower_success() {
+        // Setup
+        let ascii_mixed_case = AsciiString::from_utf8(MIXED_CASE_STRING).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case = AsciiString::from_utf8(UPPER_STRING).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case = AsciiString::from_utf8(LOWER_STRING).expect("The lower case string could not convert from utf8 to ascii");
+
+        let expected_string = AsciiString::from_utf8(LOWER_STRING).expect("The upper case string could not convert from utf8 to ascii");
+
+        // Test & Check
+        assert_eq!(expected_string, ascii_mixed_case.as_lower());
+        assert_eq!(expected_string, ascii_upper_case.as_lower());
+        assert_eq!(expected_string, ascii_lower_case.as_lower());
+    }
+
+    #[test]
+    fn test_lower_success() {
+        // Setup
+        let mut ascii_mixed_case = AsciiString::from_utf8(MIXED_CASE_STRING).expect("The mixed case string could not convert from utf8 to ascii");
+        let mut ascii_upper_case = AsciiString::from_utf8(UPPER_STRING).expect("The upper case string could not convert from utf8 to ascii");
+        let mut ascii_lower_case = AsciiString::from_utf8(LOWER_STRING).expect("The lower case string could not convert from utf8 to ascii");
+
+        let expected_string = AsciiString::from_utf8(LOWER_STRING).expect("The upper case string could not convert from utf8 to ascii");
+
+        // Test & Check
+        ascii_mixed_case.lower();
+        ascii_upper_case.lower();
+        ascii_lower_case.lower();
+
+        assert_eq!(expected_string, ascii_mixed_case);
+        assert_eq!(expected_string, ascii_upper_case);
+        assert_eq!(expected_string, ascii_lower_case);
+    }
+
+    const MIXED_CASE_ALPHA: &str = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ";
+    const UPPER_STRING_ALPHA: &str = "AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPPQQRRSSTTUUVVWWXXYYZZ";
+    const LOWER_STRING_ALPHA: &str = "aabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz";
+
+    const NUMERIC: &str = "0123456789";
+
+    const MIXED_CASE_ALPHA_NUMERIC: &str = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789";
+    const UPPER_STRING_ALPHA_NUMERIC: &str = "AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPPQQRRSSTTUUVVWWXXYYZZ0123456789";
+    const LOWER_STRING_ALPHA_NUMERIC: &str = "aabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz0123456789";
+
+    const MIXED_CASE_NON_ALPHA_NUMERIC: &str = "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789!@#$%^&*()";
+    const UPPER_STRING_NON_ALPHA_NUMERIC: &str = "AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPPQQRRSSTTUUVVWWXXYYZZ0123456789!@#$%^&*()";
+    const LOWER_STRING_NON_ALPHA_NUMERIC: &str = "aabbccddeeffgghhiijjkkllmmnnooppqqrrssttuuvvwwxxyyzz0123456789!@#$%^&*()";
+
+    #[test]
+    fn test_is_alpha_numeric_lower() {
+        // Setup
+        let ascii_mixed_case_alpha = AsciiString::from_utf8(MIXED_CASE_ALPHA).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_alpha = AsciiString::from_utf8(UPPER_STRING_ALPHA).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_alpha = AsciiString::from_utf8(LOWER_STRING_ALPHA).expect("The lower case string could not convert from utf8 to ascii");
+
+        let ascii_numeric = AsciiString::from_utf8(NUMERIC).expect("The numeric string could not convert from utf8 to ascii");
+
+        let ascii_mixed_case_alphanumeric = AsciiString::from_utf8(MIXED_CASE_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_alphanumeric = AsciiString::from_utf8(UPPER_STRING_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_alphanumeric = AsciiString::from_utf8(LOWER_STRING_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
+        
+        let ascii_mixed_case_non_alphanumeric = AsciiString::from_utf8(MIXED_CASE_NON_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_non_alphanumeric = AsciiString::from_utf8(UPPER_STRING_NON_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
+
+        // Test & Check
+        assert!(!ascii_mixed_case_alpha.is_lower_alphanumeric());
+        assert!(!ascii_upper_case_alpha.is_lower_alphanumeric());
+        assert!(ascii_lower_case_alpha.is_lower_alphanumeric());
+
+        assert!(ascii_numeric.is_lower_alphanumeric());
+
+        assert!(!ascii_mixed_case_alphanumeric.is_lower_alphanumeric());
+        assert!(!ascii_upper_case_alphanumeric.is_lower_alphanumeric());
+        assert!(ascii_lower_case_alphanumeric.is_lower_alphanumeric());
+
+        assert!(!ascii_mixed_case_non_alphanumeric.is_lower_alphanumeric());
+        assert!(!ascii_upper_case_non_alphanumeric.is_lower_alphanumeric());
+        assert!(!ascii_lower_case_non_alphanumeric.is_lower_alphanumeric());
+    }
+
+    #[test]
+    fn test_is_alpha_numeric_upper() {
+        // Setup
+        let ascii_mixed_case_alpha = AsciiString::from_utf8(MIXED_CASE_ALPHA).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_alpha = AsciiString::from_utf8(UPPER_STRING_ALPHA).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_alpha = AsciiString::from_utf8(LOWER_STRING_ALPHA).expect("The lower case string could not convert from utf8 to ascii");
+
+        let ascii_numeric = AsciiString::from_utf8(NUMERIC).expect("The numeric string could not convert from utf8 to ascii");
+
+        let ascii_mixed_case_alphanumeric = AsciiString::from_utf8(MIXED_CASE_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_alphanumeric = AsciiString::from_utf8(UPPER_STRING_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_alphanumeric = AsciiString::from_utf8(LOWER_STRING_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
+        
+        let ascii_mixed_case_non_alphanumeric = AsciiString::from_utf8(MIXED_CASE_NON_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_non_alphanumeric = AsciiString::from_utf8(UPPER_STRING_NON_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
+
+        // Test & Check
+        assert!(!ascii_mixed_case_alpha.is_upper_alphanumeric());
+        assert!(ascii_upper_case_alpha.is_upper_alphanumeric());
+        assert!(!ascii_lower_case_alpha.is_upper_alphanumeric());
+
+        assert!(ascii_numeric.is_upper_alphanumeric());
+
+        assert!(!ascii_mixed_case_alphanumeric.is_upper_alphanumeric());
+        assert!(ascii_upper_case_alphanumeric.is_upper_alphanumeric());
+        assert!(!ascii_lower_case_alphanumeric.is_upper_alphanumeric());
+
+        assert!(!ascii_mixed_case_non_alphanumeric.is_upper_alphanumeric());
+        assert!(!ascii_upper_case_non_alphanumeric.is_upper_alphanumeric());
+        assert!(!ascii_lower_case_non_alphanumeric.is_upper_alphanumeric());
+    }
+
+    #[test]
+    fn test_is_alpha_numeric() {
+        // Setup
+        let ascii_mixed_case_alpha = AsciiString::from_utf8(MIXED_CASE_ALPHA).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_alpha = AsciiString::from_utf8(UPPER_STRING_ALPHA).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_alpha = AsciiString::from_utf8(LOWER_STRING_ALPHA).expect("The lower case string could not convert from utf8 to ascii");
+
+        let ascii_numeric = AsciiString::from_utf8(NUMERIC).expect("The numeric string could not convert from utf8 to ascii");
+
+        let ascii_mixed_case_alphanumeric = AsciiString::from_utf8(MIXED_CASE_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_alphanumeric = AsciiString::from_utf8(UPPER_STRING_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_alphanumeric = AsciiString::from_utf8(LOWER_STRING_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
+        
+        let ascii_mixed_case_non_alphanumeric = AsciiString::from_utf8(MIXED_CASE_NON_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_non_alphanumeric = AsciiString::from_utf8(UPPER_STRING_NON_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
+
+        // Test & Check
+        assert!(ascii_mixed_case_alpha.is_alphanumeric());
+        assert!(ascii_upper_case_alpha.is_alphanumeric());
+        assert!(ascii_lower_case_alpha.is_alphanumeric());
+
+        assert!(ascii_numeric.is_alphanumeric());
+
+        assert!(ascii_mixed_case_alphanumeric.is_alphanumeric());
+        assert!(ascii_upper_case_alphanumeric.is_alphanumeric());
+        assert!(ascii_lower_case_alphanumeric.is_alphanumeric());
+
+        assert!(!ascii_mixed_case_non_alphanumeric.is_alphanumeric());
+        assert!(!ascii_upper_case_non_alphanumeric.is_alphanumeric());
+        assert!(!ascii_lower_case_non_alphanumeric.is_alphanumeric());
+    }
+
+    #[test]
+    fn test_is_numeric() {
+        // Setup
+        let ascii_mixed_case_alpha = AsciiString::from_utf8(MIXED_CASE_ALPHA).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_alpha = AsciiString::from_utf8(UPPER_STRING_ALPHA).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_alpha = AsciiString::from_utf8(LOWER_STRING_ALPHA).expect("The lower case string could not convert from utf8 to ascii");
+
+        let ascii_numeric = AsciiString::from_utf8(NUMERIC).expect("The numeric string could not convert from utf8 to ascii");
+
+        let ascii_mixed_case_alphanumeric = AsciiString::from_utf8(MIXED_CASE_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_alphanumeric = AsciiString::from_utf8(UPPER_STRING_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_alphanumeric = AsciiString::from_utf8(LOWER_STRING_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
+        
+        let ascii_mixed_case_non_alphanumeric = AsciiString::from_utf8(MIXED_CASE_NON_ALPHA_NUMERIC).expect("The mixed case string could not convert from utf8 to ascii");
+        let ascii_upper_case_non_alphanumeric = AsciiString::from_utf8(UPPER_STRING_NON_ALPHA_NUMERIC).expect("The upper case string could not convert from utf8 to ascii");
+        let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
+
+        // Test & Check
+        assert!(!ascii_mixed_case_alpha.is_numeric());
+        assert!(!ascii_upper_case_alpha.is_numeric());
+        assert!(!ascii_lower_case_alpha.is_numeric());
+
+        assert!(ascii_numeric.is_numeric());
+
+        assert!(!ascii_mixed_case_alphanumeric.is_numeric());
+        assert!(!ascii_upper_case_alphanumeric.is_numeric());
+        assert!(!ascii_lower_case_alphanumeric.is_numeric());
+
+        assert!(!ascii_mixed_case_non_alphanumeric.is_numeric());
+        assert!(!ascii_upper_case_non_alphanumeric.is_numeric());
+        assert!(!ascii_lower_case_non_alphanumeric.is_numeric());
+    }
+}
