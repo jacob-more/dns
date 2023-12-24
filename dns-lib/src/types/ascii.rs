@@ -6,7 +6,6 @@ use self::constants::*;
 pub enum AsciiError {
     BadChar,
     Buffer,
-    ExceededMaxString,
     Overflow,
 }
 
@@ -16,7 +15,6 @@ impl Display for AsciiError {
         match self {
             Self::BadChar =>            write!(f, "character is not a valid ascii character"),
             Self::Buffer =>             write!(f, "Buffer size too small"),
-            Self::ExceededMaxString =>  write!(f, "String Exceeded 255 Bytes in Txt"),
             Self::Overflow =>           write!(f, "Overflow Unpacking Txt"),
         }
     }

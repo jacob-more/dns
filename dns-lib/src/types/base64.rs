@@ -29,7 +29,7 @@ impl Display for Base64Error {
 }
 impl From<AsciiError> for Base64Error {
     fn from(value: AsciiError) -> Self {
-        Base64Error::AsciiError(value)
+        Self::AsciiError(value)
     }
 }
 

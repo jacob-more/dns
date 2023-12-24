@@ -29,7 +29,7 @@ impl Display for Base32Error {
 }
 impl From<AsciiError> for Base32Error {
     fn from(value: AsciiError) -> Self {
-        Base32Error::AsciiError(value)
+        Self::AsciiError(value)
     }
 }
 

@@ -29,7 +29,7 @@ impl Display for ExtendedBase32Error {
 }
 impl From<AsciiError> for ExtendedBase32Error {
     fn from(value: AsciiError) -> Self {
-        ExtendedBase32Error::AsciiError(value)
+        Self::AsciiError(value)
     }
 }
 

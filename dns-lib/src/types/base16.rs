@@ -30,7 +30,7 @@ impl Display for Base16Error {
 }
 impl From<AsciiError> for Base16Error {
     fn from(value: AsciiError) -> Self {
-        Base16Error::AsciiError(value)
+        Self::AsciiError(value)
     }
 }
 
