@@ -1,6 +1,25 @@
-use std::{fmt::Display, ops::Add};
+use std::{fmt::Display, ops::Add, error::Error};
 
-use super::{c_domain_name::{CDomainNameError, CDomainName}, ascii::AsciiString};
+use crate::types::{c_domain_name::{CDomainNameError, CDomainName}, ascii::AsciiString};
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum DomainNameError {
+    CDomainNameError(CDomainNameError),
+}
+
+impl Error for DomainNameError {}
+impl Display for DomainNameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CDomainNameError(error) => write!(f, "{}", error),
+        }
+    }
+}
+impl From<CDomainNameError> for DomainNameError {
+    fn from(value: CDomainNameError) -> Self {
+        Self::CDomainNameError(value)
+    }
+}
 
 /// This is an incompressible domain name. This should be used in any place where domain name compression is not
 /// allowed. It is still able to decompress a domain name but it will not compress it when
@@ -12,18 +31,13 @@ pub struct DomainName {
 
 impl DomainName {
     #[inline]
-    pub fn new(string: &AsciiString) -> Result<Self, CDomainNameError> {
+    pub fn new(string: &AsciiString) -> Result<Self, DomainNameError> {
         Ok(Self { domain_name: CDomainName::new(string)? })
     }
 
     #[inline]
-    pub fn from_utf8(string: &str) -> Result<Self, CDomainNameError> {
-        match CDomainName::from_utf8(string) {
-            Ok(name) => Ok(Self {
-                domain_name: name,
-            }),
-            Err(error) => Err(error),
-        }
+    pub fn from_utf8(string: &str) -> Result<Self, DomainNameError> {
+        Ok(Self { domain_name: CDomainName::from_utf8(string)? })
     }
 
     #[inline]
@@ -38,8 +52,7 @@ impl DomainName {
 
     #[inline]
     pub fn as_fully_qualified(&self) -> Self {
-        let name = self.domain_name.as_fully_qualified();
-        Self { domain_name: name }
+        Self { domain_name: self.domain_name.as_fully_qualified() }
     }
 
     #[inline]
@@ -54,20 +67,17 @@ impl DomainName {
 
     #[inline]
     pub fn as_canonical_name(&self) -> Self {
-        let name = self.domain_name.as_canonical_name();
-        Self { domain_name: name }
+        Self { domain_name: self.domain_name.as_canonical_name() }
     }
     
     #[inline]
     pub fn canonical_name(&mut self) {
-        self.lower();
-        self.fully_qualified();
+        self.domain_name.canonical_name()
     }
 
     #[inline]
     pub fn as_lower(&self) -> Self {
-        let name = self.domain_name.as_lower();
-        Self { domain_name: name }
+        Self { domain_name: self.domain_name.as_lower() }
     }
 
     #[inline]
@@ -97,7 +107,7 @@ impl Display for DomainName {
 }
 
 impl Add for DomainName {
-    type Output = Result<Self, CDomainNameError>;
+    type Output = Result<Self, DomainNameError>;
 
     #[inline]
     fn add(mut self, rhs: Self) -> Self::Output {
