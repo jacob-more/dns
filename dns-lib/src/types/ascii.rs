@@ -633,16 +633,19 @@ impl Add for AsciiString {
 }
 
 impl ToWire for AsciiString {
+    #[inline]
     fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, _compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         wire.write_bytes(&self.string)
     }
 
+    #[inline]
     fn serial_length(&self) -> u16 {
         self.string.len() as u16
     }
 }
 
 impl FromWire for AsciiString {
+    #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
         let string = Self::from(wire.current_state());
         wire.shift(string.len())?;

@@ -110,11 +110,13 @@ impl Display for Label {
 }
 
 impl ToWire for Label {
+    #[inline]
     fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         (self.label.len() as u8).to_wire_format(wire, compression)?;
         self.label.to_wire_format(wire, compression)
     }
 
+    #[inline]
     fn serial_length(&self) -> u16 {
         // The string length + 1 for the length byte.
         1 + (self.label.len() as u16)
@@ -122,6 +124,7 @@ impl ToWire for Label {
 }
 
 impl FromWire for Label {
+    #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
         let label_length = u8::from_wire_format(wire)?;
 
@@ -539,6 +542,7 @@ impl Add for CDomainName {
 }
 
 impl ToWire for CDomainName {
+    #[inline]
     fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         match compression {
             Some(compression_map) => {
@@ -578,12 +582,14 @@ impl ToWire for CDomainName {
         }
     }
 
+    #[inline]
     fn serial_length(&self) -> u16 {
         self.labels.iter().map(|label| label.serial_length() as u16).sum()
     }
 }
 
 impl FromWire for CDomainName {
+    #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
         let mut labels: Vec<Label> = Vec::new();
         let mut serial_length = 0;

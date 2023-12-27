@@ -143,18 +143,21 @@ impl Add for DomainName {
 }
 
 impl ToWire for DomainName {
+    #[inline]
     fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, _compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         // Providing a None type compression map to the CDomainName disables domain name compression
         // while allowing us to re-use the rest of its implementation.
         self.domain_name.to_wire_format(wire, &mut None)
     }
 
+    #[inline]
     fn serial_length(&self) -> u16 {
         self.domain_name.serial_length()
     }
 }
 
 impl FromWire for DomainName {
+    #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
         // DomainName must still be able to decompress domain names if compression was used so we
         // don't want to disable that.
