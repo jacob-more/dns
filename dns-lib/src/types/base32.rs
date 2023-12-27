@@ -171,11 +171,6 @@ impl Base32 {
     }
 
     #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
-    }
-
-    #[inline]
     pub fn encode(string: &AsciiString) -> Result<Self, Base32Error> {
         let mut encoded_bytes: Vec<u8> = Vec::with_capacity((string.len() * 5) / 8);
         let string_chunks = string.as_slice().chunks_exact(8);
@@ -449,19 +444,6 @@ impl Base32 {
 
         return Ok(());
     }
-
-    #[inline]
-    pub fn string_len(&self) -> usize {
-        // Base
-        let base = (self.bytes.len() * 8).div_ceil(5);
-        // + Padding
-        base.next_multiple_of(8)
-    }
-
-    #[inline]
-    pub fn byte_len(&self) -> usize {
-        self.bytes.len()
-    }
 }
 
 impl BaseConversions for Base32 {
@@ -471,20 +453,28 @@ impl BaseConversions for Base32 {
     }
 
     #[inline]
-    fn from_bytes(bytes: &[u8]) -> Self {
-        let mut out_bytes = Vec::with_capacity(bytes.len());
-        out_bytes.extend(bytes);
-        Self::from_vec(out_bytes)
+    fn to_bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
     #[inline]
-    fn to_bytes(&self) -> &Vec<u8> {
-        &self.bytes
+    fn to_ascii(&self) -> AsciiString {
+        self.decode()
+    }
+
+    #[inline]
+    fn string_len(&self) -> usize {
+        // Base
+        let base = (self.bytes.len() * 8).div_ceil(5);
+        // + Padding
+        base.next_multiple_of(8)
     }
 }
 
 #[cfg(test)]
 mod circular_sanity_tests {
+    use crate::types::base_conversions::BaseConversions;
+
     use super::Base32;
 
     #[test]
