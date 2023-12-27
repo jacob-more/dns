@@ -1,5 +1,7 @@
 use std::{fmt::{Display, Debug}, slice::{Iter, IterMut}, iter::Rev, error::Error, ops::Add};
 
+use crate::serde::wire::{to_wire::ToWire, from_wire::FromWire};
+
 use self::constants::*;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -627,6 +629,24 @@ impl Add for AsciiString {
         string.extend(rhs.string);
 
         Self { string: string, }
+    }
+}
+
+impl ToWire for AsciiString {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, _compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+        wire.write_bytes(&self.string)
+    }
+
+    fn serial_length(&self) -> u16 {
+        self.string.len() as u16
+    }
+}
+
+impl FromWire for AsciiString {
+    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+        let string = Self::from(wire.current_state());
+        wire.shift(string.len())?;
+        return Ok(string);
     }
 }
 

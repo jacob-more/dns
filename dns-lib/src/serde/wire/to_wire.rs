@@ -14,7 +14,7 @@ use crate::serde::const_byte_counts::*;
 use super::{write_wire::{WriteWire, WriteWireError}, compression_map::CompressionMap};
 
 pub trait ToWire {
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut WriteWire<'a>, _compression: &mut Option<CompressionMap>) -> Result<(), WriteWireError> where 'a: 'b;
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut WriteWire<'a>, compression: &mut Option<CompressionMap>) -> Result<(), WriteWireError> where 'a: 'b;
     fn serial_length(&self) -> u16;
 }
 

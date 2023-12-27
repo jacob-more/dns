@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Display, iter::Rev, slice::{Iter, IterMut}};
 
-use crate::types::ascii::{AsciiString, constants::EMPTY_ASCII_STRING, AsciiError, AsciiChar};
+use crate::{types::ascii::{AsciiString, constants::EMPTY_ASCII_STRING, AsciiError, AsciiChar}, serde::wire::{to_wire::ToWire, from_wire::FromWire}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CharacterStringError {
@@ -199,5 +199,46 @@ impl Display for CharacterString {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.ascii)
+    }
+}
+
+impl ToWire for CharacterString {
+    #[inline]
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+        (self.ascii.len() as u8).to_wire_format(wire, compression)?;
+        self.ascii.to_wire_format(wire, compression)
+    }
+
+    #[inline]
+    fn serial_length(&self) -> u16 {
+        1 //< For the length octet, not included in a plain AsciiString.
+        + self.ascii.serial_length()
+    }
+}
+
+impl FromWire for CharacterString {
+    #[inline]
+    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+        let length = u8::from_wire_format(wire)?;
+
+        if (length as usize) > Self::MAX_OCTETS {
+            return Err(crate::serde::wire::read_wire::ReadWireError::OutOfBoundsError(
+                format!("character strings must be at most {} bytes (including the length byte)", Self::MAX_OCTETS + 1)
+            ));
+        }
+
+        if wire.current_state_len() < (length as usize) {
+            return Err(crate::serde::wire::read_wire::ReadWireError::OverflowError(
+                String::from("wire length runs out before the full string is finished reading")
+            ));
+        }
+
+        // Since the AsciiString deserializer will consume the entire buffer,
+        // we only feed it the section we want it to read.
+        let mut ascii_wire = wire.section_from_current_state(Some(0), Some(length as usize))?;
+        let string = AsciiString::from_wire_format(&mut ascii_wire)?;
+        wire.shift(length as usize)?;
+
+        Ok(Self { ascii: string })
     }
 }

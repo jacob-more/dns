@@ -1,6 +1,6 @@
 use std::{fmt::{Display, Debug}, error::Error, ops::Add};
 
-use crate::types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower};
+use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::wire::{to_wire::ToWire, from_wire::FromWire}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
@@ -109,6 +109,52 @@ impl Display for Label {
     }
 }
 
+impl ToWire for Label {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+        (self.label.len() as u8).to_wire_format(wire, compression)?;
+        self.label.to_wire_format(wire, compression)
+    }
+
+    fn serial_length(&self) -> u16 {
+        // The string length + 1 for the length byte.
+        1 + (self.label.len() as u16)
+    }
+}
+
+impl FromWire for Label {
+    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+        let label_length = u8::from_wire_format(wire)?;
+
+        match label_length & 0b1100_0000 {
+            0b0000_0000 => {
+                if wire.current_state_len() < (label_length as usize) {
+                    return Err(CDomainNameError::Buffer)?;
+                }
+        
+                if (label_length as usize) > Self::MAX_OCTETS  {
+                    return Err(CDomainNameError::LongLabel)?;
+                }
+
+                // This AsciiString from_wire_format fully consumes the buffer.
+                // Need to make sure that it is only fed what it needs.
+                let mut ascii_wire = wire.section_from_current_state(Some(0), Some(label_length as usize))?;
+                let string = AsciiString::from_wire_format(&mut ascii_wire)?;
+                wire.shift(label_length as usize)?;
+        
+                return Ok(Self { label: string });
+            },
+            0b1100_0000 => {
+                return Err(crate::serde::wire::read_wire::ReadWireError::FormatError(
+                    String::from("the label is a pointer but is being deserialized as a string"),
+                ));
+            },
+            _ => {
+                // 0x80 and 0x40 are reserved
+                return Err(CDomainNameError::BadRData)?;
+            }
+        }
+    }
+}
 
 /// This is a compressible domain name. This should only be used in situations where domain name
 /// compression is allowed. In all other cases, use a regular DomainName.
@@ -489,5 +535,126 @@ impl Add for CDomainName {
         }
 
         Ok(domain_name)
+    }
+}
+
+impl ToWire for CDomainName {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+        match compression {
+            Some(compression_map) => {
+                for (i, label) in self.labels.iter().enumerate() {
+                    let labels_tail = &self.labels[i..];
+                    match compression_map.find_from_slice_labels(labels_tail) {
+                        Some(pointer) => {
+                            // The pointer cannot make use of the first two bits.
+                            // These are reserved for use indicating that this
+                            // label is a pointer. If they are needed for the pointer
+                            // itself, the pointer would be corrupted.
+                            // 
+                            // To solve this issue, we will just not use a pointer if
+                            // using one would lead to a corrupted pointer. Easy as that.
+                            if (pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000 {
+                                label.to_wire_format(wire, &mut None)?;
+                            } else {
+                                (pointer | 0b1100_0000_0000_0000).to_wire_format(wire, &mut None)?;
+                            }
+                        },
+                        None => {
+                            // Note: the length of the wire === a pointer to the index after the end of the wire.
+                            //       In this case, we want a pointer to the index we are about to write, so this should work.
+                            compression_map.insert_slice_labels(labels_tail, wire.len() as u16);
+                            label.to_wire_format(wire, &mut None)?;
+                        },
+                    }
+                }
+                Ok(())
+            },
+            None => {
+                for label in &self.labels {
+                    label.to_wire_format(wire, compression)?;
+                }
+                Ok(())
+            },
+        }
+    }
+
+    fn serial_length(&self) -> u16 {
+        self.labels.iter().map(|label| label.serial_length() as u16).sum()
+    }
+}
+
+impl FromWire for CDomainName {
+    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+        let mut labels: Vec<Label> = Vec::new();
+        let mut serial_length = 0;
+        let mut pointer_count = 0;
+
+        let mut root_found = false;
+        let mut label: Label;
+
+        let mut final_offset = wire.current_state_offset();
+
+        while !root_found {
+            // Here, we read the first byte of each label but we don't want to save it. We are
+            // just using it to see what type of label we are reading. The actual deserialization
+            // of the length and string will be done by the Label.
+            let first_byte = u8::from_wire_format(
+                &mut wire.section_from_current_state(Some(0), Some(1))?,
+            )?;
+
+            match first_byte & 0b1100_0000 {
+                0b0000_0000 => {
+                    label = Label::from_wire_format(wire)?;
+            
+                    serial_length += label.serial_length();
+                    if serial_length > Self::MAX_OCTETS {
+                        return Err(CDomainNameError::LongDomain)?;
+                    }
+                    
+                    root_found = label.is_root();
+                    labels.push(label);
+
+                    // If the end of the wire is reached, cannot keep reading labels.
+                    if wire.current_state_len() == 0 {
+                        break;
+                    }
+                },
+                0b1100_0000 => {
+                    pointer_count += 1;
+                    if pointer_count > Self::MAX_COMPRESSION_POINTERS {
+                        return Err(CDomainNameError::TooManyPointers)?;
+                    }
+
+                    let pointer_bytes: u16;
+                    pointer_bytes = u16::from_wire_format(wire)?;
+
+                    // The final offset will be determined by the position after the first pointer.
+                    // Once all the redirects have been followed, this is where we want our buffer
+                    // to return to.
+                    if pointer_count == 1 {
+                        final_offset = wire.current_state_offset();
+                    }
+
+                    let pointer = pointer_bytes & 0b0011_1111_1111_1111;
+                    // The pointer must point backwards in the wire. Forward pointers
+                    // are forbidden.
+                    if (pointer as usize) > wire.current_state_offset() {
+                        return Err(CDomainNameError::ForwardPointers)?;
+                    }
+
+                    wire.set_offset(pointer as usize)?;
+                },
+                _ => {
+                    // 0x80 and 0x40 are reserved
+                    return Err(CDomainNameError::BadRData)?;
+                }
+            }
+        }
+
+        if pointer_count == 0 {
+            wire.set_offset(final_offset as usize)?;
+        }
+
+        Ok(Self { labels: labels })
     }
 }

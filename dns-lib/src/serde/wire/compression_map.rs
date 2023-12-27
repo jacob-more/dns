@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use crate::types::c_domain_name::{CDomainName, Label};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct CompressionMap<'a> {
-	map: HashMap<&'a [Label], u16>,
+pub struct CompressionMap {
+	map: HashMap<Vec<Label>, u16>,
 }
 
-impl<'a> CompressionMap<'a> {
+impl<'a> CompressionMap {
 	#[inline]
-    pub fn new() -> CompressionMap<'a> {
+    pub fn new() -> CompressionMap {
         Self { map: HashMap::new() }
     }
 
@@ -19,13 +19,13 @@ impl<'a> CompressionMap<'a> {
     }
 
 	#[inline]
-    pub fn insert_vec_labels(&mut self, domain: &'a Vec<Label>, offset: u16) {
-        self.insert_slice_labels(domain, offset)
+    pub fn insert_vec_labels(&mut self, domain: Vec<Label>, offset: u16) {
+        self.map.insert(domain, offset);
     }
 
 	#[inline]
     pub fn insert_slice_labels(&mut self, domain: &'a [Label], offset: u16) {
-        self.map.insert(domain, offset);
+        self.insert_vec_labels(Vec::from(domain), offset)
     }
 
 	#[inline]

@@ -1,6 +1,6 @@
 use std::{fmt::Display, ops::Add, error::Error};
 
-use crate::types::{c_domain_name::{CDomainNameError, CDomainName, Label}, ascii::AsciiString};
+use crate::{types::{c_domain_name::{CDomainNameError, CDomainName, Label}, ascii::AsciiString}, serde::wire::{to_wire::ToWire, from_wire::FromWire}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
@@ -139,5 +139,25 @@ impl Add for DomainName {
     fn add(mut self, rhs: Self) -> Self::Output {
         self.domain_name = (self.domain_name + rhs.domain_name)?;
         return Ok(self);
+    }
+}
+
+impl ToWire for DomainName {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, _compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+        // Providing a None type compression map to the CDomainName disables domain name compression
+        // while allowing us to re-use the rest of its implementation.
+        self.domain_name.to_wire_format(wire, &mut None)
+    }
+
+    fn serial_length(&self) -> u16 {
+        self.domain_name.serial_length()
+    }
+}
+
+impl FromWire for DomainName {
+    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+        // DomainName must still be able to decompress domain names if compression was used so we
+        // don't want to disable that.
+        Ok(Self { domain_name: CDomainName::from_wire_format(wire)? })
     }
 }
