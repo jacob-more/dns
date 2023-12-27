@@ -13,9 +13,9 @@ impl Error for AsciiError {}
 impl Display for AsciiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::BadChar =>            write!(f, "character is not a valid ascii character"),
-            Self::Buffer =>             write!(f, "Buffer size too small"),
-            Self::Overflow =>           write!(f, "Overflow Unpacking Txt"),
+            Self::BadChar =>  write!(f, "character is not a valid ascii character"),
+            Self::Buffer =>   write!(f, "Buffer size too small"),
+            Self::Overflow => write!(f, "Overflow Unpacking Txt"),
         }
     }
 }
@@ -357,10 +357,10 @@ pub mod constants {
 
 #[inline]
 pub fn is_numeric(character: AsciiChar) -> bool {
-    return match character {
+    match character {
         ASCII_ZERO..=ASCII_NINE => true,
         _ => false,
-    };
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -387,7 +387,7 @@ impl Debug for AsciiString {
 impl AsciiString {
     #[inline]
     pub fn from(string: &[u8]) -> Self {
-        return Self { string: string.to_vec() };
+        Self { string: string.to_vec() }
     }
 
     #[inline]
@@ -406,42 +406,42 @@ impl AsciiString {
 
     #[inline]
     pub fn from_range(&self, start: usize, end: usize) -> Self {
-        return Self { string: self.string[start..end].to_vec() };
+        Self { string: self.string[start..end].to_vec() }
     }
 
     #[inline]
     pub fn len(&self) -> usize {
-        return self.string.len();
+        self.string.len()
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        return self.string.is_empty();
+        self.string.is_empty()
     }
 
     #[inline]
     pub fn get(&self, index: usize) -> Option<&AsciiChar> {
-        return self.string.get(index);
+        self.string.get(index)
     }
 
     #[inline]
     pub fn last(&self) -> Option<&AsciiChar> {
-        return self.string.last();
+        self.string.last()
     }
 
     #[inline]
     pub fn last_mut(&mut self) -> Option<&mut AsciiChar> {
-        return self.string.last_mut();
+        self.string.last_mut()
     }
 
     #[inline]
     pub fn first(&self) -> Option<&AsciiChar> {
-        return self.string.first();
+        self.string.first()
     }
 
     #[inline]
     pub fn first_mut(&mut self) -> Option<&mut AsciiChar> {
-        return self.string.first_mut();
+        self.string.first_mut()
     }
 
     #[inline]
@@ -451,7 +451,7 @@ impl AsciiString {
 
     #[inline]
     pub fn pop(&mut self) -> Option<AsciiChar> {
-        return self.string.pop();
+        self.string.pop()
     }
 
     #[inline]
@@ -461,7 +461,7 @@ impl AsciiString {
 
     #[inline]
     pub fn remove(&mut self, index: usize) -> AsciiChar {
-        return self.string.remove(index);
+        self.string.remove(index)
     }
 
     #[inline]
@@ -471,12 +471,12 @@ impl AsciiString {
 
     #[inline]
     pub fn get_mut(&mut self, index: usize) -> Option<&mut AsciiChar> {
-        return self.string.get_mut(index);
+        self.string.get_mut(index)
     }
 
     #[inline]
     pub fn swap(&mut self, index1: usize, index2: usize) {
-        return self.string.swap(index1, index2);
+        self.string.swap(index1, index2)
     }
 
     #[inline]
@@ -486,17 +486,17 @@ impl AsciiString {
 
     #[inline]
     pub fn as_reversed(&self) -> Rev<Iter<'_, AsciiChar>> {
-        return self.iter().rev();
+        self.iter().rev()
     }
 
     #[inline]
     pub fn iter(&self) -> Iter<'_, AsciiChar> {
-        return self.string.iter();
+        self.string.iter()
     }
 
     #[inline]
     pub fn iter_mut(&mut self) -> IterMut<'_, AsciiChar> {
-        return self.string.iter_mut();
+        self.string.iter_mut()
     }
 
     #[inline]
@@ -527,22 +527,22 @@ impl AsciiString {
 
     #[inline]
     pub fn contains(&self, character: &AsciiChar) -> bool {
-        return self.string.contains(character);
+        self.string.contains(character)
     }
 
     #[inline]
     pub fn as_slice(&self) -> &[AsciiChar] {
-        return self.string.as_slice();
+        self.string.as_slice()
     }
 
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [AsciiChar] {
-        return self.string.as_mut_slice();
+        self.string.as_mut_slice()
     }
 
     #[inline]
     pub fn as_vec(&self) -> &Vec<AsciiChar> {
-        return &self.string;
+        &self.string
     }
 
     #[inline]
@@ -579,54 +579,42 @@ impl AsciiString {
 
     #[inline]
     pub fn is_numeric(&self) -> bool {
-        if self.string.len() == 0 {
-            return false;
-        }
-
-        return self.string.iter().all(|character| match character {
+        self.string.len() != 0
+        && self.string.iter().all(|character| match character {
             ASCII_ZERO..=ASCII_NINE => true,
             _ => false,
-        });
+        })
     }
 
     #[inline]
     pub fn is_alphanumeric(&self) -> bool {
-        if self.string.len() == 0 {
-            return false;
-        }
-
-        return self.string.iter().all(|character| match character {
+        self.string.len() != 0 
+        && self.string.iter().all(|character| match character {
             ASCII_ZERO..=ASCII_NINE => true,
             ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
             ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
             _ => false,
-        });
+        })
     }
 
     #[inline]
     pub fn is_lower_alphanumeric(&self) -> bool {
-        if self.string.len() == 0 {
-            return false;
-        }
-
-        return self.string.iter().all(|character| match character {
+        self.string.len() != 0
+        && self.string.iter().all(|character| match character {
             ASCII_ZERO..=ASCII_NINE => true,
             ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
             _ => false,
-        });
+        })
     }
 
     #[inline]
     pub fn is_upper_alphanumeric(&self) -> bool {
-        if self.string.len() == 0 {
-            return false;
-        }
-
-        return self.string.iter().all(|character| match character {
+        self.string.len() != 0
+        && self.string.iter().all(|character| match character {
             ASCII_ZERO..=ASCII_NINE => true,
             ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
             _ => false,
-        });
+        })
     }
 }
 
