@@ -392,6 +392,11 @@ impl CDomainName {
     }
 
     #[inline]
+    pub fn as_slice(&self) -> &[Label] {
+        &self.labels
+    }
+
+    #[inline]
     pub fn search_domains<'a>(&'a self) -> impl 'a + Iterator<Item = CDomainName> {
         self.labels.iter()
             .enumerate()
