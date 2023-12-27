@@ -8,4 +8,5 @@ edition = "2021"
 [dependencies]
 dns-macros = {path="../dns-macros"}
 
+mac_address = "1.1"
 ux = "0.1.5"
