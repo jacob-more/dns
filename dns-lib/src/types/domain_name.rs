@@ -1,6 +1,6 @@
 use std::{fmt::Display, ops::Add, error::Error};
 
-use crate::types::{c_domain_name::{CDomainNameError, CDomainName}, ascii::AsciiString};
+use crate::types::{c_domain_name::{CDomainNameError, CDomainName, Label}, ascii::AsciiString};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
@@ -41,15 +41,22 @@ impl DomainName {
     }
 
     #[inline]
+    pub fn from_labels(labels: &[Label]) -> Self {
+        Self { domain_name: CDomainName::from_labels(labels) }
+    }
+
+    #[inline]
     pub fn is_fully_qualified(&self) -> bool {
         self.domain_name.is_fully_qualified()
     }
 
+    /// Converts this domain into a fully qualified domain.
     #[inline]
     pub fn fully_qualified(&mut self) {
         self.domain_name.fully_qualified()
     }
 
+    /// Creates a fully qualified domain from this domain.
     #[inline]
     pub fn as_fully_qualified(&self) -> Self {
         Self { domain_name: self.domain_name.as_fully_qualified() }
@@ -60,6 +67,8 @@ impl DomainName {
         self.domain_name.label_count()
     }
 
+    /// A domain name is root if it is made up of only 1 label, that has a length
+    /// of zero.
     #[inline]
     pub fn is_root(&self) -> bool {
         self.domain_name.is_root()
@@ -85,9 +94,26 @@ impl DomainName {
         self.domain_name.lower()
     }
 
+    /// is_subdomain checks if child is indeed a child of the parent. If child
+    /// and parent are the same domain true is returned as well.
     #[inline]
     pub fn is_subdomain(&self, child: &Self) -> bool {
         self.domain_name.is_subdomain(&child.domain_name)
+    }
+
+    #[inline]
+    pub fn as_vec(&self) -> &Vec<Label> {
+        self.domain_name.as_vec()
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[Label] {
+        self.domain_name.as_slice()
+    }
+
+    #[inline]
+    pub fn search_domains<'a>(&'a self) -> impl 'a + Iterator<Item = CDomainName> {
+        self.domain_name.search_domains()
     }
 
     #[inline]
