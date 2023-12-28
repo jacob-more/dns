@@ -8,5 +8,7 @@ edition = "2021"
 [dependencies]
 dns-macros = {path="../dns-macros"}
 
+lazy_static = "1.4"
 mac_address = "1.1"
+regex = "1.10"
 ux = "0.1.5"
