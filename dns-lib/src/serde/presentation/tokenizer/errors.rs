@@ -6,8 +6,10 @@ pub enum TokenizerError<'a> {
     NestedOpenParenthesis,
     UnopenedClosingParenthesis,
     NoClosingParenthesis,
+    UnknownTokens,
     UnknownToken(&'a str),
-    UnknownTokens(&'a str, &'a str),
+    TwoUnknownTokens(&'a str, &'a str),
+    ThreeUnknownTokens(&'a str, &'a str, &'a str),
 }
 impl<'a> Error for TokenizerError<'a> {}
 impl<'a> Display for TokenizerError<'a> {
@@ -17,8 +19,10 @@ impl<'a> Display for TokenizerError<'a> {
             Self::NestedOpenParenthesis => write!(f, "an open parenthesis was used within a block of parenthesis. Only 1 set of parenthesis may be used at a time"),
             Self::UnopenedClosingParenthesis => write!(f, "a closing parenthesis was used without a matching opening parenthesis"),
             Self::NoClosingParenthesis => write!(f, "an opening parenthesis was used without a closing parenthesis"),
+            Self::UnknownTokens => write!(f, "unknown tokens"),
             Self::UnknownToken(token) => write!(f, "unknown token '{token}'"),
-            Self::UnknownTokens(token1, token2) => write!(f, "unknown tokens '{token1}' and '{token2}'"),
+            Self::TwoUnknownTokens(token1, token2) => write!(f, "unknown tokens '{token1}' and '{token2}'"),
+            Self::ThreeUnknownTokens(token1, token2, token3) => write!(f, "unknown tokens '{token1}', '{token2}' and '{token3}'"),
         }
     }
 }

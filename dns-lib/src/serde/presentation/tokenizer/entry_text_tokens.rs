@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use super::{text_tokens::TextToken, errors::TokenizerError};
+use super::{text_tokens::{TextToken, TextTokenIter}, errors::TokenizerError};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct EntryTokens<'a> {
@@ -17,56 +17,55 @@ impl<'a> Display for EntryTokens<'a> {
     }
 }
 
-impl<'a> EntryTokens<'a> {
-    #[inline]
-    pub fn parse_next(mut feed: &'a str) -> Result<(Self, &'a str), TokenizerError> {
+pub struct EntryTokenIter<'a> {
+    token_iter: TextTokenIter<'a>
+}
+
+impl<'a> EntryTokenIter<'a> {
+    pub fn new(feed: &'a str) -> Self {
+        EntryTokenIter { token_iter: TextTokenIter::new(feed) }
+    }
+}
+
+impl<'a> Iterator for EntryTokenIter<'a> {
+    type Item = Result<EntryTokens<'a>, TokenizerError<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
         let mut tokens = Vec::new();
-        'non_empty_entry: loop {
-            let mut ignore_new_line = false;
-            let mut next_token;
-            'read_single_entry: loop {
-                (next_token, feed) = TextToken::parse_next(feed)?;
-                match (&next_token, ignore_new_line) {
-                    // Open parenthesis is used to indicate that newlines should be ignored
-                    (TextToken::TextLiteral("("), true) => return Err(TokenizerError::NestedOpenParenthesis),
-                    (TextToken::TextLiteral("("), false) => ignore_new_line = true,
+        let mut ignore_new_line = false;
+        loop {
+            match (self.token_iter.next(), ignore_new_line) {
+                // Open parenthesis is used to indicate that newlines should be ignored
+                (Some(Ok(TextToken::TextLiteral("("))), true) => return Some(Err(TokenizerError::NestedOpenParenthesis)),
+                (Some(Ok(TextToken::TextLiteral("("))), false) => ignore_new_line = true,
 
-                    // Closing parenthesis is used to end the indication that newlines should be ignored
-                    (TextToken::TextLiteral(")"), true) => ignore_new_line = false,
-                    (TextToken::TextLiteral(")"), false) => return Err(TokenizerError::UnopenedClosingParenthesis),
+                // Closing parenthesis is used to end the indication that newlines should be ignored
+                (Some(Ok(TextToken::TextLiteral(")"))), true) => ignore_new_line = false,
+                (Some(Ok(TextToken::TextLiteral(")"))), false) => return Some(Err(TokenizerError::UnopenedClosingParenthesis)),
 
-                    // Any text literals that are not a part of a comment should be included as part
-                    // of the entry
-                    (TextToken::TextLiteral(_), _) => tokens.push(next_token),
+                // Any text literals that are not a part of a comment should be included as part
+                // of the entry
+                (Some(Ok(TextToken::TextLiteral(token_str))), _) => tokens.push(TextToken::TextLiteral(token_str)),
 
-                    // Comments have no meaning
-                    (TextToken::Comment(_), _) => (),
+                // Comments have no meaning
+                (Some(Ok(TextToken::Comment(_))), _) => (),
 
-                    // Separators are removed at this step. We should only care about the text
-                    // literals from this point onwards. The only time they matter is if they are
-                    // the first token.
-                    (TextToken::Separator(_), _) if (tokens.len() == 0) => tokens.push(next_token),
-                    (TextToken::Separator(_), _) => (),
+                // Separators are removed at this step. We should only care about the text
+                // literals from this point onwards. The only time they matter is if they are
+                // the first token.
+                (Some(Ok(TextToken::Separator(token_str))), _) if (tokens.len() == 0) => tokens.push(TextToken::Separator(token_str)),
+                (Some(Ok(TextToken::Separator(_))), _) => (),
 
-                    (TextToken::NewLine(_), true) => (),
-                    (TextToken::NewLine(_), false) => break 'read_single_entry,
+                (Some(Ok(TextToken::NewLine(_))), true) => (),
+                (Some(Ok(TextToken::NewLine(_))), false) => break,
 
-                    (TextToken::End, true) => return Err(TokenizerError::NoClosingParenthesis),
-                    (TextToken::End, false) => break 'non_empty_entry,
-                }
-            }
-            // If an entry would have had zero tokens in it, keep parsing. This way, we minimize the
-            // number of empty entries we generate.
-            // If the line only has spaces/tabs, then we clear it and try again.
-            if !tokens.is_empty() {
-                break 'non_empty_entry;
-            } else if let Some(TextToken::Separator(_)) = tokens.first() {
-                if tokens.len() == 1 {
-                    tokens.clear();
-                }
+                (None, true) => return Some(Err(TokenizerError::NoClosingParenthesis)),
+                (None, false) => return None,
+
+                (Some(Err(error)), _) => return Some(Err(error)),
             }
         }
         
-        Ok((Self { text_tokens: tokens }, feed))
+        return Some(Ok(EntryTokens { text_tokens: tokens }));
     }
 }
