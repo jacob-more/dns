@@ -43,13 +43,13 @@ pub struct ResourceRecord<'a> {
 impl<'a> Display for ResourceRecord<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Resource Record")?;
-        if let Some(domain_name) = &self.domain_name {
+        if let Some(domain_name) = self.domain_name {
             writeln!(f, "\tDomain Name: {}", domain_name)?;
         }
-        if let Some(ttl) = &self.ttl {
+        if let Some(ttl) = self.ttl {
             writeln!(f, "\tTTL: {}", ttl)?;
         }
-        if let Some(rclass) = &self.rclass {
+        if let Some(rclass) = self.rclass {
             writeln!(f, "\tClass: {}", rclass)?;
         }
         writeln!(f, "\tType: {}", self.rtype)?;
@@ -149,19 +149,19 @@ impl<'a> EntryIter<'a> {
         match other_tokens {
             &[TextToken::TextLiteral(token_1), TextToken::TextLiteral(token_2), ..] => {
                 // If the first token is an rtype, then the rest is the rdata and we should not read it
-                if REGEX_RTYPE.is_match(token_1) {
+                if (!REGEX_RCLASS.is_match(token_1)) && REGEX_RTYPE.is_match(token_1) {
                     return Self::parse_rr_rtype_first(domain_name, token_1, &other_tokens[1..]);
                 }
 
-                if REGEX_RTYPE.is_match(token_2) {
+                if (!REGEX_RCLASS.is_match(token_2)) && REGEX_RTYPE.is_match(token_2) {
                     return Self::parse_rr_rtype_second(domain_name, token_1, token_2, &other_tokens[2..]);
                 }
 
                 // The match case only covers a minimum of 2 tokens. This case can only happen if
                 // there are at least 3.
                 if other_tokens.len() >= 3 {
-                    let token_3 = other_tokens[3].into();
-                    if REGEX_RTYPE.is_match(token_3) {
+                    let token_3 = other_tokens[2].into();
+                    if (!REGEX_RCLASS.is_match(token_3)) && REGEX_RTYPE.is_match(token_3) {
                         return Self::parse_rr_rtype_third(domain_name, token_1, token_2, token_3, &other_tokens[3..]);
                     } else {
                         return Err(TokenizerError::UnknownToken(token_3));
@@ -195,7 +195,7 @@ impl<'a> EntryIter<'a> {
             ))
         } else if REGEX_TTL.is_match(token_1) {
             Ok(Self::new_rr(
-                None,
+                domain_name,
                 Some(token_1),
                 None,
                 rtype,
@@ -217,7 +217,7 @@ impl<'a> EntryIter<'a> {
             ))
         } else if REGEX_TTL.is_match(token_1) && REGEX_RCLASS.is_match(token_2) {
             Ok(Self::new_rr(
-                None,
+                domain_name,
                 Some(token_1),
                 Some(token_2),
                 rtype,

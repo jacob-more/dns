@@ -1,8 +1,8 @@
 use lazy_static::lazy_static;
 use regex::Regex;
 
-const CHARACTER_STR_UNQUOTED: &str = "\\A(([[:ascii:]&&[^ ;\\r\\n\"\\(\\)]])+)";
-const CHARACTER_STR_QUOTED: &str = "\\A(\"(([[:ascii:]&&[^\"]]|(\\\"))*)\")";
+const CHARACTER_STR_UNQUOTED: &str = "\\A(([[:ascii:]&&[^ \\t;\\r\\n\"\\(\\)]]|(\\[^0-9]))+)";
+const CHARACTER_STR_QUOTED: &str = "\\A(\"(([[:ascii:]&&[^\"]]|(\\[^0-9]))*)\")";
 
 lazy_static! {
     pub static ref REGEX_CHARACTER_STR_UNQUOTED: Regex = Regex::new(CHARACTER_STR_UNQUOTED).unwrap();
