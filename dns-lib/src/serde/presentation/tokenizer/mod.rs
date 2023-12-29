@@ -1,6 +1,7 @@
 mod regex;
-mod errors;
+pub mod errors;
 
 mod text_tokens;
 mod entry_text_tokens;
-pub mod entry;
+mod entry;
+pub mod tokenizer;
