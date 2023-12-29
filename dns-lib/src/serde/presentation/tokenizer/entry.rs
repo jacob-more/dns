@@ -82,6 +82,7 @@ pub struct EntryIter<'a> {
 }
 
 impl<'a> EntryIter<'a> {
+    #[inline]
     pub fn new(feed: &'a str) -> Self {
         EntryIter { token_iter: EntryTokenIter::new(feed) }
     }
@@ -90,6 +91,7 @@ impl<'a> EntryIter<'a> {
 impl<'a> Iterator for EntryIter<'a> {
     type Item = Result<Entry<'a>, TokenizerError<'a>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let entry_tokens = match self.token_iter.next() {
@@ -135,6 +137,7 @@ impl<'a> Iterator for EntryIter<'a> {
 }
 
 impl<'a> EntryIter<'a> {
+    #[inline]
     fn new_rr<'b>(domain_name: Option<&'a str>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: impl Iterator<Item = &'b TextToken<'a>>) -> Entry<'a> where 'a: 'b {
         Entry::ResourceRecord(ResourceRecord {
             domain_name,
@@ -145,6 +148,7 @@ impl<'a> EntryIter<'a> {
         })
     }
 
+    #[inline]
     fn parse_rr(domain_name: Option<&'a str>, other_tokens: &[TextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         match other_tokens {
             &[TextToken::TextLiteral(token_1), TextToken::TextLiteral(token_2), ..] => {
@@ -174,6 +178,7 @@ impl<'a> EntryIter<'a> {
         }
     }
 
+    #[inline]
     fn parse_rr_rtype_first(domain_name: Option<&'a str>, rtype: &'a str, other_tokens: &[TextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         Ok(Self::new_rr(
             domain_name,
@@ -184,6 +189,7 @@ impl<'a> EntryIter<'a> {
         ))
     }
 
+    #[inline]
     fn parse_rr_rtype_second(domain_name: Option<&'a str>, token_1: &'a str, rtype: &'a str, other_tokens: &[TextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         if REGEX_RCLASS.is_match(token_1) {
             Ok(Self::new_rr(
@@ -206,6 +212,7 @@ impl<'a> EntryIter<'a> {
         }
     }
 
+    #[inline]
     fn parse_rr_rtype_third(domain_name: Option<&'a str>, token_1: &'a str, token_2: &'a str, rtype: &'a str, other_tokens: &[TextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         if REGEX_RCLASS.is_match(token_1) && REGEX_TTL.is_match(token_2) {
             Ok(Self::new_rr(

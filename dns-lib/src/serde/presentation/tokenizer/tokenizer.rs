@@ -39,6 +39,7 @@ pub struct Tokenizer<'a> {
 }
 
 impl<'a> Tokenizer<'a> {
+    #[inline]
     pub fn new(feed: &'a str) -> Self {
         Tokenizer {
             last_domain_name: None,
@@ -53,6 +54,7 @@ impl<'a> Tokenizer<'a> {
 impl<'a> Iterator for Tokenizer<'a> {
     type Item = Result<ResourceRecord<'a>, TokenizerError<'a>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             match self.entry_iter.next() {

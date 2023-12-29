@@ -22,6 +22,7 @@ pub struct EntryTokenIter<'a> {
 }
 
 impl<'a> EntryTokenIter<'a> {
+    #[inline]
     pub fn new(feed: &'a str) -> Self {
         EntryTokenIter { token_iter: TextTokenIter::new(feed) }
     }
@@ -30,6 +31,7 @@ impl<'a> EntryTokenIter<'a> {
 impl<'a> Iterator for EntryTokenIter<'a> {
     type Item = Result<EntryTokens<'a>, TokenizerError<'a>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let mut tokens = Vec::new();
         let mut ignore_new_line = false;

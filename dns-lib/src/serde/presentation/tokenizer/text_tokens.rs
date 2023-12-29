@@ -22,6 +22,7 @@ impl<'a> Display for TextToken<'a> {
 }
 
 impl<'a> Into<&'a str> for TextToken<'a> {
+    #[inline]
     fn into(self) -> &'a str {
         match &self {
             TextToken::TextLiteral(string) => string,
@@ -33,6 +34,7 @@ impl<'a> Into<&'a str> for TextToken<'a> {
 }
 
 impl<'a> Into<&'a str> for &TextToken<'a> {
+    #[inline]
     fn into(self) -> &'a str {
         match &self {
             TextToken::TextLiteral(string) => string,
@@ -48,6 +50,7 @@ pub struct TextTokenIter<'a> {
 }
 
 impl<'a> TextTokenIter<'a> {
+    #[inline]
     pub fn new(feed: &'a str) -> Self {
         TextTokenIter { feed }
     }
@@ -56,6 +59,7 @@ impl<'a> TextTokenIter<'a> {
 impl<'a> Iterator for TextTokenIter<'a> {
     type Item = Result<TextToken<'a>, TokenizerError<'a>>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         // Once the input feed is empty, there are no more characters to consume.
         if self.feed.is_empty() {
