@@ -2,6 +2,8 @@ use std::{error::Error, fmt::Display, num::{ParseIntError, TryFromIntError}, net
 
 use mac_address::MacParseError;
 
+use crate::types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error};
+
 use super::tokenizer::errors::TokenizerError;
 
 #[derive(Debug)]
@@ -36,6 +38,14 @@ pub enum TokenError<'a> {
     UxTryFromIntError,
     AddressParseError(net::AddrParseError),
     MacParseError(MacParseError),
+    AsciiError(AsciiError),
+    CharacterStringError(CharacterStringError),
+    CDomainNameError(CDomainNameError),
+    DomainNameError(DomainNameError),
+    Base16Error(Base16Error),
+    Base32Error(Base32Error),
+    ExtendedBase32Error(ExtendedBase32Error),
+    Base64Error(Base64Error),
 }
 impl<'a> Error for TokenError<'a> {}
 impl<'a> Display for TokenError<'a> {
@@ -46,6 +56,14 @@ impl<'a> Display for TokenError<'a> {
             Self::UxTryFromIntError => write!(f, "out of range integral type conversion attempted"),
             Self::AddressParseError(error) => write!(f, "{error}"),
             Self::MacParseError(error) => write!(f, "{error}"),
+            Self::AsciiError(error) => write!(f, "{error}"),
+            Self::CharacterStringError(error) => write!(f, "{error}"),
+            Self::CDomainNameError(error) => write!(f, "{error}"),
+            Self::DomainNameError(error) => write!(f, "{error}"),
+            Self::Base16Error(error) => write!(f, "{error}"),
+            Self::Base32Error(error) => write!(f, "{error}"),
+            Self::ExtendedBase32Error(error) => write!(f, "{error}"),
+            Self::Base64Error(error) => write!(f, "{error}"),
         }
     }
 }
@@ -62,5 +80,39 @@ impl<'a> From<net::AddrParseError> for TokenError<'a> {
 impl<'a> From<MacParseError> for TokenError<'a> {
     fn from(value: MacParseError) -> Self {
         Self::MacParseError(value)
+    }
+}
+impl<'a> From<AsciiError> for TokenError<'a> {
+    fn from(value: AsciiError) -> Self {
+        Self::AsciiError(value)
+    }
+}
+impl<'a> From<CharacterStringError> for TokenError<'a> {
+    fn from(value: CharacterStringError) -> Self {
+        Self::CharacterStringError(value)
+    }
+}impl<'a> From<CDomainNameError> for TokenError<'a> {
+    fn from(value: CDomainNameError) -> Self {
+        Self::CDomainNameError(value)
+    }
+}impl<'a> From<DomainNameError> for TokenError<'a> {
+    fn from(value: DomainNameError) -> Self {
+        Self::DomainNameError(value)
+    }
+}impl<'a> From<Base16Error> for TokenError<'a> {
+    fn from(value: Base16Error) -> Self {
+        Self::Base16Error(value)
+    }
+}impl<'a> From<Base32Error> for TokenError<'a> {
+    fn from(value: Base32Error) -> Self {
+        Self::Base32Error(value)
+    }
+}impl<'a> From<ExtendedBase32Error> for TokenError<'a> {
+    fn from(value: ExtendedBase32Error) -> Self {
+        Self::ExtendedBase32Error(value)
+    }
+}impl<'a> From<Base64Error> for TokenError<'a> {
+    fn from(value: Base64Error) -> Self {
+        Self::Base64Error(value)
     }
 }

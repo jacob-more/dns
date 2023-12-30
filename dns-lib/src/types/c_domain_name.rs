@@ -1,6 +1,6 @@
 use std::{fmt::{Display, Debug}, error::Error, ops::Add};
 
-use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::wire::{to_wire::ToWire, from_wire::FromWire}};
+use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
@@ -662,5 +662,14 @@ impl FromWire for CDomainName {
         }
 
         Ok(Self { labels: labels })
+    }
+}
+
+impl FromPresentation for CDomainName {
+    #[inline]
+    fn from_token_format<'a>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError> where Self: Sized {
+        Ok(Self::new(
+            &AsciiString::from_token_format(token)?
+        )?)
     }
 }

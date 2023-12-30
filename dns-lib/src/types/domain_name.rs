@@ -1,6 +1,6 @@
 use std::{fmt::Display, ops::Add, error::Error};
 
-use crate::{types::{c_domain_name::{CDomainNameError, CDomainName, Label}, ascii::AsciiString}, serde::wire::{to_wire::ToWire, from_wire::FromWire}};
+use crate::{types::{c_domain_name::{CDomainNameError, CDomainName, Label}, ascii::AsciiString}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
@@ -162,5 +162,12 @@ impl FromWire for DomainName {
         // DomainName must still be able to decompress domain names if compression was used so we
         // don't want to disable that.
         Ok(Self { domain_name: CDomainName::from_wire_format(wire)? })
+    }
+}
+
+impl FromPresentation for DomainName {
+    #[inline]
+    fn from_token_format<'a>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError> where Self: Sized {
+        Ok(Self { domain_name: CDomainName::from_token_format(token)? })
     }
 }

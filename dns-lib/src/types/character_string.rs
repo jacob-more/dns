@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Display, iter::Rev, slice::{Iter, IterMut}};
 
-use crate::{types::ascii::{AsciiString, constants::EMPTY_ASCII_STRING, AsciiError, AsciiChar}, serde::wire::{to_wire::ToWire, from_wire::FromWire}};
+use crate::{types::ascii::{AsciiString, constants::EMPTY_ASCII_STRING, AsciiError, AsciiChar}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CharacterStringError {
@@ -240,5 +240,12 @@ impl FromWire for CharacterString {
         wire.shift(length as usize)?;
 
         Ok(Self { ascii: string })
+    }
+}
+
+impl FromPresentation for CharacterString {
+    #[inline]
+    fn from_token_format<'a>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError> where Self: Sized {
+        Ok(Self::from_utf8(token)?)
     }
 }

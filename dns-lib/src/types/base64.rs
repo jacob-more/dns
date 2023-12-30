@@ -2,7 +2,7 @@ use std::{fmt::{Display, Debug}, error::Error};
 
 use ux::u6;
 
-use crate::types::{ascii::{AsciiChar, AsciiError, constants::*, AsciiString}, base_conversions::BaseConversions};
+use crate::{types::{ascii::{AsciiChar, AsciiError, constants::*, AsciiString}, base_conversions::BaseConversions}, serde::presentation::from_presentation::FromPresentation};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Base64Error {
@@ -412,6 +412,15 @@ impl BaseConversions for Base64 {
         let base = (self.bytes.len() * 4).div_ceil(3);
         // + Padding
         base.next_multiple_of(4)
+    }
+}
+
+impl FromPresentation for Base64 {
+    #[inline]
+    fn from_token_format<'a>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError> where Self: Sized {
+        Ok(Self::encode(
+            &AsciiString::from_token_format(token)?
+        )?)
     }
 }
 

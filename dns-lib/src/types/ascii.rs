@@ -1,6 +1,6 @@
 use std::{fmt::{Display, Debug}, slice::{Iter, IterMut}, iter::Rev, error::Error, ops::Add};
 
-use crate::serde::wire::{to_wire::ToWire, from_wire::FromWire};
+use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation};
 
 use self::constants::*;
 
@@ -650,6 +650,13 @@ impl FromWire for AsciiString {
         let string = Self::from(wire.current_state());
         wire.shift(string.len())?;
         return Ok(string);
+    }
+}
+
+impl FromPresentation for AsciiString {
+    #[inline]
+    fn from_token_format<'a>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError> where Self: Sized {
+        Ok(Self::from_utf8(token)?)
     }
 }
 
