@@ -657,7 +657,7 @@ impl FromWire for CDomainName {
             }
         }
 
-        if pointer_count == 0 {
+        if pointer_count != 0 {
             wire.set_offset(final_offset as usize)?;
         }
 

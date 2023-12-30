@@ -1,6 +1,6 @@
 use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode};
 
-use crate::types::domain_name::DomainName;
+use crate::{types::domain_name::DomainName, serde::wire::circular_test::gen_test_circular_serde_sanity_test};
 
 /// TODO: read RFC 2672
 /// 
@@ -16,3 +16,8 @@ impl DNAME {
         &self.target
     }
 }
+
+gen_test_circular_serde_sanity_test!(
+    record_circular_serde_sanity_test,
+    DNAME { target: DomainName::from_utf8("www.example.com.").unwrap() }
+);

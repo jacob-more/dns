@@ -6,3 +6,5 @@ pub mod to_wire;
 pub mod from_wire;
 mod from_wire_tests;
 mod to_wire_tests;
+
+pub(crate) mod circular_test;
