@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, num::{ParseIntError, TryFromIntError}, net
 
 use mac_address::MacParseError;
 
-use crate::types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error};
+use crate::{resource_record::{rclass::RClassError, rtype::RTypeError, dnssec_alg::DnsSecAlgorithmError}, types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error}};
 
 use super::tokenizer::errors::TokenizerError;
 
@@ -10,6 +10,8 @@ use super::tokenizer::errors::TokenizerError;
 pub enum TokenizedRecordError<'a> {
     TokenizerError(TokenizerError<'a>),
     TokenError(TokenError<'a>),
+    TooManyRDataTokensError(usize, usize),
+    TooFewRDataTokensError(usize, usize),
 }
 impl<'a> Error for TokenizedRecordError<'a> {}
 impl<'a> Display for TokenizedRecordError<'a> {
@@ -17,6 +19,8 @@ impl<'a> Display for TokenizedRecordError<'a> {
         match self {
             Self::TokenizerError(error) => write!(f, "{error}"),
             Self::TokenError(error) => write!(f, "{error}"),
+            Self::TooManyRDataTokensError(expected, received) => write!(f, "too many tokens; expected {expected} but received {received}"),
+            Self::TooFewRDataTokensError(expected, received) => write!(f, "too few tokens; expected {expected} but received {received}"),
         }
     }
 }
@@ -38,6 +42,9 @@ pub enum TokenError<'a> {
     UxTryFromIntError,
     AddressParseError(net::AddrParseError),
     MacParseError(MacParseError),
+    RClassError(RClassError<'a>),
+    RTypeError(RTypeError<'a>),
+    DnsSecAlgorithmError(DnsSecAlgorithmError<'a>),
     AsciiError(AsciiError),
     CharacterStringError(CharacterStringError),
     CDomainNameError(CDomainNameError),
@@ -56,6 +63,9 @@ impl<'a> Display for TokenError<'a> {
             Self::UxTryFromIntError => write!(f, "out of range integral type conversion attempted"),
             Self::AddressParseError(error) => write!(f, "{error}"),
             Self::MacParseError(error) => write!(f, "{error}"),
+            Self::RClassError(error) => write!(f, "{error}"),
+            Self::RTypeError(error) => write!(f, "{error}"),
+            Self::DnsSecAlgorithmError(error) => write!(f, "{error}"),
             Self::AsciiError(error) => write!(f, "{error}"),
             Self::CharacterStringError(error) => write!(f, "{error}"),
             Self::CDomainNameError(error) => write!(f, "{error}"),
@@ -80,6 +90,21 @@ impl<'a> From<net::AddrParseError> for TokenError<'a> {
 impl<'a> From<MacParseError> for TokenError<'a> {
     fn from(value: MacParseError) -> Self {
         Self::MacParseError(value)
+    }
+}
+impl<'a> From<RClassError<'a>> for TokenError<'a> {
+    fn from(value: RClassError<'a>) -> Self {
+        Self::RClassError(value)
+    }
+}
+impl<'a> From<RTypeError<'a>> for TokenError<'a> {
+    fn from(value: RTypeError<'a>) -> Self {
+        Self::RTypeError(value)
+    }
+}
+impl<'a> From<DnsSecAlgorithmError<'a>> for TokenError<'a> {
+    fn from(value: DnsSecAlgorithmError<'a>) -> Self {
+        Self::DnsSecAlgorithmError(value)
     }
 }
 impl<'a> From<AsciiError> for TokenError<'a> {
