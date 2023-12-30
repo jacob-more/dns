@@ -5,12 +5,12 @@ use mac_address::MacParseError;
 use super::tokenizer::errors::TokenizerError;
 
 #[derive(Debug)]
-pub enum TokenizedRDataError<'a> {
+pub enum TokenizedRecordError<'a> {
     TokenizerError(TokenizerError<'a>),
-    TokenError(TokenError),
+    TokenError(TokenError<'a>),
 }
-impl<'a> Error for TokenizedRDataError<'a> {}
-impl<'a> Display for TokenizedRDataError<'a> {
+impl<'a> Error for TokenizedRecordError<'a> {}
+impl<'a> Display for TokenizedRecordError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TokenizerError(error) => write!(f, "{error}"),
@@ -18,27 +18,27 @@ impl<'a> Display for TokenizedRDataError<'a> {
         }
     }
 }
-impl<'a> From<TokenizerError<'a>> for TokenizedRDataError<'a> {
+impl<'a> From<TokenizerError<'a>> for TokenizedRecordError<'a> {
     fn from(value: TokenizerError<'a>) -> Self {
         Self::TokenizerError(value)
     }
 }
-impl<'a> From<TokenError> for TokenizedRDataError<'a> {
-    fn from(value: TokenError) -> Self {
+impl<'a> From<TokenError<'a>> for TokenizedRecordError<'a> {
+    fn from(value: TokenError<'a>) -> Self {
         Self::TokenError(value)
     }
 }
 
 #[derive(Debug)]
-pub enum TokenError {
+pub enum TokenError<'a> {
     ParseIntError(ParseIntError),
     TryFromIntError(TryFromIntError),
     UxTryFromIntError,
     AddressParseError(net::AddrParseError),
     MacParseError(MacParseError),
 }
-impl<'a> Error for TokenError {}
-impl<'a> Display for TokenError {
+impl<'a> Error for TokenError<'a> {}
+impl<'a> Display for TokenError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ParseIntError(error) => write!(f, "{error}"),
@@ -49,17 +49,17 @@ impl<'a> Display for TokenError {
         }
     }
 }
-impl From<ParseIntError> for TokenError {
+impl<'a> From<ParseIntError> for TokenError<'a> {
     fn from(value: ParseIntError) -> Self {
         Self::ParseIntError(value)
     }
 }
-impl From<net::AddrParseError> for TokenError {
+impl<'a> From<net::AddrParseError> for TokenError<'a> {
     fn from(value: net::AddrParseError) -> Self {
         Self::AddressParseError(value)
     }
 }
-impl From<MacParseError> for TokenError {
+impl<'a> From<MacParseError> for TokenError<'a> {
     fn from(value: MacParseError) -> Self {
         Self::MacParseError(value)
     }
