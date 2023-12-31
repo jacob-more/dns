@@ -1,8 +1,8 @@
-use std::{error::Error, fmt::Display, num::{ParseIntError, TryFromIntError}, net};
+use std::{error::Error, fmt::Display, num::{ParseIntError, TryFromIntError}, net::AddrParseError};
 
 use mac_address::MacParseError;
 
-use crate::{resource_record::{rclass::RClassError, rtype::RTypeError, dnssec_alg::DnsSecAlgorithmError}, types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error}};
+use crate::{resource_record::{rclass::RClassError, rtype::{RTypeError, RType}, dnssec_alg::DnsSecAlgorithmError}, types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error}};
 
 use super::tokenizer::errors::TokenizerError;
 
@@ -12,6 +12,8 @@ pub enum TokenizedRecordError<'a> {
     TokenError(TokenError<'a>),
     TooManyRDataTokensError(usize, usize),
     TooFewRDataTokensError(usize, usize),
+    UnsupportedRType(RType),
+    RTypeNotAllowed(RType),
 }
 impl<'a> Error for TokenizedRecordError<'a> {}
 impl<'a> Display for TokenizedRecordError<'a> {
@@ -21,6 +23,8 @@ impl<'a> Display for TokenizedRecordError<'a> {
             Self::TokenError(error) => write!(f, "{error}"),
             Self::TooManyRDataTokensError(expected, received) => write!(f, "too many tokens; expected {expected} but received {received}"),
             Self::TooFewRDataTokensError(expected, received) => write!(f, "too few tokens; expected {expected} but received {received}"),
+            Self::UnsupportedRType(rtype) => write!(f, "Resource Record Type {rtype} is not supported"),
+            Self::RTypeNotAllowed(rtype) => write!(f, "Resource Record Type {rtype} is not allowed in files")
         }
     }
 }
@@ -40,7 +44,7 @@ pub enum TokenError<'a> {
     ParseIntError(ParseIntError),
     TryFromIntError(TryFromIntError),
     UxTryFromIntError,
-    AddressParseError(net::AddrParseError),
+    AddressParseError(AddrParseError),
     MacParseError(MacParseError),
     RClassError(RClassError<'a>),
     RTypeError(RTypeError<'a>),
@@ -82,8 +86,8 @@ impl<'a> From<ParseIntError> for TokenError<'a> {
         Self::ParseIntError(value)
     }
 }
-impl<'a> From<net::AddrParseError> for TokenError<'a> {
-    fn from(value: net::AddrParseError) -> Self {
+impl<'a> From<AddrParseError> for TokenError<'a> {
+    fn from(value: AddrParseError) -> Self {
         Self::AddressParseError(value)
     }
 }
