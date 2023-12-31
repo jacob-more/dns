@@ -1,3 +1,5 @@
+pub mod resource_record;
+
 pub mod rclass;
 pub mod rtype;
 pub mod rcode;
