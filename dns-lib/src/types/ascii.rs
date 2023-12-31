@@ -661,6 +661,25 @@ impl FromPresentation for AsciiString {
 }
 
 #[cfg(test)]
+mod circular_serde_sanity_test {
+    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
+    use super::AsciiString;
+
+    gen_test_circular_serde_sanity_test!(
+        record_circular_serde_sanity_test,
+        AsciiString::from_utf8("This is a character string").unwrap()
+    );
+    gen_test_circular_serde_sanity_test!(
+        one_char_zone_record_circular_serde_sanity_test,
+        AsciiString::from_utf8("a").unwrap()
+    );
+    gen_test_circular_serde_sanity_test!(
+        empty_record_circular_serde_sanity_test,
+        AsciiString::from_utf8("").unwrap()
+    );
+}
+
+#[cfg(test)]
 mod upper_lower_case_tests {
     use super::AsciiString;
 

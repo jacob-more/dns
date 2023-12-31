@@ -673,3 +673,22 @@ impl FromPresentation for CDomainName {
         )?)
     }
 }
+
+#[cfg(test)]
+mod circular_serde_sanity_test {
+    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
+    use super::CDomainName;
+
+    gen_test_circular_serde_sanity_test!(
+        record_circular_serde_sanity_test,
+        CDomainName::from_utf8("www.example.com.").unwrap()
+    );
+    gen_test_circular_serde_sanity_test!(
+        root_record_circular_serde_sanity_test,
+        CDomainName::from_utf8(".").unwrap()
+    );
+    gen_test_circular_serde_sanity_test!(
+        root_zone_record_circular_serde_sanity_test,
+        CDomainName::from_utf8("com.").unwrap()
+    );
+}

@@ -249,3 +249,22 @@ impl FromPresentation for CharacterString {
         Ok(Self::from_utf8(token)?)
     }
 }
+
+#[cfg(test)]
+mod circular_serde_sanity_test {
+    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
+    use super::CharacterString;
+
+    gen_test_circular_serde_sanity_test!(
+        record_circular_serde_sanity_test,
+        CharacterString::from_utf8("This is a character string").unwrap()
+    );
+    gen_test_circular_serde_sanity_test!(
+        one_char_zone_record_circular_serde_sanity_test,
+        CharacterString::from_utf8("a").unwrap()
+    );
+    gen_test_circular_serde_sanity_test!(
+        empty_record_circular_serde_sanity_test,
+        CharacterString::from_utf8("").unwrap()
+    );
+}
