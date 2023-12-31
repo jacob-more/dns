@@ -426,46 +426,49 @@ impl FromPresentation for Base64 {
 
 #[cfg(test)]
 mod circular_sanity_tests {
-    use crate::types::base_conversions::BaseConversions;
-
+    use crate::{types::base_conversions::BaseConversions, serde::wire::circular_test::gen_test_circular_serde_sanity_test};
     use super::Base64;
 
-    #[test]
-    fn base64_circular_encoding_decoding_sanity_test() {
-        circular_encoding_decoding_sanity_test(&vec![]);
-        circular_encoding_decoding_sanity_test(&vec![1]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-        circular_encoding_decoding_sanity_test(&vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    macro_rules! circular_sanity_test {
+        ($test_encoding:ident, $test_wire:ident, $input:expr) => {
+            #[test]
+            fn $test_encoding() {
+                let init_bytes = $input;
+                let input = Base64 { bytes: init_bytes.clone() };
+                let guessed_string_len = input.string_len();
+                assert_eq!(init_bytes.len(), input.byte_len());
+
+                let decoded = input.decode();
+                let verified = Base64::verify_base64_string(&decoded);
+                assert!(verified.is_ok());
+                assert_eq!(decoded.len(), guessed_string_len);
+
+                let encoded = Base64::encode(&decoded);
+                assert!(encoded.is_ok());
+                let output = encoded.unwrap();
+                assert_eq!(input, output);
+                assert_eq!(init_bytes.len(), output.byte_len());
+            }
+
+            gen_test_circular_serde_sanity_test!($test_wire, Base64::from_bytes($input));
+        }
     }
 
-    fn circular_encoding_decoding_sanity_test(input: &Vec<u8>) {
-        let init_bytes = input;
-        let input = Base64 { bytes: init_bytes.clone() };
-        let guessed_string_len = input.string_len();
-        assert_eq!(init_bytes.len(), input.byte_len());
-
-        let decoded = input.decode();
-        let verified = Base64::verify_base64_string(&decoded);
-        assert!(verified.is_ok());
-        assert_eq!(decoded.len(), guessed_string_len);
-
-        let encoded = Base64::encode(&decoded);
-        assert!(encoded.is_ok());
-        let output = encoded.unwrap();
-        assert_eq!(input, output);
-        assert_eq!(init_bytes.len(), output.byte_len());
-    }
+    circular_sanity_test!(test_0_bytes_encode_decode, test_0_bytes_wire, &vec![]);
+    circular_sanity_test!(test_1_byte_encode_decode, test_1_byte_wire, &vec![1]);
+    circular_sanity_test!(test_2_bytes_encode_decode, test_2_bytes_wire, &vec![1, 2]);
+    circular_sanity_test!(test_3_bytes_encode_decode, test_3_bytes_wire, &vec![1, 2, 3]);
+    circular_sanity_test!(test_4_bytes_encode_decode, test_4_bytes_wire, &vec![1, 2, 3, 4]);
+    circular_sanity_test!(test_5_bytes_encode_decode, test_5_bytes_wire, &vec![1, 2, 3, 4, 5]);
+    circular_sanity_test!(test_6_bytes_encode_decode, test_6_bytes_wire, &vec![1, 2, 3, 4, 5, 6]);
+    circular_sanity_test!(test_7_bytes_encode_decode, test_7_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7]);
+    circular_sanity_test!(test_8_bytes_encode_decode, test_8_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8]);
+    circular_sanity_test!(test_9_bytes_encode_decode, test_9_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    circular_sanity_test!(test_10_bytes_encode_decode, test_10_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    circular_sanity_test!(test_11_bytes_encode_decode, test_11_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    circular_sanity_test!(test_12_bytes_encode_decode, test_12_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    circular_sanity_test!(test_13_bytes_encode_decode, test_13_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    circular_sanity_test!(test_14_bytes_encode_decode, test_14_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+    circular_sanity_test!(test_15_bytes_encode_decode, test_15_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    circular_sanity_test!(test_16_bytes_encode_decode, test_16_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
 }
