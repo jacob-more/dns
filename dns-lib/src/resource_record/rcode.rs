@@ -155,7 +155,7 @@ impl FromWire for RCode {
 
 impl FromPresentation for RCode {
     #[inline]
-    fn from_token_format<'a>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError> where Self: Sized {
+    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
         Ok(Self::from_code(
             u16::from_token_format(token)?
         ))

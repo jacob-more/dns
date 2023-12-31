@@ -229,7 +229,7 @@ impl BaseConversions for Base16 {
 
 impl FromPresentation for Base16 {
     #[inline]
-    fn from_token_format<'a>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError> where Self: Sized {
+    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
         Ok(Self::encode(
             &AsciiString::from_token_format(token)?
         )?)

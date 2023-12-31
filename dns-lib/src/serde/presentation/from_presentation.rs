@@ -6,7 +6,7 @@ use super::errors::TokenError;
 
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-5
 pub trait FromPresentation {
-    fn from_token_format<'a>(token: &'a str) -> Result<Self, TokenError> where Self: Sized;
+    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, TokenError<'b>> where Self: Sized, 'a: 'b;
 }
 
 // #################### BUILT-IN PRIMITIVE TYPES ####################
@@ -15,7 +15,7 @@ macro_rules! int_from_token_impl {
     ($int_type:ty) => {
         impl FromPresentation for $int_type {
             #[inline]
-            fn from_token_format<'a>(token: &'a str) -> Result<Self, TokenError> where Self: Sized {
+            fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, TokenError<'b>> where Self: Sized, 'a: 'b {
                 Ok(<$int_type>::from_str_radix(token, 10)?)
             }
         }
@@ -101,7 +101,7 @@ macro_rules! ux_from_token_impl {
 
         impl FromPresentation for $int_type {
             #[inline]
-            fn from_token_format<'a>(token: &'a str) -> Result<Self, TokenError> where Self: Sized {
+            fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, TokenError<'b>> where Self: Sized, 'a: 'b {
                 match <$int_type>::try_from(<$super_type>::from_str_radix(token, 10)?) {
                     Ok(integer) => Ok(integer),
                     Err(_) => Err(TokenError::UxTryFromIntError),
@@ -118,7 +118,7 @@ use ux::{u1, i1};
 
 impl FromPresentation for u1 {
     #[inline]
-    fn from_token_format<'a>(token: &'a str) -> Result<Self, TokenError> where Self: Sized {
+    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, TokenError<'b>> where Self: Sized, 'a: 'b {
         match token {
             "0" => Ok(u1::new(0)),
             "1" => Ok(u1::new(1)),
@@ -129,7 +129,7 @@ impl FromPresentation for u1 {
 
 impl FromPresentation for i1 {
     #[inline]
-    fn from_token_format<'a>(token: &'a str) -> Result<Self, TokenError> where Self: Sized {
+    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, TokenError<'b>> where Self: Sized, 'a: 'b {
         match token {
             "0" => Ok(i1::new(0)),
             "-1" => Ok(i1::new(-1)),
@@ -719,7 +719,7 @@ macro_rules! address_from_token_impl {
     ($addr_type:ty) => {
         impl FromPresentation for $addr_type {
             #[inline]
-            fn from_token_format<'a>(token: &'a str) -> Result<Self, TokenError> where Self: Sized {
+            fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, TokenError<'b>> where Self: Sized, 'a: 'b {
                 Ok(<$addr_type>::from_str(token)?)
             }
         }        
