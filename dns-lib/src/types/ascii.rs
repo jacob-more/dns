@@ -1,6 +1,6 @@
 use std::{fmt::{Display, Debug}, slice::{Iter, IterMut}, iter::Rev, error::Error, ops::Add};
 
-use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation};
+use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}};
 
 use self::constants::*;
 
@@ -657,6 +657,17 @@ impl FromPresentation for AsciiString {
     #[inline]
     fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
         Ok(Self::from_utf8(token)?)
+    }
+}
+
+impl ToPresentation for AsciiString {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        out_buffer.push(
+            self.string.iter()
+                .map(|character| *character as char)
+                .collect::<String>()
+        )
     }
 }
 

@@ -1,6 +1,10 @@
 use std::{error::Error, fmt::Display, iter::Rev, slice::{Iter, IterMut}};
 
-use crate::{types::ascii::{AsciiString, constants::EMPTY_ASCII_STRING, AsciiError, AsciiChar}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation}};
+use lazy_static::lazy_static;
+
+use crate::{types::ascii::{AsciiString, constants::{EMPTY_ASCII_STRING, ASCII_SPACE, ASCII_BACKSLASH, ASCII_OPEN_PARENTHESIS, ASCII_CLOSE_PARENTHESIS, ASCII_SEMICOLON}, AsciiError, AsciiChar}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}}};
+
+use super::ascii::constants::ASCII_HORIZONTAL_TAB;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CharacterStringError {
@@ -247,6 +251,27 @@ impl FromPresentation for CharacterString {
     #[inline]
     fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
         Ok(Self::from_utf8(token)?)
+    }
+}
+
+impl ToPresentation for CharacterString {
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        lazy_static!{
+            static ref AT_SIGN: AsciiString = AsciiString::from_utf8(r"@").unwrap();
+        }
+
+        if self.ascii == *AT_SIGN {
+            out_buffer.push(r"\@".to_string());
+            return;
+        }
+
+        let out_string = self.ascii.iter()
+            .flat_map(|character| match *character {
+                ASCII_SPACE | ASCII_HORIZONTAL_TAB | ASCII_SEMICOLON | ASCII_OPEN_PARENTHESIS | ASCII_CLOSE_PARENTHESIS => vec![ASCII_BACKSLASH as char, *character as char],
+                _ => vec![*character as char]
+            }).collect::<String>();
+        
+        out_buffer.push(out_string)
     }
 }
 

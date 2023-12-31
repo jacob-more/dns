@@ -1,6 +1,6 @@
 use std::{fmt::{Display, Debug}, error::Error, ops::Add};
 
-use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation}};
+use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
@@ -105,6 +105,7 @@ impl Label {
 impl Display for Label {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: Escape '.' characters.
         write!(f, "{}", self.label)
     }
 }
@@ -493,6 +494,9 @@ impl CDomainName {
 impl Display for CDomainName {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_root() {
+            return write!(f, ".")
+        }
         match self.labels.get(0) {
             Option::None => return write!(f, "null"),
             Option::Some(label) => write!(f, "{}", label)?,
@@ -671,6 +675,13 @@ impl FromPresentation for CDomainName {
         Ok(Self::new(
             &AsciiString::from_token_format(token)?
         )?)
+    }
+}
+
+impl ToPresentation for CDomainName {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        out_buffer.push(self.to_string())
     }
 }
 

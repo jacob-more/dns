@@ -1,6 +1,6 @@
 use dns_macros::{ToWire, FromWire, RTypeCode};
 
-use crate::{types::character_string::CharacterString, serde::presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation}};
+use crate::{types::character_string::CharacterString, serde::presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, to_presentation::ToPresentation}};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.14
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RTypeCode)]
@@ -32,6 +32,15 @@ impl FromTokenizedRecord for TXT {
                 Ok(Self { strings })
             },
             _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError(1, record.rdata.len())),
+        }
+    }
+}
+
+impl ToPresentation for TXT {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        for string in &self.strings {
+            string.to_presentation_format(out_buffer);
         }
     }
 }

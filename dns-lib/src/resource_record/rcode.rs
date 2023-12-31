@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation};
+use crate::serde::wire::{to_wire::ToWire, from_wire::FromWire};
 
 /// https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-6
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -149,15 +149,6 @@ impl FromWire for RCode {
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
         Ok(Self::from_code(
             u16::from_wire_format(wire)?
-        ))
-    }
-}
-
-impl FromPresentation for RCode {
-    #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::from_code(
-            u16::from_token_format(token)?
         ))
     }
 }

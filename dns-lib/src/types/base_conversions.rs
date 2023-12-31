@@ -1,4 +1,4 @@
-use crate::{types::{base32::Base32, extended_base32::ExtendedBase32, base64::Base64, base16::Base16}, serde::wire::{to_wire::ToWire, from_wire::FromWire}};
+use crate::{types::{base32::Base32, extended_base32::ExtendedBase32, base64::Base64, base16::Base16}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::to_presentation::ToPresentation}};
 
 use super::ascii::AsciiString;
 
@@ -65,5 +65,12 @@ impl<T: BaseConversions> FromWire for T {
         let base = Self::from_bytes(bytes);
         wire.shift(bytes.len())?;
         return Ok(base);
+    }
+}
+
+impl<T: BaseConversions> ToPresentation for T {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        self.to_ascii().to_presentation_format(out_buffer)
     }
 }

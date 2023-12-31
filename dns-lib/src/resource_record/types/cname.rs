@@ -1,8 +1,8 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode};
+use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode, ToPresentation};
 
 use crate::types::c_domain_name::CDomainName;
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, FromTokenizedRecord, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRecord, RTypeCode)]
 pub struct CNAME {
     primary_name: CDomainName,
 }

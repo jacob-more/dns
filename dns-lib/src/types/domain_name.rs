@@ -1,5 +1,7 @@
 use std::{fmt::Display, ops::Add, error::Error};
 
+use dns_macros::ToPresentation;
+
 use crate::{types::{c_domain_name::{CDomainNameError, CDomainName, Label}, ascii::AsciiString}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -24,7 +26,7 @@ impl From<CDomainNameError> for DomainNameError {
 /// This is an incompressible domain name. This should be used in any place where domain name compression is not
 /// allowed. It is still able to decompress a domain name but it will not compress it when
 /// serializing the name. If compression is required, use the CDomainName.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToPresentation)]
 pub struct DomainName {
     domain_name: CDomainName,
 }

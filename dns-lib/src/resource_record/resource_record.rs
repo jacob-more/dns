@@ -1,4 +1,6 @@
-use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, errors::TokenizedRecordError}}};
+use std::fmt::Display;
+
+use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
 
 use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT}, rtype::RType};
 
@@ -139,6 +141,14 @@ pub enum ResourceRecord {
     // WKS(RRHeader, WKS),
     // X25(RRHeader, X25),
     // ZONEMD(RRHeader, ZONEMD),
+}
+
+impl Display for ResourceRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut buffer = Vec::new();
+        self.to_presentation_format(&mut buffer);
+        write!(f, "{}", buffer.join("\t"))
+    }
 }
 
 impl ResourceRecord {
@@ -1278,5 +1288,37 @@ impl FromTokenizedRecord for ResourceRecord {
         };
 
         return Ok(record)
+    }
+}
+
+impl ToPresentation for ResourceRecord {
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        let (rr_header, rtype) = self.header_and_rtype();
+        rr_header.name.to_presentation_format(out_buffer);
+        rr_header.ttl.to_presentation_format(out_buffer);
+        rr_header.rclass.to_presentation_format(out_buffer);
+        rtype.to_presentation_format(out_buffer);
+        match self {
+            ResourceRecord::A(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::AAAA(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::ANY(_, _) => panic!("Cannot convert {rtype} to presentation"),
+            ResourceRecord::AXFR(_, _) => panic!("Cannot convert {rtype} to presentation"),
+            ResourceRecord::CNAME(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::DNAME(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::HINFO(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::MAILA(_, _) => panic!("Cannot convert {rtype} to presentation"),
+            ResourceRecord::MAILB(_, _) => panic!("Cannot convert {rtype} to presentation"),
+            ResourceRecord::MB(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::MD(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::MF(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::MG(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::MINFO(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::MR(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::MX(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::NS(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::NULL(_, _) => panic!("Cannot convert {rtype} to presentation"),
+            ResourceRecord::SOA(_, rdata) => rdata.to_presentation_format(out_buffer),
+            ResourceRecord::TXT(_, rdata) => rdata.to_presentation_format(out_buffer),
+        }
     }
 }

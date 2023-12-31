@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::serde::{wire::{from_wire::FromWire, to_wire::ToWire}, presentation::from_presentation::FromPresentation};
+use crate::serde::{wire::{from_wire::FromWire, to_wire::ToWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}};
 
 /// https://www.iana.org/assignments/ds-rr-types/ds-rr-types.xhtml#ds-rr-types-1
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -87,5 +87,12 @@ impl FromPresentation for DigestAlgorithm {
         Ok(Self::from_code(
             u8::from_token_format(token)?
         ))
+    }
+}
+
+impl ToPresentation for DigestAlgorithm {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        out_buffer.push(self.code().to_string())
     }
 }

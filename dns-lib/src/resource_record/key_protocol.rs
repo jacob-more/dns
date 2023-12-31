@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation};
+use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}};
 
 /// https://datatracker.ietf.org/doc/html/rfc2535#section-3.1.3
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -36,17 +36,17 @@ impl KeyProtocol {
     }
 
     #[inline]
-    pub const fn mnemonic(&self) -> &str {
+    pub fn mnemonic(&self) -> String {
         return match self {
-            Self::Unknown(_) => "Unknown",
+            Self::Unknown(code) => code.to_string(),
 
-            Self::None   => "NONE",
-            Self::Tls    => "TLS",
-            Self::Email  => "EMAIL",
-            Self::DnsSec => "DNSSEC",
-            Self::IpSec  => "IPSEC",
+            Self::None   => "NONE".to_string(),
+            Self::Tls    => "TLS".to_string(),
+            Self::Email  => "EMAIL".to_string(),
+            Self::DnsSec => "DNSSEC".to_string(),
+            Self::IpSec  => "IPSEC".to_string(),
 
-            Self::All => "ALL",
+            Self::All => "ALL".to_string(),
         };
     }
 
@@ -100,5 +100,12 @@ impl FromPresentation for KeyProtocol {
         Ok(Self::from_code(
             u8::from_token_format(token)?
         ))
+    }
+}
+
+impl ToPresentation for KeyProtocol {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        out_buffer.push(self.mnemonic())
     }
 }

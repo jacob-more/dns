@@ -3,7 +3,7 @@ use std::{fmt::Display, error::Error};
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation};
+use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}};
 
 #[derive(Debug)]
 pub enum DnsSecAlgorithmError<'a> {
@@ -234,5 +234,12 @@ impl FromPresentation for DnsSecAlgorithm {
         } else {
             Ok(Self::from_str(token)?)
         }
+    }
+}
+
+impl ToPresentation for DnsSecAlgorithm {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        out_buffer.push(self.mnemonic())
     }
 }
