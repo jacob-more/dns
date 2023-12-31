@@ -10,6 +10,11 @@ pub struct NS {
 
 impl NS {
     #[inline]
+    pub fn new(ns_domain_name: CDomainName) -> Self {
+        Self { ns_domain: ns_domain_name }
+    }
+
+    #[inline]
     pub fn name_server_domain_name(&self) -> &CDomainName {
         &self.ns_domain
     }

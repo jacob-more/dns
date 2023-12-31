@@ -10,6 +10,11 @@ pub struct MG {
 
 impl MG {
     #[inline]
+    pub fn new(mg_domain_name: CDomainName) -> Self {
+        Self { mg_domain_name }
+    }
+
+    #[inline]
     pub fn mailbox_group_domain_name(&self) -> &CDomainName {
         &self.mg_domain_name
     }

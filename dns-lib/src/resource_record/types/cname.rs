@@ -9,6 +9,11 @@ pub struct CNAME {
 
 impl CNAME {
     #[inline]
+    pub fn new(primary_name: CDomainName) -> Self {
+        Self { primary_name }
+    }
+
+    #[inline]
     pub fn primary_name(&self) -> &CDomainName {
         &self.primary_name
     }

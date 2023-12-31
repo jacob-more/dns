@@ -10,6 +10,11 @@ pub struct MF {
 
 impl MF {
     #[inline]
+    pub fn new(ma_domain_name: CDomainName) -> Self {
+        Self { ma_domain_name }
+    }
+
+    #[inline]
     pub fn mail_forwarding_agent_domain_name(&self) -> &CDomainName {
         &self.ma_domain_name
     }

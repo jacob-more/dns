@@ -11,6 +11,11 @@ pub struct MX {
 
 impl MX {
     #[inline]
+    pub fn new(preference: u16, exchange: CDomainName) -> Self {
+        Self { preference, exchange }
+    }
+
+    #[inline]
     pub fn preference(&self) -> u16 {
         self.preference
     }

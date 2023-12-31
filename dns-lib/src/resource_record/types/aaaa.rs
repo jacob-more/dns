@@ -10,6 +10,11 @@ pub struct AAAA {
 
 impl AAAA {
     #[inline]
+    pub fn new(ipv6_address: Ipv6Addr) -> Self {
+        AAAA { ipv6_address }
+    }
+
+    #[inline]
     pub fn ipv6_addr(&self) -> &Ipv6Addr {
         &self.ipv6_address
     }

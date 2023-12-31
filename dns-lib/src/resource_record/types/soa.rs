@@ -16,6 +16,11 @@ pub struct SOA {
 
 impl SOA {
     #[inline]
+    pub fn new(mname: CDomainName, rname: CDomainName, serial: u32, refresh: i32, retry: i32, expire: i32, minimum: u32,) -> Self {
+        Self { mname, rname, serial, refresh, retry, expire, minimum }
+    }
+
+    #[inline]
     pub fn main_domain_name(&self) -> &CDomainName {
         &self.mname
     }

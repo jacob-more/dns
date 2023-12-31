@@ -12,6 +12,11 @@ pub struct DNAME {
 
 impl DNAME {
     #[inline]
+    pub fn new(target: DomainName) -> Self {
+        Self { target }
+    }
+
+    #[inline]
     pub fn target_name(&self) -> &DomainName {
         &self.target
     }

@@ -11,6 +11,11 @@ pub struct HINFO {
 
 impl HINFO {
     #[inline]
+    pub fn new(cpu: CharacterString, os: CharacterString) -> Self {
+        Self { cpu, os }
+    }
+
+    #[inline]
     pub fn cpu(&self) -> &CharacterString {
         &self.cpu
     }

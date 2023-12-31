@@ -8,6 +8,11 @@ pub struct NULL {
 
 impl NULL {
     #[inline]
+    pub fn new(any: Vec<u8>) -> Self {
+        Self { any }
+    }
+
+    #[inline]
     pub fn any(&self) -> &[u8] {
         &self.any
     }

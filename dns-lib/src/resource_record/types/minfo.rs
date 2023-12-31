@@ -11,6 +11,11 @@ pub struct MINFO {
 
 impl MINFO {
     #[inline]
+    pub fn new(responsible_mailbox: CDomainName, error_mailbox: CDomainName) -> Self {
+        Self { responsible_mailbox, error_mailbox }
+    }
+
+    #[inline]
     pub fn responsible_mailbox(&self) -> &CDomainName {
         &self.responsible_mailbox
     }

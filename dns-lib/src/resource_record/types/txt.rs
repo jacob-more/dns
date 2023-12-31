@@ -8,6 +8,18 @@ pub struct TXT {
     strings: Vec<CharacterString>,
 }
 
+impl TXT {
+    #[inline]
+    pub fn new(strings: Vec<CharacterString>) -> Self {
+        Self { strings }
+    }
+
+    #[inline]
+    pub fn strings(&self) -> &[CharacterString] {
+        &self.strings
+    }
+}
+
 impl FromTokenizedRecord for TXT {
     #[inline]
     fn from_tokenized_record<'a>(record: &'a crate::serde::presentation::tokenizer::tokenizer::ResourceRecord) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'a>> where Self: Sized {

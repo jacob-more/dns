@@ -10,6 +10,11 @@ pub struct MR {
 
 impl MR {
     #[inline]
+    pub fn new(new_domain_name: CDomainName) -> Self {
+        Self { new_domain_name }
+    }
+
+    #[inline]
     pub fn mailbox_rename_domain_name(&self) -> &CDomainName {
         &self.new_domain_name
     }
