@@ -4,6 +4,8 @@ use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{
 
 use self::constants::*;
 
+use super::parse_chars::to_escaped_char::EscapedCharsIter;
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum AsciiError {
     BadChar,
@@ -23,76 +25,6 @@ impl Display for AsciiError {
 }
 
 pub type AsciiChar = u8;
-
-// TODO: I am not sure whether it is better to do large match statements, like I have now that match
-//       each letter to their uppercase/lowercase counterparts or use ranges A..=Z and add/subtract
-//       32. Both solutions have merits but I don't know which is better.
-
-#[inline]
-pub const fn ascii_char_as_lower(character: AsciiChar) -> AsciiChar {
-    match character {
-        ASCII_UPPERCASE_A => ASCII_LOWERCASE_A,
-        ASCII_UPPERCASE_B => ASCII_LOWERCASE_B,
-        ASCII_UPPERCASE_C => ASCII_LOWERCASE_C,
-        ASCII_UPPERCASE_D => ASCII_LOWERCASE_D,
-        ASCII_UPPERCASE_E => ASCII_LOWERCASE_E,
-        ASCII_UPPERCASE_F => ASCII_LOWERCASE_F,
-        ASCII_UPPERCASE_G => ASCII_LOWERCASE_G,
-        ASCII_UPPERCASE_H => ASCII_LOWERCASE_H,
-        ASCII_UPPERCASE_I => ASCII_LOWERCASE_I,
-        ASCII_UPPERCASE_J => ASCII_LOWERCASE_J,
-        ASCII_UPPERCASE_K => ASCII_LOWERCASE_K,
-        ASCII_UPPERCASE_L => ASCII_LOWERCASE_L,
-        ASCII_UPPERCASE_M => ASCII_LOWERCASE_M,
-        ASCII_UPPERCASE_N => ASCII_LOWERCASE_N,
-        ASCII_UPPERCASE_O => ASCII_LOWERCASE_O,
-        ASCII_UPPERCASE_P => ASCII_LOWERCASE_P,
-        ASCII_UPPERCASE_Q => ASCII_LOWERCASE_Q,
-        ASCII_UPPERCASE_R => ASCII_LOWERCASE_R,
-        ASCII_UPPERCASE_S => ASCII_LOWERCASE_S,
-        ASCII_UPPERCASE_T => ASCII_LOWERCASE_T,
-        ASCII_UPPERCASE_U => ASCII_LOWERCASE_U,
-        ASCII_UPPERCASE_V => ASCII_LOWERCASE_V,
-        ASCII_UPPERCASE_W => ASCII_LOWERCASE_W,
-        ASCII_UPPERCASE_X => ASCII_LOWERCASE_X,
-        ASCII_UPPERCASE_Y => ASCII_LOWERCASE_Y,
-        ASCII_UPPERCASE_Z => ASCII_LOWERCASE_Z,
-        _ => character,
-    }
-}
-
-#[inline]
-pub const fn ascii_char_as_upper(character: AsciiChar) -> AsciiChar {
-    match character {
-        ASCII_LOWERCASE_A => ASCII_UPPERCASE_A,
-        ASCII_LOWERCASE_B => ASCII_UPPERCASE_B,
-        ASCII_LOWERCASE_C => ASCII_UPPERCASE_C,
-        ASCII_LOWERCASE_D => ASCII_UPPERCASE_D,
-        ASCII_LOWERCASE_E => ASCII_UPPERCASE_E,
-        ASCII_LOWERCASE_F => ASCII_UPPERCASE_F,
-        ASCII_LOWERCASE_G => ASCII_UPPERCASE_G,
-        ASCII_LOWERCASE_H => ASCII_UPPERCASE_H,
-        ASCII_LOWERCASE_I => ASCII_UPPERCASE_I,
-        ASCII_LOWERCASE_J => ASCII_UPPERCASE_J,
-        ASCII_LOWERCASE_K => ASCII_UPPERCASE_K,
-        ASCII_LOWERCASE_L => ASCII_UPPERCASE_L,
-        ASCII_LOWERCASE_M => ASCII_UPPERCASE_M,
-        ASCII_LOWERCASE_N => ASCII_UPPERCASE_N,
-        ASCII_LOWERCASE_O => ASCII_UPPERCASE_O,
-        ASCII_LOWERCASE_P => ASCII_UPPERCASE_P,
-        ASCII_LOWERCASE_Q => ASCII_UPPERCASE_Q,
-        ASCII_LOWERCASE_R => ASCII_UPPERCASE_R,
-        ASCII_LOWERCASE_S => ASCII_UPPERCASE_S,
-        ASCII_LOWERCASE_T => ASCII_UPPERCASE_T,
-        ASCII_LOWERCASE_U => ASCII_UPPERCASE_U,
-        ASCII_LOWERCASE_V => ASCII_UPPERCASE_V,
-        ASCII_LOWERCASE_W => ASCII_UPPERCASE_W,
-        ASCII_LOWERCASE_X => ASCII_UPPERCASE_X,
-        ASCII_LOWERCASE_Y => ASCII_UPPERCASE_Y,
-        ASCII_LOWERCASE_Z => ASCII_UPPERCASE_Z,
-        _ => character,
-    }
-}
 
 pub mod constants {
     use super::{AsciiChar, AsciiString};
@@ -357,10 +289,113 @@ pub mod constants {
     pub const EMPTY_ASCII_STRING: AsciiString = AsciiString { string: vec![] };
 }
 
+// TODO: I am not sure whether it is better to do large match statements, like I have now that match
+//       each letter to their uppercase/lowercase counterparts or use ranges A..=Z and add/subtract
+//       32. Both solutions have merits but I don't know which is better.
+
 #[inline]
-pub fn is_numeric(character: AsciiChar) -> bool {
+pub const fn ascii_char_as_lower(character: AsciiChar) -> AsciiChar {
+    match character {
+        ASCII_UPPERCASE_A => ASCII_LOWERCASE_A,
+        ASCII_UPPERCASE_B => ASCII_LOWERCASE_B,
+        ASCII_UPPERCASE_C => ASCII_LOWERCASE_C,
+        ASCII_UPPERCASE_D => ASCII_LOWERCASE_D,
+        ASCII_UPPERCASE_E => ASCII_LOWERCASE_E,
+        ASCII_UPPERCASE_F => ASCII_LOWERCASE_F,
+        ASCII_UPPERCASE_G => ASCII_LOWERCASE_G,
+        ASCII_UPPERCASE_H => ASCII_LOWERCASE_H,
+        ASCII_UPPERCASE_I => ASCII_LOWERCASE_I,
+        ASCII_UPPERCASE_J => ASCII_LOWERCASE_J,
+        ASCII_UPPERCASE_K => ASCII_LOWERCASE_K,
+        ASCII_UPPERCASE_L => ASCII_LOWERCASE_L,
+        ASCII_UPPERCASE_M => ASCII_LOWERCASE_M,
+        ASCII_UPPERCASE_N => ASCII_LOWERCASE_N,
+        ASCII_UPPERCASE_O => ASCII_LOWERCASE_O,
+        ASCII_UPPERCASE_P => ASCII_LOWERCASE_P,
+        ASCII_UPPERCASE_Q => ASCII_LOWERCASE_Q,
+        ASCII_UPPERCASE_R => ASCII_LOWERCASE_R,
+        ASCII_UPPERCASE_S => ASCII_LOWERCASE_S,
+        ASCII_UPPERCASE_T => ASCII_LOWERCASE_T,
+        ASCII_UPPERCASE_U => ASCII_LOWERCASE_U,
+        ASCII_UPPERCASE_V => ASCII_LOWERCASE_V,
+        ASCII_UPPERCASE_W => ASCII_LOWERCASE_W,
+        ASCII_UPPERCASE_X => ASCII_LOWERCASE_X,
+        ASCII_UPPERCASE_Y => ASCII_LOWERCASE_Y,
+        ASCII_UPPERCASE_Z => ASCII_LOWERCASE_Z,
+        _ => character,
+    }
+}
+
+#[inline]
+pub const fn ascii_char_as_upper(character: AsciiChar) -> AsciiChar {
+    match character {
+        ASCII_LOWERCASE_A => ASCII_UPPERCASE_A,
+        ASCII_LOWERCASE_B => ASCII_UPPERCASE_B,
+        ASCII_LOWERCASE_C => ASCII_UPPERCASE_C,
+        ASCII_LOWERCASE_D => ASCII_UPPERCASE_D,
+        ASCII_LOWERCASE_E => ASCII_UPPERCASE_E,
+        ASCII_LOWERCASE_F => ASCII_UPPERCASE_F,
+        ASCII_LOWERCASE_G => ASCII_UPPERCASE_G,
+        ASCII_LOWERCASE_H => ASCII_UPPERCASE_H,
+        ASCII_LOWERCASE_I => ASCII_UPPERCASE_I,
+        ASCII_LOWERCASE_J => ASCII_UPPERCASE_J,
+        ASCII_LOWERCASE_K => ASCII_UPPERCASE_K,
+        ASCII_LOWERCASE_L => ASCII_UPPERCASE_L,
+        ASCII_LOWERCASE_M => ASCII_UPPERCASE_M,
+        ASCII_LOWERCASE_N => ASCII_UPPERCASE_N,
+        ASCII_LOWERCASE_O => ASCII_UPPERCASE_O,
+        ASCII_LOWERCASE_P => ASCII_UPPERCASE_P,
+        ASCII_LOWERCASE_Q => ASCII_UPPERCASE_Q,
+        ASCII_LOWERCASE_R => ASCII_UPPERCASE_R,
+        ASCII_LOWERCASE_S => ASCII_UPPERCASE_S,
+        ASCII_LOWERCASE_T => ASCII_UPPERCASE_T,
+        ASCII_LOWERCASE_U => ASCII_UPPERCASE_U,
+        ASCII_LOWERCASE_V => ASCII_UPPERCASE_V,
+        ASCII_LOWERCASE_W => ASCII_UPPERCASE_W,
+        ASCII_LOWERCASE_X => ASCII_UPPERCASE_X,
+        ASCII_LOWERCASE_Y => ASCII_UPPERCASE_Y,
+        ASCII_LOWERCASE_Z => ASCII_UPPERCASE_Z,
+        _ => character,
+    }
+}
+
+#[inline]
+pub const fn is_upper(character: AsciiChar) -> bool {
+    match character {
+        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
+        _ => false,
+    }
+}
+
+#[inline]
+pub const fn is_lower(character: AsciiChar) -> bool {
+    match character {
+        ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
+        _ => false,
+    }
+}
+
+#[inline]
+pub const fn is_numeric(character: AsciiChar) -> bool {
     match character {
         ASCII_ZERO..=ASCII_NINE => true,
+        _ => false,
+    }
+}
+
+#[inline]
+pub const fn is_control_char(character: AsciiChar) -> bool {
+    match character {
+        ASCII_NUL..=ASCII_UNIT_SEPARATOR => true,
+        ASCII_DELETE => true,
+        _ => false,
+    }
+}
+
+#[inline]
+pub const fn is_printable(character: AsciiChar) -> bool {
+    match character {
+        ASCII_EXCLAMATION_MARK..=ASCII_TILDE => true,
         _ => false,
     }
 }
@@ -373,10 +408,10 @@ pub struct AsciiString {
 impl Display for AsciiString {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for &character in &self.string {
-            write!(f, "{}", character as char)?;
+        for character in EscapedCharsIter::from(self.string.iter().map(|character| *character)) {
+            write!(f, "{}", character)?;
         }
-        return Ok(());
+        Ok(())
     }
 }
 

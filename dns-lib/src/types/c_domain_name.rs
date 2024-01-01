@@ -2,6 +2,8 @@ use std::{fmt::{Display, Debug}, error::Error, ops::Add};
 
 use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}}};
 
+use super::{parse_chars::{to_escapable_char, to_escaped_char::{EscapedChar, self}}, ascii::AsciiChar};
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
     Fqdn,
@@ -43,23 +45,29 @@ impl From<AsciiError> for CDomainNameError {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Label {
-    label: AsciiString,
+    ascii: AsciiString,
 }
 
 impl Label {
     pub const MAX_OCTETS: usize = 63;
     pub const MIN_OCTETS: usize = 0;
 
-    pub const ROOT_LABEL: Self = Self { label: EMPTY_ASCII_STRING };
+    pub const ROOT_LABEL: Self = Self { ascii: EMPTY_ASCII_STRING };
 
     #[inline]
     pub fn new(string: &AsciiString) -> Result<Self, CDomainNameError> {
+        let string = to_escapable_char::EscapedCharsIter::from(string.iter().map(|character| *character))
+            .map(|character| match character {
+                to_escapable_char::EscapableChar::Regular(character) => character,
+                to_escapable_char::EscapableChar::Escaped(character) => character,
+            }).collect::<Vec<AsciiChar>>();
+
         // +1 for the byte length of the string.
         if string.len() + 1 > Self::MAX_OCTETS {
             return Err(CDomainNameError::LongLabel);
         }
 
-        Ok(Self { label: string.clone() })
+        Ok(Self { ascii: AsciiString::from(&string) })
     }
 
     #[inline]
@@ -71,56 +79,62 @@ impl Label {
 
     #[inline]
     pub fn as_lower(&self) -> Self {
-        Self { label: self.label.as_lower() }
+        Self { ascii: self.ascii.as_lower() }
     }
     
     #[inline]
     pub fn lower(&mut self) {
-        self.label.lower()
+        self.ascii.lower()
     }
 
     #[inline]
     pub fn is_root(&self) -> bool {
-        self.label.is_empty()
+        self.ascii.is_empty()
     }
 
     /// compares the labels. downcasing them as needed, and stops at the first non-equal character.
     #[inline]
     pub fn compare_domain_name_label(label1: &Self, label2: &Self) -> bool {
         // labels have the same # of characters
-        (label1.label.len() == label2.label.len())
+        (label1.ascii.len() == label2.ascii.len())
         // all characters of labels are equal when downcased
-        && label1.label.iter()
-            .zip(label2.label.iter())
+        && label1.ascii.iter()
+            .zip(label2.ascii.iter())
             .all(|(char1, char2)| ascii_char_as_lower(*char1) == ascii_char_as_lower(*char2))
     }
 
     #[inline]
-    fn serial_length(&self) -> usize {
-        // The string length + 1 for the length byte.
-        (self.label.len() + 1).into()
+    fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = to_escaped_char::EscapableChar> + 'a {
+        to_escaped_char::EscapedCharsIter::from(self.ascii.iter().map(|character| *character))
+            .map(|character| match character {
+                to_escaped_char::EscapableChar::Regular(ASCII_PERIOD) => to_escaped_char::EscapableChar::Escaped(EscapedChar::EscapedAscii(ASCII_PERIOD)),
+                to_escaped_char::EscapableChar::Regular(character) => to_escaped_char::EscapableChar::Regular(character),
+                _ => character,
+            })
     }
 }
 
 impl Display for Label {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: Escape '.' characters.
-        write!(f, "{}", self.label)
+        for character in self.iter_escaped() {
+            write!(f, "{}", character)?;
+        }
+        Ok(())
     }
 }
 
 impl ToWire for Label {
     #[inline]
     fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
-        (self.label.len() as u8).to_wire_format(wire, compression)?;
-        self.label.to_wire_format(wire, compression)
+        (self.ascii.len() as u8).to_wire_format(wire, compression)?;
+        self.ascii.to_wire_format(wire, compression)
     }
 
     #[inline]
     fn serial_length(&self) -> u16 {
         // The string length + 1 for the length byte.
-        1 + (self.label.len() as u16)
+        1 + (self.ascii.len() as u16)
     }
 }
 
@@ -145,7 +159,7 @@ impl FromWire for Label {
                 let string = AsciiString::from_wire_format(&mut ascii_wire)?;
                 wire.shift(label_length as usize)?;
         
-                return Ok(Self { label: string });
+                return Ok(Self { ascii: string });
             },
             0b1100_0000 => {
                 return Err(crate::serde::wire::read_wire::ReadWireError::FormatError(
@@ -202,8 +216,8 @@ pub struct CDomainName {
 }
 
 impl CDomainName {
-    pub const MAX_OCTETS: usize = 255;
-    pub const MIN_OCTETS: usize = 0;
+    pub const MAX_OCTETS: u16 = 255;
+    pub const MIN_OCTETS: u16 = 0;
 
     pub const MAX_COMPRESSION_OFFSET: u16 = 2 << 13;  // We have 14 bits for the compression pointer
     /// This is the maximum number of compression pointers that should occur in a
@@ -218,48 +232,35 @@ impl CDomainName {
     /// to trip the maximum compression pointer check.
     /// 
     /// TODO: Update this to allow for the true max.
-    pub const MAX_COMPRESSION_POINTERS: usize = ((Self::MAX_OCTETS + 1) / 2) - 2;
+    pub const MAX_COMPRESSION_POINTERS: u16 = ((Self::MAX_OCTETS + 1) / 2) - 2;
     
     pub fn new(string: &AsciiString) -> Result<Self, CDomainNameError> {
         let mut labels: Vec<Label> = Vec::new();
 
         let mut label_start = 0;
         let mut was_dot = false;
-        let mut serial_length: usize = 0;
-        for (index, character) in string.iter().enumerate() {
-            match *character {
-                ASCII_PERIOD => {
-                    // leading dots are not legal except for the root zone
-                    if (index == 0) && (string.len() > 1) {
-                        return Err(CDomainNameError::LeadingDot);
+        let mut serial_length: u16 = 0;
+        for (index, character) in to_escapable_char::EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate()) {
+            match (character, index, string.len(), was_dot) {
+                // leading dots are not legal except for the root zone
+                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 0, 2.., _) => return Err(CDomainNameError::LeadingDot),
+                // consecutive dots are never legal
+                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 2.., _, true) => return Err(CDomainNameError::ConsecutiveDots),
+                // a label is found
+                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 2.., _, false) => {
+                    let label = Label::new(&string.from_range(label_start, index))?;
+                    serial_length += label.serial_length();
+
+                    if serial_length > CDomainName::MAX_OCTETS {
+                        return Err(CDomainNameError::LongDomain);
                     }
 
-                    // two dots back to back is not legal
-                    if was_dot {
-                        return Err(CDomainNameError::ConsecutiveDots);
-                    }
-
-                    match Label::new(&string.from_range(label_start, index)) { //< Note: exclusive of the '.'
-                        Ok(label) => {
-                            serial_length += label.serial_length();
-
-                            if serial_length > CDomainName::MAX_OCTETS {
-                                return Err(CDomainNameError::LongDomain);
-                            }
-        
-                            labels.push(label);
-                            
-                            label_start = index + 1;
-                            was_dot = true;
-                        },
-                        Err(error) => {
-                            return Err(error);
-                        },
-                    }
-                }
-                _ => {
-                    was_dot = false;
-                }
+                    labels.push(label);
+                    
+                    label_start = index + 1;
+                    was_dot = true;
+                },
+                _ => was_dot = false,
             }
         }
 
@@ -269,20 +270,14 @@ impl CDomainName {
                 return Err(CDomainNameError::LongLabel);
             }
 
-            match Label::new(&string.from_range(label_start, last_index)) { //< Note: exclusive of the '.'
-                Ok(label) => {
-                    serial_length += label.serial_length();
+            let label = Label::new(&string.from_range(label_start, last_index))?;
+            serial_length += label.serial_length();
 
-                    if serial_length > CDomainName::MAX_OCTETS {
-                        return Err(CDomainNameError::LongDomain);
-                    }
-        
-                    labels.push(label);
-                },
-                Err(error) => {
-                    return Err(error);
-                },
+            if serial_length > CDomainName::MAX_OCTETS {
+                return Err(CDomainNameError::LongDomain);
             }
+
+            labels.push(label);
         }
         
         // TODO: I don't like the wat this last part is done. It has too many
@@ -484,11 +479,6 @@ impl CDomainName {
             .zip(domain2.labels.iter().rev())
             .all(|(label1, label2)| Label::compare_domain_name_label(label1, label2))
     }
-
-    #[inline]
-    fn serial_length(&self) -> usize {
-        self.labels.iter().map(|label| label.serial_length()).sum()
-    }
 }
 
 impl Display for CDomainName {
@@ -497,11 +487,12 @@ impl Display for CDomainName {
         if self.is_root() {
             return write!(f, ".")
         }
-        match self.labels.get(0) {
-            Option::None => return write!(f, "null"),
-            Option::Some(label) => write!(f, "{}", label)?,
+        let mut labels = self.labels.iter();
+        match labels.next() {
+            None => return write!(f, "null"),
+            Some(label) => write!(f, "{}", label)?,
         };
-        for label in self.labels.iter().skip(1) {
+        for label in labels {
             write!(f, ".{}", label)?;
         }
         Ok(())
@@ -509,12 +500,10 @@ impl Display for CDomainName {
 }
 
 impl Debug for CDomainName {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Domain Name: ")?;
-        for label in &self.labels[..(self.labels.len()-1)] {
-            write!(f, "{}.", label)?;
-        }
-        write!(f, "{}", self.labels[self.labels.len()-1])
+        write!(f, "{}", self)
     }
 }
 

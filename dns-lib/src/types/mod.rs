@@ -10,3 +10,5 @@ pub mod base64;
 
 pub mod base_conversions;
 mod rtype_bitmap;
+
+mod parse_chars;
