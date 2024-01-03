@@ -7,7 +7,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use mac_address::MacAddress;
-use ux::{u24, u40, u48, u56, u72, u80, u88, u96, u104, u112, u120, i24, i40, i48, i56, i72, i80, i88, i96, i104, i112, i120};
+use ux::{u24, u40, u48, u56, u72, u80, u88, u96, u104, u112, u120, i24, i40, i48, i56, i72, i80, i88, i96, i104, i112, i120, u1, u4, u3};
 
 use crate::serde::const_byte_counts::*;
 
@@ -196,5 +196,37 @@ impl FromWire for MacAddress {
         wire.shift(MAC_ADDRESS_BYTE_COUNT as usize)?;
 
         Ok(MacAddress::from(bytes))
+    }
+}
+
+impl FromWire for (u1, u3, u4) {
+    #[inline]
+    fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
+        let input = u8::from_wire_format(wire)?;
+
+        // | 0  | 0 0 0 | 0 0 0 0 |
+        // | u1 | u3    | u4      |
+        let bit_7    = u1::new( (input >> 7) & 0b00000001 );
+        let bit_6to4 = u3::new( (input >> 4) & 0b00000111 );
+        let bit_3to0 = u4::new( (input >> 0) & 0b00001111 );
+
+        Ok((bit_7, bit_6to4, bit_3to0))
+    }
+}
+
+impl FromWire for (u1, u4, u1, u1, u1) {
+    #[inline]
+    fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
+        let input = u8::from_wire_format(wire)?;
+
+        // | 0  | 0 0 0 0 | 0  | 0  | 0  |
+        // | u1 | u4      | u1 | u1 | u1 |
+        let bit_7    = u1::new( (input >> 7) & 0b00000001 );
+        let bit_6to3 = u4::new( (input >> 3) & 0b00001111 );
+        let bit_2    = u1::new( (input >> 2) & 0b00000001 );
+        let bit_1    = u1::new( (input >> 1) & 0b00000001 );
+        let bit_0    = u1::new( (input >> 0) & 0b00000001 );
+
+        Ok((bit_7, bit_6to3, bit_2, bit_1, bit_0))
     }
 }

@@ -7,7 +7,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
 
 use mac_address::MacAddress;
-use ux::{u24, u40, u48, u56, i24, i40, i48, i56};
+use ux::{u24, u40, u48, u56, i24, i40, i48, i56, u1, u4, u3};
 
 use crate::serde::const_byte_counts::*;
 
@@ -202,5 +202,55 @@ impl ToWire for MacAddress {
     #[inline]
     fn serial_length(&self) -> u16 {
         MAC_ADDRESS_BYTE_COUNT
+    }
+}
+
+impl ToWire for (u1, u3, u4) {
+    #[inline]
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut WriteWire<'a>, compression: &mut Option<CompressionMap>) -> Result<(), WriteWireError> where 'a: 'b {
+        let bit_7 = u16::from(self.0) as u8;
+        let bit_6to4: u8 = self.1.into();
+        let bit_3to0: u8 = self.2.into();
+
+        // | 0  | 0 0 0 | 0 0 0 0 |
+        // | u1 | u3    | u4      |
+        let bit_7    = (bit_7    << 7) & 0b10000000;
+        let bit_6to4 = (bit_6to4 << 4) & 0b01110000;
+        let bit_3to0 = (bit_3to0 << 0) & 0b00001111;
+        let result = bit_7 | bit_6to4 | bit_3to0;
+
+        result.to_wire_format(wire, compression)
+    }
+
+    #[inline]
+    fn serial_length(&self) -> u16 {
+        return U8_BYTE_COUNT;
+    }
+}
+
+impl ToWire for (u1, u4, u1, u1, u1) {
+    #[inline]
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut WriteWire<'a>, compression: &mut Option<CompressionMap>) -> Result<(), WriteWireError> where 'a: 'b {
+        let bit_7 = u16::from(self.0) as u8;
+        let bit_6to3: u8 = self.1.into();
+        let bit_2 = u16::from(self.2) as u8;
+        let bit_1 = u16::from(self.3) as u8;
+        let bit_0 = u16::from(self.4) as u8;
+
+        // | 0  | 0 0 0 0 | 0  | 0  | 0  |
+        // | u1 | u4      | u1 | u1 | u1 |
+        let bit_7    = (bit_7    << 7) & 0b10000000;
+        let bit_6to3 = (bit_6to3 << 3) & 0b01111000;
+        let bit_2    = (bit_2    << 2) & 0b00000100;
+        let bit_1    = (bit_1    << 1) & 0b00000010;
+        let bit_0    = (bit_0    << 0) & 0b00000001;
+        let result = bit_7 | bit_6to3 | bit_2 | bit_1 | bit_0;
+
+        result.to_wire_format(wire, compression)
+    }
+
+    #[inline]
+    fn serial_length(&self) -> u16 {
+        return U8_BYTE_COUNT;
     }
 }
