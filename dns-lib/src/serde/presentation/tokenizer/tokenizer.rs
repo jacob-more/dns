@@ -4,6 +4,10 @@ use crate::serde::presentation::tokenizer::entry::Entry;
 
 use super::{entry::{EntryIter, self}, errors::TokenizerError};
 
+const DEFAULT_DOMAIN_NAME: Option<&str> = None;
+const DEFAULT_TTL: Option<&str> = Some("86400");
+const DEFAULT_CLASS: Option<&str> = Some("IN");
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ResourceRecord<'a> {
     pub domain_name: &'a str,
@@ -42,9 +46,9 @@ impl<'a> Tokenizer<'a> {
     #[inline]
     pub fn new(feed: &'a str) -> Self {
         Tokenizer {
-            last_domain_name: None,
-            last_ttl: None,
-            last_rclass: None,
+            last_domain_name: DEFAULT_DOMAIN_NAME,
+            last_ttl: DEFAULT_TTL,
+            last_rclass: DEFAULT_CLASS,
             origin: None,
             entry_iter: EntryIter::new(feed),
         }
