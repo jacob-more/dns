@@ -1,6 +1,6 @@
 use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode, ToPresentation};
 
-use crate::types::c_domain_name::CDomainName;
+use crate::{types::c_domain_name::CDomainName, resource_record::time::Time};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.13
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRecord, RTypeCode)]
@@ -8,15 +8,15 @@ pub struct SOA {
     mname: CDomainName,
     rname: CDomainName,
     serial: u32,
-    refresh: i32,   // TODO: make DNSTime once that is defined
-    retry: i32,     // TODO: make DNSTime once that is defined
-    expire: i32,    // TODO: make DNSTime once that is defined
+    refresh: Time,
+    retry: Time,
+    expire: Time,
     minimum: u32,
 }
 
 impl SOA {
     #[inline]
-    pub fn new(mname: CDomainName, rname: CDomainName, serial: u32, refresh: i32, retry: i32, expire: i32, minimum: u32,) -> Self {
+    pub fn new(mname: CDomainName, rname: CDomainName, serial: u32, refresh: Time, retry: Time, expire: Time, minimum: u32,) -> Self {
         Self { mname, rname, serial, refresh, retry, expire, minimum }
     }
 
@@ -33,7 +33,7 @@ impl SOA {
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::{serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::c_domain_name::CDomainName};
+    use crate::{serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::c_domain_name::CDomainName, resource_record::time::Time};
     use super::SOA;
 
     gen_test_circular_serde_sanity_test!(
@@ -42,9 +42,9 @@ mod circular_serde_sanity_test {
             mname: CDomainName::from_utf8("name_server.example.com.").unwrap(),
             rname: CDomainName::from_utf8("responsible_person.example.com.").unwrap(),
             serial: 12,
-            refresh: 60,
-            retry: 15,
-            expire: 86400,
+            refresh: Time::new(60),
+            retry: Time::new(15),
+            expire: Time::new(86400),
             minimum: 0,
         }
     );
@@ -52,7 +52,7 @@ mod circular_serde_sanity_test {
 
 #[cfg(test)]
 mod tokenizer_tests {
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::c_domain_name::CDomainName};
+    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::c_domain_name::CDomainName, resource_record::time::Time};
     use super::SOA;
 
     const GOOD_DOMAIN_NAME: &str = "www.example.com.";
@@ -68,57 +68,12 @@ mod tokenizer_tests {
             mname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
             rname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
             serial: 10,
-            refresh: 10,
-            retry: 10,
-            expire: 10,
+            refresh: Time::new(10),
+            retry: Time::new(10),
+            expire: Time::new(10),
             minimum: 10
         },
         [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]
-    );
-
-    // Good SOA record with negative DNSTime
-    // TODO: this will probably not be allowed in the future once the DNSTime has been defined
-    gen_ok_record_test!(
-        test_ok_negative_refresh,
-        SOA,
-        SOA {
-            mname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
-            rname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
-            serial: 10,
-            refresh: -1,
-            retry: 10,
-            expire: 10,
-            minimum: 10
-        },
-        [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, NEGATIVE_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]
-    );
-    gen_ok_record_test!(
-        test_ok_negative_retry,
-        SOA,
-        SOA {
-            mname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
-            rname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
-            serial: 10,
-            refresh: 10,
-            retry: -1,
-            expire: 10,
-            minimum: 10
-        },
-        [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, NEGATIVE_INTEGER, GOOD_INTEGER, GOOD_INTEGER]
-    );
-    gen_ok_record_test!(
-        test_ok_negative_expire,
-        SOA,
-        SOA {
-            mname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
-            rname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
-            serial: 10,
-            refresh: 10,
-            retry: 10,
-            expire: -1,
-            minimum: 10
-        },
-        [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, NEGATIVE_INTEGER, GOOD_INTEGER]
     );
 
     // Test bad tokens

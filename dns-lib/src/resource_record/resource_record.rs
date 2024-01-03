@@ -2,14 +2,13 @@ use std::fmt::Display;
 
 use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
 
-use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT}, rtype::RType};
+use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT}, rtype::RType, time::Time};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
     name: CDomainName,
     rclass: RClass,
-    // TODO: convert to DNSTime
-    ttl: i32,
+    ttl: Time,
 }
 
 impl RRHeader {
@@ -38,12 +37,12 @@ impl RRHeader {
     }
 
     #[inline]
-    pub const fn get_ttl(&self) -> &i32 {
+    pub const fn get_ttl(&self) -> &Time {
         &self.ttl
     }
 
     #[inline]
-    pub fn set_ttl(&mut self, new_ttl: i32) {
+    pub fn set_ttl(&mut self, new_ttl: Time) {
         self.ttl = new_ttl;
     }
 }
@@ -360,12 +359,12 @@ impl ResourceRecord {
     }
 
     #[inline]
-    pub const fn ttl(&self) -> &i32 {
+    pub const fn ttl(&self) -> &Time {
         &self.header_and_rtype().0.get_ttl()
     }
 
     #[inline]
-    pub fn set_ttl(&mut self, new_ttl: i32) {
+    pub fn set_ttl(&mut self, new_ttl: Time) {
         self.mut_header_and_rtype().0.set_ttl(new_ttl);
     }
 
@@ -707,7 +706,7 @@ impl FromWire for ResourceRecord {
         let name = CDomainName::from_wire_format(wire)?;
         let rtype = RType::from_wire_format(wire)?;
         let rclass = RClass::from_wire_format(wire)?;
-        let ttl = i32::from_wire_format(wire)?;
+        let ttl = Time::from_wire_format(wire)?;
         let header = RRHeader { name, rclass, ttl };
         // We will not store the wire_rd_length, instead, we will recalculate it since things like
         // domain name compression could cause it to change its value.
@@ -1257,7 +1256,7 @@ impl FromTokenizedRecord for ResourceRecord {
         let rr_header = RRHeader {
             name: CDomainName::from_token_format(record.domain_name)?,
             rclass: RClass::from_token_format(record.rclass)?,
-            ttl: i32::from_token_format(record.ttl)?,
+            ttl: Time::from_token_format(record.ttl)?,
         };
 
         let rtype = RType::from_token_format(record.rtype)?;

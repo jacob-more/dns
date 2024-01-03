@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, num::{ParseIntError, TryFromIntError}, net
 
 use mac_address::MacParseError;
 
-use crate::{resource_record::{rclass::RClassError, rtype::{RTypeError, RType}, dnssec_alg::DnsSecAlgorithmError}, types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error}};
+use crate::{resource_record::{rclass::RClassError, rtype::{RTypeError, RType}, dnssec_alg::DnsSecAlgorithmError, time::{TimeError, DateTimeError}}, types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error}};
 
 use super::tokenizer::errors::TokenizerError;
 
@@ -57,6 +57,7 @@ pub enum TokenError<'a> {
     Base32Error(Base32Error),
     ExtendedBase32Error(ExtendedBase32Error),
     Base64Error(Base64Error),
+    TimeError(TimeError),
 }
 impl<'a> Error for TokenError<'a> {}
 impl<'a> Display for TokenError<'a> {
@@ -78,6 +79,7 @@ impl<'a> Display for TokenError<'a> {
             Self::Base32Error(error) => write!(f, "{error}"),
             Self::ExtendedBase32Error(error) => write!(f, "{error}"),
             Self::Base64Error(error) => write!(f, "{error}"),
+            Self::TimeError(error) => write!(f, "{error}"),
         }
     }
 }
@@ -120,28 +122,44 @@ impl<'a> From<CharacterStringError> for TokenError<'a> {
     fn from(value: CharacterStringError) -> Self {
         Self::CharacterStringError(value)
     }
-}impl<'a> From<CDomainNameError> for TokenError<'a> {
+}
+impl<'a> From<CDomainNameError> for TokenError<'a> {
     fn from(value: CDomainNameError) -> Self {
         Self::CDomainNameError(value)
     }
-}impl<'a> From<DomainNameError> for TokenError<'a> {
+}
+impl<'a> From<DomainNameError> for TokenError<'a> {
     fn from(value: DomainNameError) -> Self {
         Self::DomainNameError(value)
     }
-}impl<'a> From<Base16Error> for TokenError<'a> {
+}
+impl<'a> From<Base16Error> for TokenError<'a> {
     fn from(value: Base16Error) -> Self {
         Self::Base16Error(value)
     }
-}impl<'a> From<Base32Error> for TokenError<'a> {
+}
+impl<'a> From<Base32Error> for TokenError<'a> {
     fn from(value: Base32Error) -> Self {
         Self::Base32Error(value)
     }
-}impl<'a> From<ExtendedBase32Error> for TokenError<'a> {
+}
+impl<'a> From<ExtendedBase32Error> for TokenError<'a> {
     fn from(value: ExtendedBase32Error) -> Self {
         Self::ExtendedBase32Error(value)
     }
-}impl<'a> From<Base64Error> for TokenError<'a> {
+}
+impl<'a> From<Base64Error> for TokenError<'a> {
     fn from(value: Base64Error) -> Self {
         Self::Base64Error(value)
+    }
+}
+impl<'a> From<TimeError> for TokenError<'a> {
+    fn from(value: TimeError) -> Self {
+        Self::TimeError(value)
+    }
+}
+impl<'a> From<DateTimeError> for TokenError<'a> {
+    fn from(value: DateTimeError) -> Self {
+        Self::TimeError(TimeError::DateTimeError(value))
     }
 }
