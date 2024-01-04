@@ -1,4 +1,5 @@
 pub mod resource_record;
+pub mod types;
 
 pub mod rclass;
 pub mod rtype;
@@ -10,4 +11,4 @@ pub mod opcode;
 pub mod key_protocol;
 pub mod time;
 
-pub mod types;
+pub mod rrset;
