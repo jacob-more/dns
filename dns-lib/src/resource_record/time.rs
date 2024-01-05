@@ -30,7 +30,7 @@ impl From<DateTimeError> for TimeError {
 type TimeInt = u32;
 
 /// https://datatracker.ietf.org/doc/html/rfc2181#section-8
-pub const TTL_MAX: TimeInt = 31_u32.pow(2) - 1;
+pub const TTL_MAX: TimeInt = 2_u32.pow(31) - 1;
 /// https://datatracker.ietf.org/doc/html/rfc2181#section-8
 pub const TTL_MIN: TimeInt = 0;
 
