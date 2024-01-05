@@ -243,11 +243,12 @@ impl CDomainName {
         for (index, character) in to_escapable_char::EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate()) {
             match (character, index, string.len(), was_dot) {
                 // leading dots are not legal except for the root zone
+                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 0, 1, _) => labels.push(Label::ROOT_LABEL),
                 (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 0, 2.., _) => return Err(CDomainNameError::LeadingDot),
                 // consecutive dots are never legal
-                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 2.., _, true) => return Err(CDomainNameError::ConsecutiveDots),
+                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 1.., _, true) => return Err(CDomainNameError::ConsecutiveDots),
                 // a label is found
-                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 2.., _, false) => {
+                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 1.., string_len, false) => {
                     let label = Label::new(&string.from_range(label_start, index))?;
                     serial_length += label.serial_length();
 
@@ -256,55 +257,36 @@ impl CDomainName {
                     }
 
                     labels.push(label);
-                    
                     label_start = index + 1;
                     was_dot = true;
-                },
-                _ => was_dot = false,
-            }
-        }
 
-        let last_index = string.len();
-        if last_index > label_start {
-            if last_index - label_start > Label::MAX_OCTETS {
-                return Err(CDomainNameError::LongLabel);
-            }
+                    // If this is the last character in the buffer, then make sure the root label is
+                    // appended as well.
+                    if index == string_len-1 {
+                        let label = Label::ROOT_LABEL;
+                        serial_length += label.serial_length();
 
-            let label = Label::new(&string.from_range(label_start, last_index))?;
-            serial_length += label.serial_length();
-
-            if serial_length > CDomainName::MAX_OCTETS {
-                return Err(CDomainNameError::LongDomain);
-            }
-
-            labels.push(label);
-        }
-        
-        // TODO: I don't like the wat this last part is done. It has too many
-        //       cases and ways to break. I believe there is probably a cleaner
-        //       and less error prone way to do this. This way works, and we can
-        //       keep it, but if I get a chance, it might be worth revisiting.
-        //
-        // If it is a root domain, then it should end with a "."
-        // For completeness, a root label is a label with an empty string and
-        // size of zero.
-        if let Some(character) = string.last() {
-            if *character == ASCII_PERIOD {
-                serial_length += Label::ROOT_LABEL.serial_length();
-
-                if serial_length > CDomainName::MAX_OCTETS {
-                    return Err(CDomainNameError::LongDomain);
-                }
-    
-                if let Some(last_label) = labels.last() {
-                    // If the current set of labels already ends in the root label,
-                    // then we cannot add it a second time.
-                    if *last_label != Label::ROOT_LABEL {
-                        labels.push(Label::ROOT_LABEL);
+                        if serial_length > CDomainName::MAX_OCTETS {
+                            return Err(CDomainNameError::LongDomain);
+                        }
+                        labels.push(label);
                     }
-                } else {
-                    labels.push(Label::ROOT_LABEL);
-                }
+                },
+                (_, index, string_len, _) => {
+                    // If this is the last character in the buffer, then this is also the end of the
+                    // label.
+                    if index == string_len-1 {
+                        let label = Label::new(&string.from_range(label_start, index+1))?;
+                        serial_length += label.serial_length();
+    
+                        if serial_length > CDomainName::MAX_OCTETS {
+                            return Err(CDomainNameError::LongDomain);
+                        }
+    
+                        labels.push(label);
+                    }
+                    was_dot = false;
+                },
             }
         }
 
