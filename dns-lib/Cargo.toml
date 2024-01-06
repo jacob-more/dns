@@ -12,6 +12,7 @@ async-trait = "0.1"
 lazy_static = "1.4"
 mac_address = "1.1"
 regex = "1.10"
+tokio = { version = "1.35", features = ["full"] }
 ux = "0.1"
 
 [dev-dependencies]

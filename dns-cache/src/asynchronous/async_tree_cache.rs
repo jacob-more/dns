@@ -39,7 +39,7 @@ impl<Records> AsyncTreeCache<Records> {
     }
 
     #[inline]
-    pub async fn get_or_create_node(&mut self, question: &Question) -> Result<Arc<TreeNode<Records>>, AsyncTreeCacheError> {
+    pub async fn get_or_create_node(&self, question: &Question) -> Result<Arc<TreeNode<Records>>, AsyncTreeCacheError> {
         // Checks if domain name ends in root node.
         // The root node of the cache is the root label so if the domain name is not
         // fully qualified, then it is not possible for the domain to be in the cache.
@@ -162,7 +162,7 @@ impl<Records> AsyncTreeCache<Records> {
     }
 
     #[inline]
-    pub async fn remove_node(&mut self, qname: &CDomainName, qclass: &RClass) -> Result<Option<Arc<TreeNode<Records>>>, AsyncTreeCacheError> {
+    pub async fn remove_node(&self, qname: &CDomainName, qclass: &RClass) -> Result<Option<Arc<TreeNode<Records>>>, AsyncTreeCacheError> {
         // Checks if domain name ends in root node.
         // The root node of the cache is the root label so if the domain name is not
         // fully qualified, then it is not possible for the domain to be in the cache.

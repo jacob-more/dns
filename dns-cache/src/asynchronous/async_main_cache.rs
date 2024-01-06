@@ -54,7 +54,7 @@ impl AsyncMainTreeCache {
     }
 
     #[inline]
-    async fn insert_record(&mut self, record: ResourceRecord, received_time: Instant) -> Result<(), AsyncTreeCacheError> {
+    async fn insert_record(&self, record: ResourceRecord, received_time: Instant) -> Result<(), AsyncTreeCacheError> {
         let question = Question::new(record.name().clone(), record.rtype(), record.rclass());
         let node = self.cache.get_or_create_node(&question).await?;
         let mut write_records = node.records.write().await;
@@ -161,7 +161,7 @@ impl AsyncMainCache for AsyncMainTreeCache {
         }
     }
 
-    async fn insert(&mut self, records: &dns_lib::query::message::Message) {
+    async fn insert(&self, records: &dns_lib::query::message::Message) {
         let received_time = Instant::now();
         for record in records.answer().iter()
             .chain(records.additional().iter())
@@ -172,7 +172,7 @@ impl AsyncMainCache for AsyncMainTreeCache {
         }
     }
 
-    async fn clean(&mut self) {
+    async fn clean(&self) {
         todo!()
     }
 }
