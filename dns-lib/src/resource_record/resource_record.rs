@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
 
-use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT, a6::A6}, rtype::RType, time::Time};
+use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT, a6::A6, ptr::PTR}, rtype::RType, time::Time};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
@@ -113,7 +113,7 @@ pub enum ResourceRecord {
     // NXT(RRHeader, NXT),
     // OPENPGPKEY(RRHeader, OPENPGPKEY),
     // OPT(RRHeader, OPT),
-    // PTR(RRHeader, PTR),
+    PTR(RRHeader, PTR),
     // PX(RRHeader, PX),
     // RKEY(RRHeader, RKEY),
     // RP(RRHeader, RP),
@@ -216,7 +216,7 @@ impl ResourceRecord {
             // Self::NXT(header, _) => (header, RType::NXT),
             // Self::OPENPGPKEY(header, _) => (header, RType::OPENPGPKEY),
             // Self::OPT(header, _) => (header, RType::OPT),
-            // Self::PTR(header, _) => (header, RType::PTR),
+            Self::PTR(header, _) => (header, RType::PTR),
             // Self::PX(header, _) => (header, RType::PX),
             // Self::RKEY(header, _) => (header, RType::RKEY),
             // Self::RP(header, _) => (header, RType::RP),
@@ -312,7 +312,7 @@ impl ResourceRecord {
             // Self::NXT(header, _) => (header, RType::NXT),
             // Self::OPENPGPKEY(header, _) => (header, RType::OPENPGPKEY),
             // Self::OPT(header, _) => (header, RType::OPT),
-            // Self::PTR(header, _) => (header, RType::PTR),
+            Self::PTR(header, _) => (header, RType::PTR),
             // Self::PX(header, _) => (header, RType::PX),
             // Self::RKEY(header, _) => (header, RType::RKEY),
             // Self::RP(header, _) => (header, RType::RP),
@@ -433,7 +433,7 @@ impl ResourceRecord {
             // Self::NXT(_, rdata) => rdata.serial_length(),
             // Self::OPENPGPKEY(_, rdata) => rdata.serial_length(),
             // Self::OPT(_, rdata) => rdata.serial_length(),
-            // Self::PTR(_, rdata) => rdata.serial_length(),
+            Self::PTR(_, rdata) => rdata.serial_length(),
             // Self::PX(_, rdata) => rdata.serial_length(),
             // Self::RKEY(_, rdata) => rdata.serial_length(),
             // Self::RP(_, rdata) => rdata.serial_length(),
@@ -540,7 +540,7 @@ impl ResourceRecord {
             // (Self::NXT(self_header, self_rdata), Self::NXT(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::OPENPGPKEY(self_header, self_rdata), Self::OPENPGPKEY(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::OPT(self_header, self_rdata), Self::OPT(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
-            // (Self::PTR(self_header, self_rdata), Self::PTR(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
+            (Self::PTR(self_header, self_rdata), Self::PTR(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::PX(self_header, self_rdata), Self::PX(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::RKEY(self_header, self_rdata), Self::RKEY(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::RP(self_header, self_rdata), Self::RP(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
@@ -651,7 +651,7 @@ impl ToWire for ResourceRecord {
             // Self::NXT(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::OPENPGPKEY(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::OPT(_, rdata) => rdata.to_wire_format(wire, compression)?,
-            // Self::PTR(_, rdata) => rdata.to_wire_format(wire, compression)?,
+            Self::PTR(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::PX(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::RKEY(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::RP(_, rdata) => rdata.to_wire_format(wire, compression)?,
@@ -781,10 +781,9 @@ impl FromWire for ResourceRecord {
                 // (Self::WKS(header, rdata), rd_length)
             },
             RType::PTR => {
-                return Err(ReadWireError::UnsupportedRType(rtype));
-                // let rdata = PTR::from_wire_format(&mut rdata_wire)?;
-                // let rd_length = rdata.serial_length();
-                // (Self::PTR(header, rdata), rd_length)
+                let rdata = PTR::from_wire_format(&mut rdata_wire)?;
+                let rd_length = rdata.serial_length();
+                (Self::PTR(header, rdata), rd_length)
             },
             RType::HINFO => {
                 let rdata = HINFO::from_wire_format(&mut rdata_wire)?;
@@ -1262,20 +1261,21 @@ impl FromTokenizedRecord for ResourceRecord {
         let record = match rtype {
             RType::A => Self::A(rr_header, A::from_tokenized_record(record)?),
             RType::A6 => Self::A6(rr_header, A6::from_tokenized_record(record)?),
-            RType::NS => Self::NS(rr_header, NS::from_tokenized_record(record)?),
+            RType::AAAA => Self::AAAA(rr_header, AAAA::from_tokenized_record(record)?),
+            RType::CNAME => Self::CNAME(rr_header, CNAME::from_tokenized_record(record)?),
+            RType::DNAME => Self::DNAME(rr_header, DNAME::from_tokenized_record(record)?),
+            RType::HINFO => Self::HINFO(rr_header, HINFO::from_tokenized_record(record)?),
+            RType::MB => Self::MB(rr_header, MB::from_tokenized_record(record)?),
             RType::MD => Self::MD(rr_header, MD::from_tokenized_record(record)?),
             RType::MF => Self::MF(rr_header, MF::from_tokenized_record(record)?),
-            RType::CNAME => Self::CNAME(rr_header, CNAME::from_tokenized_record(record)?),
-            RType::SOA => Self::SOA(rr_header, SOA::from_tokenized_record(record)?),
-            RType::MB => Self::MB(rr_header, MB::from_tokenized_record(record)?),
             RType::MG => Self::MG(rr_header, MG::from_tokenized_record(record)?),
-            RType::MR => Self::MR(rr_header, MR::from_tokenized_record(record)?),
-            RType::HINFO => Self::HINFO(rr_header, HINFO::from_tokenized_record(record)?),
             RType::MINFO => Self::MINFO(rr_header, MINFO::from_tokenized_record(record)?),
+            RType::MR => Self::MR(rr_header, MR::from_tokenized_record(record)?),
             RType::MX => Self::MX(rr_header, MX::from_tokenized_record(record)?),
+            RType::NS => Self::NS(rr_header, NS::from_tokenized_record(record)?),
+            RType::SOA => Self::SOA(rr_header, SOA::from_tokenized_record(record)?),
             RType::TXT => Self::TXT(rr_header, TXT::from_tokenized_record(record)?),
-            RType::AAAA => Self::AAAA(rr_header, AAAA::from_tokenized_record(record)?),
-            RType::DNAME => Self::DNAME(rr_header, DNAME::from_tokenized_record(record)?),
+            RType::PTR => Self::PTR(rr_header, PTR::from_tokenized_record(record)?),
             
             RType::ANY => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
             RType::AXFR => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
@@ -1319,6 +1319,7 @@ impl ToPresentation for ResourceRecord {
             Self::NULL(_, _) => panic!("Cannot convert {rtype} to presentation"),
             Self::SOA(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::TXT(_, rdata) => rdata.to_presentation_format(out_buffer),
+            Self::PTR(_, rdata) => rdata.to_presentation_format(out_buffer),
         }
     }
 }

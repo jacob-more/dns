@@ -60,7 +60,7 @@ pub mod null;
 // pub mod NXT;
 // pub mod OPENPGPKEY;
 // pub mod OPT;
-// pub mod PTR;
+pub mod ptr;
 // pub mod PX;
 // pub mod RKEY;
 // pub mod RP;
