@@ -536,7 +536,7 @@ mod tokenizer_tests {
 
     // u32 tests
     gen_ok_token_test!(test_ok_u32_min, Time, Time { ttl: TTL_MIN }, "0");
-    gen_ok_token_test!(test_ok_u32_max, Time, Time { ttl: TTL_MAX }, "960");
+    gen_ok_token_test!(test_ok_u32_max, Time, Time { ttl: TTL_MAX }, "2147483647");
 
     // datetime tests
     gen_ok_token_test!(test_ok_date_time_min, Time, Time { ttl: 0 }, "00010101000000");

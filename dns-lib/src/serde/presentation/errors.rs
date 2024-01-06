@@ -14,6 +14,8 @@ pub enum TokenizedRecordError<'a> {
     TooFewRDataTokensError(usize, usize),
     UnsupportedRType(RType),
     RTypeNotAllowed(RType),
+    OutOfBoundsError(String),
+    ValueError(String),
 }
 impl<'a> Error for TokenizedRecordError<'a> {}
 impl<'a> Display for TokenizedRecordError<'a> {
@@ -24,7 +26,9 @@ impl<'a> Display for TokenizedRecordError<'a> {
             Self::TooManyRDataTokensError(expected, received) => write!(f, "too many tokens; expected {expected} but received {received}"),
             Self::TooFewRDataTokensError(expected, received) => write!(f, "too few tokens; expected {expected} but received {received}"),
             Self::UnsupportedRType(rtype) => write!(f, "Resource Record Type {rtype} is not supported"),
-            Self::RTypeNotAllowed(rtype) => write!(f, "Resource Record Type {rtype} is not allowed in files")
+            Self::RTypeNotAllowed(rtype) => write!(f, "Resource Record Type {rtype} is not allowed in files"),
+            Self::OutOfBoundsError(error) => write!(f, "Out Of Bounds: {error}"),
+            Self::ValueError(error) => write!(f, "Value Error: {error}"),
         }
     }
 }
