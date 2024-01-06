@@ -5,10 +5,12 @@ use crate::query::message::Message;
 pub trait MainCache {
     fn get(&self, query: &Message) -> Message;
     fn insert(&mut self, records: &Message);
+    fn clean(&mut self);
 }
 
 #[async_trait]
 pub trait AsyncMainCache {
     async fn get(&self, query: &Message) -> Message;
     async fn insert(&mut self, records: &Message);
+    async fn clean(&mut self);
 }

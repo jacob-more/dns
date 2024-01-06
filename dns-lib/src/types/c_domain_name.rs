@@ -424,6 +424,11 @@ impl CDomainName {
     }
 
     #[inline]
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Label> {
+        self.labels.iter()
+    }
+
+    #[inline]
     pub fn search_domains<'a>(&'a self) -> impl 'a + Iterator<Item = CDomainName> {
         self.labels.iter()
             .enumerate()

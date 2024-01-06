@@ -3,7 +3,7 @@ use std::fmt::Display;
 use ux::u4;
 
 /// https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-5
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum OpCode {
     Unknown(u4),
 
