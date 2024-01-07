@@ -84,7 +84,7 @@ pub mod txt;
 // pub mod UINFO;
 // pub mod UNSPEC;
 // pub mod URI;
-// pub mod WKS;
+pub mod wks;
 // pub mod X25;
 // pub mod ZONEMD;
 

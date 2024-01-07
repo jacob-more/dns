@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
 
-use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT, a6::A6, ptr::PTR}, rtype::RType, time::Time};
+use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT, a6::A6, ptr::PTR, wks::WKS}, rtype::RType, time::Time};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
@@ -137,7 +137,7 @@ pub enum ResourceRecord {
     // UINFO(RRHeader, UINFO),
     // UNSPEC(RRHeader, UNSPEC),
     // URI(RRHeader, URI),
-    // WKS(RRHeader, WKS),
+    WKS(RRHeader, WKS),
     // X25(RRHeader, X25),
     // ZONEMD(RRHeader, ZONEMD),
 }
@@ -241,7 +241,7 @@ impl ResourceRecord {
             // Self::UINFO(header, _) => (header, RType::UINFO),
             // Self::UNSPEC(header, _) => (header, RType::UNSPEC),
             // Self::URI(header, _) => (header, RType::URI),
-            // Self::WKS(header, _) => (header, RType::WKS),
+            Self::WKS(header, _) => (header, RType::WKS),
             // Self::X25(header, _) => (header, RType::X25),
             // Self::ZONEMD(header, _) => (header, RType::ZONEMD),
         }
@@ -337,7 +337,7 @@ impl ResourceRecord {
             // Self::UINFO(header, _) => (header, RType::UINFO),
             // Self::UNSPEC(header, _) => (header, RType::UNSPEC),
             // Self::URI(header, _) => (header, RType::URI),
-            // Self::WKS(header, _) => (header, RType::WKS),
+            Self::WKS(header, _) => (header, RType::WKS),
             // Self::X25(header, _) => (header, RType::X25),
             // Self::ZONEMD(header, _) => (header, RType::ZONEMD),
         }
@@ -458,7 +458,7 @@ impl ResourceRecord {
             // Self::UINFO(_, rdata) => rdata.serial_length(),
             // Self::UNSPEC(_, rdata) => rdata.serial_length(),
             // Self::URI(_, rdata) => rdata.serial_length(),
-            // Self::WKS(_, rdata) => rdata.serial_length(),
+            Self::WKS(_, rdata) => rdata.serial_length(),
             // Self::X25(_, rdata) => rdata.serial_length(),
             // Self::ZONEMD(_, rdata) => rdata.serial_length(),
         }
@@ -565,7 +565,7 @@ impl ResourceRecord {
             // (Self::UINFO(self_header, self_rdata), Self::UINFO(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::UNSPEC(self_header, self_rdata), Self::UNSPEC(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::URI(self_header, self_rdata), Self::URI(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
-            // (Self::WKS(self_header, self_rdata), Self::WKS(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
+            (Self::WKS(self_header, self_rdata), Self::WKS(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::X25(self_header, self_rdata), Self::X25(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::ZONEMD(self_header, self_rdata), Self::ZONEMD(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
 
@@ -676,7 +676,7 @@ impl ToWire for ResourceRecord {
             // Self::UINFO(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::UNSPEC(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::URI(_, rdata) => rdata.to_wire_format(wire, compression)?,
-            // Self::WKS(_, rdata) => rdata.to_wire_format(wire, compression)?,
+            Self::WKS(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::X25(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::ZONEMD(_, rdata) => rdata.to_wire_format(wire, compression)?,
         };
@@ -775,10 +775,9 @@ impl FromWire for ResourceRecord {
                 (Self::NULL(header, rdata), rd_length)
             },
             RType::WKS => {
-                return Err(ReadWireError::UnsupportedRType(rtype));
-                // let rdata = WKS::from_wire_format(&mut rdata_wire)?;
-                // let rd_length = rdata.serial_length();
-                // (Self::WKS(header, rdata), rd_length)
+                let rdata = WKS::from_wire_format(&mut rdata_wire)?;
+                let rd_length = rdata.serial_length();
+                (Self::WKS(header, rdata), rd_length)
             },
             RType::PTR => {
                 let rdata = PTR::from_wire_format(&mut rdata_wire)?;
@@ -1276,6 +1275,7 @@ impl FromTokenizedRecord for ResourceRecord {
             RType::SOA => Self::SOA(rr_header, SOA::from_tokenized_record(record)?),
             RType::TXT => Self::TXT(rr_header, TXT::from_tokenized_record(record)?),
             RType::PTR => Self::PTR(rr_header, PTR::from_tokenized_record(record)?),
+            RType::WKS => Self::WKS(rr_header, WKS::from_tokenized_record(record)?),
             
             RType::ANY => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
             RType::AXFR => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
@@ -1320,6 +1320,7 @@ impl ToPresentation for ResourceRecord {
             Self::SOA(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::TXT(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::PTR(_, rdata) => rdata.to_presentation_format(out_buffer),
+            Self::WKS(_, rdata) => rdata.to_presentation_format(out_buffer),
         }
     }
 }

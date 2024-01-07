@@ -106,6 +106,6 @@ impl FromPresentation for KeyProtocol {
 impl ToPresentation for KeyProtocol {
     #[inline]
     fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        out_buffer.push(self.mnemonic())
+        out_buffer.push(self.code().to_string())
     }
 }

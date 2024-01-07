@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Display};
 
-use crate::serde::wire::{to_wire::ToWire, from_wire::FromWire};
+use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ProtocolError {
@@ -822,5 +822,19 @@ impl FromWire for Protocol {
         Ok(Self::from_code(
             u8::from_wire_format(wire)?
         ))
+    }
+}
+
+impl FromPresentation for Protocol {
+    #[inline]
+    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
+        Ok(Self::from_str(token)?)
+    }
+}
+
+impl ToPresentation for Protocol {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        out_buffer.push(self.mnemonic())
     }
 }
