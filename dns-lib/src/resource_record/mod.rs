@@ -10,6 +10,8 @@ pub mod digest_alg;
 pub mod opcode;
 pub mod key_protocol;
 pub mod protocol;
+pub(crate) mod port_from_service;
+pub mod ports;
 pub mod time;
 
 pub mod rrset;

@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, num::{ParseIntError, TryFromIntError}, net
 
 use mac_address::MacParseError;
 
-use crate::{resource_record::{rclass::RClassError, rtype::{RTypeError, RType}, dnssec_alg::DnsSecAlgorithmError, time::{TimeError, DateTimeError}, protocol::ProtocolError}, types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error}};
+use crate::{resource_record::{rclass::RClassError, rtype::{RTypeError, RType}, dnssec_alg::DnsSecAlgorithmError, time::{TimeError, DateTimeError}, protocol::ProtocolError, ports::PortError}, types::{ascii::AsciiError, character_string::CharacterStringError, c_domain_name::CDomainNameError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, domain_name::DomainNameError, base64::Base64Error}};
 
 use super::tokenizer::errors::TokenizerError;
 
@@ -63,6 +63,7 @@ pub enum TokenError<'a> {
     Base64Error(Base64Error),
     TimeError(TimeError),
     ProtocolError(ProtocolError),
+    PortError(PortError),
 }
 impl<'a> Error for TokenError<'a> {}
 impl<'a> Display for TokenError<'a> {
@@ -86,6 +87,7 @@ impl<'a> Display for TokenError<'a> {
             Self::Base64Error(error) => write!(f, "{error}"),
             Self::TimeError(error) => write!(f, "{error}"),
             Self::ProtocolError(error) => write!(f, "{error}"),
+            Self::PortError(error) => write!(f, "{error}"),
         }
     }
 }
@@ -172,5 +174,10 @@ impl<'a> From<DateTimeError> for TokenError<'a> {
 impl<'a> From<ProtocolError> for TokenError<'a> {
     fn from(value: ProtocolError) -> Self {
         Self::ProtocolError(value)
+    }
+}
+impl<'a> From<PortError> for TokenError<'a> {
+    fn from(value: PortError) -> Self {
+        Self::PortError(value)
     }
 }
