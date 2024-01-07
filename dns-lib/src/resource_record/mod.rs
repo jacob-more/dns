@@ -9,6 +9,7 @@ pub mod ipsec_alg;
 pub mod digest_alg;
 pub mod opcode;
 pub mod key_protocol;
+pub mod protocol;
 pub mod time;
 
 pub mod rrset;
