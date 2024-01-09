@@ -88,6 +88,34 @@ impl Message {
     }
 }
 
+impl From<Question> for Message {
+    #[inline]
+    fn from(question: Question) -> Self {
+        Self {
+            id: rand::random(),
+            qr: QR::Query,
+            opcode: OpCode::Query,
+            authoritative_answer: false,
+            truncation: false,
+            recursion_desired: false,
+            recursion_available: false,
+            z: u3::new(0),
+            rcode: RCode::NoError,
+            question: vec![question],
+            answer: vec![],
+            authority: vec![],
+            additional: vec![],
+        }
+    }
+}
+
+impl From<&Question> for Message {
+    #[inline]
+    fn from(question: &Question) -> Self {
+        Self::from(question.clone())
+    }
+}
+
 #[inline]
 const fn bool_to_u1(boolean: bool) -> u1 {
     match boolean {
