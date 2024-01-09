@@ -54,7 +54,7 @@ fn u4_to_base16(bits: u4) -> AsciiChar {
         0b0000_1110 => ASCII_UPPERCASE_E,
         0b0000_1111 => ASCII_UPPERCASE_F,
 
-        _ => panic!("Illegal State Reached: This should not be possible. The value should convert to a u4 and exhaustively match those values.")
+        _ => unreachable!("Illegal State Reached: This should not be possible. The value should convert to a u4 and exhaustively match those values.")
     }
 }
 
@@ -157,7 +157,7 @@ impl Base16 {
 
                     encoded_bytes.push(byte1);
                 }
-                _ => panic!("The pattern was supposed to chunk exactly 8 bytes. However, the chunk contained {} bytes", chunk.len()),
+                _ => panic!("The pattern was supposed to chunk exactly 2 bytes. However, the chunk contained {} bytes", chunk.len()),
             }
         }
 

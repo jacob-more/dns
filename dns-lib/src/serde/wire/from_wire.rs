@@ -88,7 +88,7 @@ macro_rules! ix_from_wire_impl {
                 let fill_remaining = match wire.current_state()[0] >> 7 {
                     0 => 0_u8,
                     1 => u8::MAX,
-                    _ => panic!("When a u8 is shifted to the right 7 times, only 1 bit should remain. However, a case with more than 1 bit has been reached."),
+                    _ => unreachable!("When a u8 is shifted to the right 7 times, only 1 bit should remain. However, a case with more than 1 bit has been reached."),
                 };
                 let bytes: Vec<u8> = [fill_remaining].iter().cycle().take(($super_byte_count as usize) - ($int_byte_count as usize))
                     .chain(wire.current_state()[0..($int_byte_count as usize)].iter())

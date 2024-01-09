@@ -71,7 +71,7 @@ fn u5_to_extended_base32(bits: u5) -> AsciiChar {
         0b000_11110 => ASCII_UPPERCASE_U,
         0b000_11111 => ASCII_UPPERCASE_V,
 
-        _ => panic!("Illegal State Reached: This should not be possible. The value should convert to a u5 and exhaustively match those values.")
+        _ => unreachable!("Illegal State Reached: This should not be possible. The value should convert to a u5 and exhaustively match those values.")
     }
 }
 

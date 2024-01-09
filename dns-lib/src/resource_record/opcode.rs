@@ -62,7 +62,7 @@ impl OpCode {
             6 =>      Self::DNSStatefulOperations,
             7..=15 => Self::Unknown(value),
 
-            _ => panic!("codes greater than 15 are invalid options for OpCodes")
+            _ => unreachable!("codes greater than 15 are invalid options for OpCodes and cannot be represented by a u4")
         };
     }
 }

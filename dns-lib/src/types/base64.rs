@@ -103,79 +103,79 @@ fn u6_to_base64(bits: u6) -> AsciiChar {
         0b00_111110 => ASCII_PLUS,
         0b00_111111 => ASCII_SLASH,
 
-        _ => panic!("Illegal State Reached: This should not be possible. The value should convert to a u6 and exhaustively match those values.")
+        _ => unreachable!("Illegal State Reached: This should not be possible. The value should convert to a u6 and exhaustively match those values.")
     }
 }
 
 #[inline]
-const fn base64_to_u6(character: AsciiChar) -> u6 {
+const fn base64_to_u6(character: AsciiChar) -> Result<u6, Base64Error> {
     match character {
-        ASCII_UPPERCASE_A =>  u6::new(0b00_000000),
-        ASCII_UPPERCASE_B =>  u6::new(0b00_000001),
-        ASCII_UPPERCASE_C =>  u6::new(0b00_000010),
-        ASCII_UPPERCASE_D =>  u6::new(0b00_000011),
-        ASCII_UPPERCASE_E =>  u6::new(0b00_000100),
-        ASCII_UPPERCASE_F =>  u6::new(0b00_000101),
-        ASCII_UPPERCASE_G =>  u6::new(0b00_000110),
-        ASCII_UPPERCASE_H =>  u6::new(0b00_000111),
-        ASCII_UPPERCASE_I =>  u6::new(0b00_001000),
-        ASCII_UPPERCASE_J =>  u6::new(0b00_001001),
-        ASCII_UPPERCASE_K =>  u6::new(0b00_001010),
-        ASCII_UPPERCASE_L =>  u6::new(0b00_001011),
-        ASCII_UPPERCASE_M =>  u6::new(0b00_001100),
-        ASCII_UPPERCASE_N =>  u6::new(0b00_001101),
-        ASCII_UPPERCASE_O =>  u6::new(0b00_001110),
-        ASCII_UPPERCASE_P =>  u6::new(0b00_001111),
-        ASCII_UPPERCASE_Q =>  u6::new(0b00_010000),
-        ASCII_UPPERCASE_R =>  u6::new(0b00_010001),
-        ASCII_UPPERCASE_S =>  u6::new(0b00_010010),
-        ASCII_UPPERCASE_T =>  u6::new(0b00_010011),
-        ASCII_UPPERCASE_U =>  u6::new(0b00_010100),
-        ASCII_UPPERCASE_V =>  u6::new(0b00_010101),
-        ASCII_UPPERCASE_W =>  u6::new(0b00_010110),
-        ASCII_UPPERCASE_X =>  u6::new(0b00_010111),
-        ASCII_UPPERCASE_Y =>  u6::new(0b00_011000),
-        ASCII_UPPERCASE_Z =>  u6::new(0b00_011001),
-        ASCII_LOWERCASE_A =>  u6::new(0b00_011010),
-        ASCII_LOWERCASE_B =>  u6::new(0b00_011011),
-        ASCII_LOWERCASE_C =>  u6::new(0b00_011100),
-        ASCII_LOWERCASE_D =>  u6::new(0b00_011101),
-        ASCII_LOWERCASE_E =>  u6::new(0b00_011110),
-        ASCII_LOWERCASE_F =>  u6::new(0b00_011111),
-        ASCII_LOWERCASE_G =>  u6::new(0b00_100000),
-        ASCII_LOWERCASE_H =>  u6::new(0b00_100001),
-        ASCII_LOWERCASE_I =>  u6::new(0b00_100010),
-        ASCII_LOWERCASE_J =>  u6::new(0b00_100011),
-        ASCII_LOWERCASE_K =>  u6::new(0b00_100100),
-        ASCII_LOWERCASE_L =>  u6::new(0b00_100101),
-        ASCII_LOWERCASE_M =>  u6::new(0b00_100110),
-        ASCII_LOWERCASE_N =>  u6::new(0b00_100111),
-        ASCII_LOWERCASE_O =>  u6::new(0b00_101000),
-        ASCII_LOWERCASE_P =>  u6::new(0b00_101001),
-        ASCII_LOWERCASE_Q =>  u6::new(0b00_101010),
-        ASCII_LOWERCASE_R =>  u6::new(0b00_101011),
-        ASCII_LOWERCASE_S =>  u6::new(0b00_101100),
-        ASCII_LOWERCASE_T =>  u6::new(0b00_101101),
-        ASCII_LOWERCASE_U =>  u6::new(0b00_101110),
-        ASCII_LOWERCASE_V =>  u6::new(0b00_101111),
-        ASCII_LOWERCASE_W =>  u6::new(0b00_110000),
-        ASCII_LOWERCASE_X =>  u6::new(0b00_110001),
-        ASCII_LOWERCASE_Y =>  u6::new(0b00_110010),
-        ASCII_LOWERCASE_Z =>  u6::new(0b00_110011),
-        ASCII_ZERO =>         u6::new(0b00_110100),
-        ASCII_ONE =>          u6::new(0b00_110101),
-        ASCII_TWO =>          u6::new(0b00_110110),
-        ASCII_THREE =>        u6::new(0b00_110111),
-        ASCII_FOUR =>         u6::new(0b00_111000),
-        ASCII_FIVE =>         u6::new(0b00_111001),
-        ASCII_SIX =>          u6::new(0b00_111010),
-        ASCII_SEVEN =>        u6::new(0b00_111011),
-        ASCII_EIGHT =>        u6::new(0b00_111100),
-        ASCII_NINE =>         u6::new(0b00_111101),
-        ASCII_PLUS =>         u6::new(0b00_111110),
-        ASCII_SLASH =>        u6::new(0b00_111111),
+        ASCII_UPPERCASE_A =>  Ok(u6::new(0b00_000000)),
+        ASCII_UPPERCASE_B =>  Ok(u6::new(0b00_000001)),
+        ASCII_UPPERCASE_C =>  Ok(u6::new(0b00_000010)),
+        ASCII_UPPERCASE_D =>  Ok(u6::new(0b00_000011)),
+        ASCII_UPPERCASE_E =>  Ok(u6::new(0b00_000100)),
+        ASCII_UPPERCASE_F =>  Ok(u6::new(0b00_000101)),
+        ASCII_UPPERCASE_G =>  Ok(u6::new(0b00_000110)),
+        ASCII_UPPERCASE_H =>  Ok(u6::new(0b00_000111)),
+        ASCII_UPPERCASE_I =>  Ok(u6::new(0b00_001000)),
+        ASCII_UPPERCASE_J =>  Ok(u6::new(0b00_001001)),
+        ASCII_UPPERCASE_K =>  Ok(u6::new(0b00_001010)),
+        ASCII_UPPERCASE_L =>  Ok(u6::new(0b00_001011)),
+        ASCII_UPPERCASE_M =>  Ok(u6::new(0b00_001100)),
+        ASCII_UPPERCASE_N =>  Ok(u6::new(0b00_001101)),
+        ASCII_UPPERCASE_O =>  Ok(u6::new(0b00_001110)),
+        ASCII_UPPERCASE_P =>  Ok(u6::new(0b00_001111)),
+        ASCII_UPPERCASE_Q =>  Ok(u6::new(0b00_010000)),
+        ASCII_UPPERCASE_R =>  Ok(u6::new(0b00_010001)),
+        ASCII_UPPERCASE_S =>  Ok(u6::new(0b00_010010)),
+        ASCII_UPPERCASE_T =>  Ok(u6::new(0b00_010011)),
+        ASCII_UPPERCASE_U =>  Ok(u6::new(0b00_010100)),
+        ASCII_UPPERCASE_V =>  Ok(u6::new(0b00_010101)),
+        ASCII_UPPERCASE_W =>  Ok(u6::new(0b00_010110)),
+        ASCII_UPPERCASE_X =>  Ok(u6::new(0b00_010111)),
+        ASCII_UPPERCASE_Y =>  Ok(u6::new(0b00_011000)),
+        ASCII_UPPERCASE_Z =>  Ok(u6::new(0b00_011001)),
+        ASCII_LOWERCASE_A =>  Ok(u6::new(0b00_011010)),
+        ASCII_LOWERCASE_B =>  Ok(u6::new(0b00_011011)),
+        ASCII_LOWERCASE_C =>  Ok(u6::new(0b00_011100)),
+        ASCII_LOWERCASE_D =>  Ok(u6::new(0b00_011101)),
+        ASCII_LOWERCASE_E =>  Ok(u6::new(0b00_011110)),
+        ASCII_LOWERCASE_F =>  Ok(u6::new(0b00_011111)),
+        ASCII_LOWERCASE_G =>  Ok(u6::new(0b00_100000)),
+        ASCII_LOWERCASE_H =>  Ok(u6::new(0b00_100001)),
+        ASCII_LOWERCASE_I =>  Ok(u6::new(0b00_100010)),
+        ASCII_LOWERCASE_J =>  Ok(u6::new(0b00_100011)),
+        ASCII_LOWERCASE_K =>  Ok(u6::new(0b00_100100)),
+        ASCII_LOWERCASE_L =>  Ok(u6::new(0b00_100101)),
+        ASCII_LOWERCASE_M =>  Ok(u6::new(0b00_100110)),
+        ASCII_LOWERCASE_N =>  Ok(u6::new(0b00_100111)),
+        ASCII_LOWERCASE_O =>  Ok(u6::new(0b00_101000)),
+        ASCII_LOWERCASE_P =>  Ok(u6::new(0b00_101001)),
+        ASCII_LOWERCASE_Q =>  Ok(u6::new(0b00_101010)),
+        ASCII_LOWERCASE_R =>  Ok(u6::new(0b00_101011)),
+        ASCII_LOWERCASE_S =>  Ok(u6::new(0b00_101100)),
+        ASCII_LOWERCASE_T =>  Ok(u6::new(0b00_101101)),
+        ASCII_LOWERCASE_U =>  Ok(u6::new(0b00_101110)),
+        ASCII_LOWERCASE_V =>  Ok(u6::new(0b00_101111)),
+        ASCII_LOWERCASE_W =>  Ok(u6::new(0b00_110000)),
+        ASCII_LOWERCASE_X =>  Ok(u6::new(0b00_110001)),
+        ASCII_LOWERCASE_Y =>  Ok(u6::new(0b00_110010)),
+        ASCII_LOWERCASE_Z =>  Ok(u6::new(0b00_110011)),
+        ASCII_ZERO =>         Ok(u6::new(0b00_110100)),
+        ASCII_ONE =>          Ok(u6::new(0b00_110101)),
+        ASCII_TWO =>          Ok(u6::new(0b00_110110)),
+        ASCII_THREE =>        Ok(u6::new(0b00_110111)),
+        ASCII_FOUR =>         Ok(u6::new(0b00_111000)),
+        ASCII_FIVE =>         Ok(u6::new(0b00_111001)),
+        ASCII_SIX =>          Ok(u6::new(0b00_111010)),
+        ASCII_SEVEN =>        Ok(u6::new(0b00_111011)),
+        ASCII_EIGHT =>        Ok(u6::new(0b00_111100)),
+        ASCII_NINE =>         Ok(u6::new(0b00_111101)),
+        ASCII_PLUS =>         Ok(u6::new(0b00_111110)),
+        ASCII_SLASH =>        Ok(u6::new(0b00_111111)),
 
-        _ => panic!("Illegal Character: base64 encoding does not include this character.")
+        _ => Err(Base64Error::BadChar(character))
     }
 }
 
@@ -254,8 +254,8 @@ impl Base64 {
                 &[_, PADDING_CHAR, _, _] => return Err(Base64Error::Overflow),
                 // 3rd character can only be padding if 4th is as well
                 &[char1, char2, PADDING_CHAR, PADDING_CHAR] => {
-                    let bits0_5   = (u32::from(base64_to_u6(char1)) << 18) & 0b00000000_111111_000000_000000_000000;
-                    let bits6_11  = (u32::from(base64_to_u6(char2)) << 12) & 0b00000000_000000_110000_000000_000000;
+                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b00000000_111111_000000_000000_000000;
+                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b00000000_000000_110000_000000_000000;
                     let merged_bytes = bits0_5 | bits6_11;
 
                     let [_, byte1, _, _] = u32::to_be_bytes(merged_bytes);
@@ -266,9 +266,9 @@ impl Base64 {
                 &[_, _, PADDING_CHAR, _] => return Err(Base64Error::Overflow),
                 // 4th character can be padding
                 &[char1, char2, char3, PADDING_CHAR] => {
-                    let bits0_5   = (u32::from(base64_to_u6(char1)) << 18) & 0b00000000_111111_000000_000000_000000;
-                    let bits6_11  = (u32::from(base64_to_u6(char2)) << 12) & 0b00000000_000000_111111_000000_000000;
-                    let bits12_15 = (u32::from(base64_to_u6(char3)) << 6)  & 0b00000000_000000_000000_111100_000000;
+                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b00000000_111111_000000_000000_000000;
+                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b00000000_000000_111111_000000_000000;
+                    let bits12_15 = (u32::from(base64_to_u6(char3)?) << 6)  & 0b00000000_000000_000000_111100_000000;
                     let merged_bytes = bits0_5 | bits6_11 | bits12_15;
 
                     let [_, byte1, byte2, _] = u32::to_be_bytes(merged_bytes);
@@ -276,10 +276,10 @@ impl Base64 {
                     break;
                 },
                 &[char1, char2, char3, char4] => {
-                    let bits0_5   = (u32::from(base64_to_u6(char1)) << 18) & 0b00000000_111111_000000_000000_000000;
-                    let bits6_11  = (u32::from(base64_to_u6(char2)) << 12) & 0b00000000_000000_111111_000000_000000;
-                    let bits12_17 = (u32::from(base64_to_u6(char3)) << 6)  & 0b00000000_000000_000000_111111_000000;
-                    let bits18_23 = (u32::from(base64_to_u6(char4)) << 0)  & 0b00000000_000000_000000_000000_111111;
+                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b00000000_111111_000000_000000_000000;
+                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b00000000_000000_111111_000000_000000;
+                    let bits12_17 = (u32::from(base64_to_u6(char3)?) << 6)  & 0b00000000_000000_000000_111111_000000;
+                    let bits18_23 = (u32::from(base64_to_u6(char4)?) << 0)  & 0b00000000_000000_000000_000000_111111;
                     let merged_bytes = bits0_5 | bits6_11 | bits12_17 | bits18_23;
 
                     let [_, byte1, byte2, byte3] = u32::to_be_bytes(merged_bytes);
