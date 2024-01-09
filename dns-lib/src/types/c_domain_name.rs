@@ -252,7 +252,7 @@ impl CDomainName {
                     let label = Label::new(&string.from_range(label_start, index))?;
                     serial_length += label.serial_length();
 
-                    if serial_length > CDomainName::MAX_OCTETS {
+                    if serial_length > Self::MAX_OCTETS {
                         return Err(CDomainNameError::LongDomain);
                     }
 
@@ -266,7 +266,7 @@ impl CDomainName {
                         let label = Label::ROOT_LABEL;
                         serial_length += label.serial_length();
 
-                        if serial_length > CDomainName::MAX_OCTETS {
+                        if serial_length > Self::MAX_OCTETS {
                             return Err(CDomainNameError::LongDomain);
                         }
                         labels.push(label);
@@ -279,7 +279,7 @@ impl CDomainName {
                         let label = Label::new(&string.from_range(label_start, index+1))?;
                         serial_length += label.serial_length();
     
-                        if serial_length > CDomainName::MAX_OCTETS {
+                        if serial_length > Self::MAX_OCTETS {
                             return Err(CDomainNameError::LongDomain);
                         }
     
@@ -424,15 +424,15 @@ impl CDomainName {
     }
 
     #[inline]
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Label> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Label> + ExactSizeIterator<Item = &Label> {
         self.labels.iter()
     }
 
     #[inline]
-    pub fn search_domains<'a>(&'a self) -> impl 'a + Iterator<Item = CDomainName> {
+    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
         self.labels.iter()
             .enumerate()
-            .map(|(index, _)| CDomainName::from_labels(&self.labels[index..]))
+            .map(|(index, _)| Self::from_labels(&self.labels[index..]))
     }
 
     /// counts the number of labels the two domains have in common, starting from the right. Stops
@@ -513,7 +513,7 @@ impl Add for CDomainName {
             labels: self.labels
         };
 
-        if domain_name.serial_length() > CDomainName::MAX_OCTETS {
+        if domain_name.serial_length() > Self::MAX_OCTETS {
             return Err(CDomainNameError::LongDomain);
         }
 

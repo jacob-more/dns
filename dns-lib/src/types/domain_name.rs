@@ -114,13 +114,13 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Label> {
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Label> + ExactSizeIterator<Item = &Label> {
         self.domain_name.iter()
     }
 
     #[inline]
-    pub fn search_domains<'a>(&'a self) -> impl 'a + Iterator<Item = CDomainName> {
-        self.domain_name.search_domains()
+    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
+        self.domain_name.search_domains().map(|c_domain_name| Self { domain_name: c_domain_name })
     }
 
     #[inline]
