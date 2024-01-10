@@ -107,7 +107,7 @@ impl AsyncCache for AsyncTreeCache {
         }
     }
 
-    async fn insert(&mut self, records: &Message) {
+    async fn insert(&self, records: &Message) {
         join!(
             self.transaction_cache.insert(records),
             self.main_cache.insert(records),

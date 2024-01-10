@@ -10,5 +10,5 @@ pub trait Cache {
 #[async_trait]
 pub trait AsyncCache {
     async fn get(&self, query: &Message) -> Message;
-    async fn insert(&mut self, records: &Message);
+    async fn insert(&self, records: &Message);
 }
