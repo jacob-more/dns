@@ -2,7 +2,7 @@ pub mod a;
 pub mod a6;
 pub mod aaaa;
 pub mod afsdb;
-// pub mod AMTRELAY;
+pub mod amtrelay;
 pub mod any;
 // pub mod APL;
 // pub mod ATMA;

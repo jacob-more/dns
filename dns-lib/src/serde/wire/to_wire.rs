@@ -7,7 +7,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
 
 use mac_address::MacAddress;
-use ux::{u24, u40, u48, u56, i24, i40, i48, i56, u1, u4, u3};
+use ux::{u24, u40, u48, u56, i24, i40, i48, i56, u1, u4, u3, u7};
 
 use crate::serde::const_byte_counts::*;
 
@@ -202,6 +202,27 @@ impl ToWire for MacAddress {
     #[inline]
     fn serial_length(&self) -> u16 {
         MAC_ADDRESS_BYTE_COUNT
+    }
+}
+
+impl ToWire for (u1, u7) {
+    #[inline]
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut WriteWire<'a>, compression: &mut Option<CompressionMap>) -> Result<(), WriteWireError> where 'a: 'b {
+        let bit_7 = u16::from(self.0) as u8;    //< for some reason, there is no default conversion?
+        let bit_6to0: u8 = self.1.into();
+
+        // | 0  | 0 0 0 0 0 0 0 |
+        // | u1 | u7            |
+        let bit_7: u8    = (bit_7    << 7) & 0b10000000;
+        let bit_6to0: u8 = (bit_6to0 << 0) & 0b01111111;
+        let result = bit_7 | bit_6to0;
+
+        result.to_wire_format(wire, compression)
+    }
+
+    #[inline]
+    fn serial_length(&self) -> u16 {
+        return U8_BYTE_COUNT;
     }
 }
 
