@@ -11,7 +11,7 @@ pub struct PTR {
 impl PTR {
     #[inline]
     pub fn new(ptr_domain_name: CDomainName) -> Self {
-        PTR { ptr_domain_name }
+        Self { ptr_domain_name }
     }
 
     #[inline]
@@ -37,8 +37,11 @@ mod tokenizer_tests {
     use super::PTR;
 
     const GOOD_DOMAIN: &str = "www.example.org.";
+    const BAD_DOMAIN: &str = "..www.example.org.";
 
     gen_ok_record_test!(test_ok, PTR, PTR { ptr_domain_name: CDomainName::from_utf8(GOOD_DOMAIN).unwrap() }, [GOOD_DOMAIN]);
+
+    gen_fail_record_test!(test_fail_bad_domain, PTR, [BAD_DOMAIN]);
     gen_fail_record_test!(test_fail_two_tokens, PTR, [GOOD_DOMAIN, GOOD_DOMAIN]);
     gen_fail_record_test!(test_fail_no_tokens, PTR, []);
 }

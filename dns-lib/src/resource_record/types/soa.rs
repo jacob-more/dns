@@ -55,7 +55,8 @@ mod tokenizer_tests {
     use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::c_domain_name::CDomainName, resource_record::time::Time};
     use super::SOA;
 
-    const GOOD_DOMAIN_NAME: &str = "www.example.com.";
+    const GOOD_DOMAIN: &str = "www.example.com.";
+    const BAD_DOMAIN: &str = "..www.example.com.";
     const GOOD_INTEGER: &str = "10";
     const BAD_INTEGER: &str = "bad_integer";
     const NEGATIVE_INTEGER: &str = "-1";
@@ -65,35 +66,37 @@ mod tokenizer_tests {
         test_ok,
         SOA,
         SOA {
-            mname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
-            rname: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(),
+            mname: CDomainName::from_utf8(GOOD_DOMAIN).unwrap(),
+            rname: CDomainName::from_utf8(GOOD_DOMAIN).unwrap(),
             serial: 10,
             refresh: Time::new(10),
             retry: Time::new(10),
             expire: Time::new(10),
             minimum: 10
         },
-        [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]
+        [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]
     );
 
     // Test bad tokens
-    gen_fail_record_test!(test_fail_bad_serial, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, BAD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_bad_refresh, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, BAD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_bad_retry, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, BAD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_bad_expire, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, BAD_INTEGER, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_bad_minimum, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, BAD_INTEGER]);
+    gen_fail_record_test!(test_fail_bad_mname, SOA, [BAD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_bad_rname, SOA, [GOOD_DOMAIN, BAD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_bad_serial, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, BAD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_bad_refresh, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, BAD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_bad_retry, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, BAD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_bad_expire, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, BAD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_bad_minimum, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, BAD_INTEGER]);
 
     // Test negative tokens
-    gen_fail_record_test!(test_fail_negative_serial, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, NEGATIVE_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_negative_minimum, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, NEGATIVE_INTEGER]);
+    gen_fail_record_test!(test_fail_negative_serial, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, NEGATIVE_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_negative_minimum, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, NEGATIVE_INTEGER]);
 
     // Test incorrect tokens counts
-    gen_fail_record_test!(test_fail_eight_tokens, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_DOMAIN_NAME]);
-    gen_fail_record_test!(test_fail_six_tokens, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_five_tokens, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_four_tokens, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_three_tokens, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_INTEGER]);
-    gen_fail_record_test!(test_fail_two_tokens, SOA, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME]);
-    gen_fail_record_test!(test_fail_one_tokens, SOA, [GOOD_DOMAIN_NAME]);
+    gen_fail_record_test!(test_fail_eight_tokens, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_DOMAIN]);
+    gen_fail_record_test!(test_fail_six_tokens, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_five_tokens, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_four_tokens, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_three_tokens, SOA, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_INTEGER]);
+    gen_fail_record_test!(test_fail_two_tokens, SOA, [GOOD_DOMAIN, GOOD_DOMAIN]);
+    gen_fail_record_test!(test_fail_one_tokens, SOA, [GOOD_DOMAIN]);
     gen_fail_record_test!(test_fail_no_tokens, SOA, []);
 }

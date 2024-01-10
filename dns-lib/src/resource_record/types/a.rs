@@ -11,7 +11,7 @@ pub struct A {
 impl A {
     #[inline]
     pub fn new(ipv4_address: Ipv4Addr) -> Self {
-        A { ipv4_address }
+        Self { ipv4_address }
     }
 
     #[inline]

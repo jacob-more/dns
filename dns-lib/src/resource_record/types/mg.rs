@@ -36,9 +36,12 @@ mod tokenizer_tests {
     use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::c_domain_name::CDomainName};
     use super::MG;
 
-    const GOOD_DOMAIN_NAME: &str = "www.example.com.";
+    const GOOD_DOMAIN: &str = "www.example.com.";
+    const BAD_DOMAIN: &str = "..www.example.com.";
 
-    gen_ok_record_test!(test_ok, MG, MG { mg_domain_name: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap() }, [GOOD_DOMAIN_NAME]);
-    gen_fail_record_test!(test_fail_two_tokens, MG, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME]);
+    gen_ok_record_test!(test_ok, MG, MG { mg_domain_name: CDomainName::from_utf8(GOOD_DOMAIN).unwrap() }, [GOOD_DOMAIN]);
+
+    gen_fail_record_test!(test_fail_bad_domain, MG, [BAD_DOMAIN]);
+    gen_fail_record_test!(test_fail_two_tokens, MG, [GOOD_DOMAIN, GOOD_DOMAIN]);
     gen_fail_record_test!(test_fail_no_tokens, MG, []);
 }

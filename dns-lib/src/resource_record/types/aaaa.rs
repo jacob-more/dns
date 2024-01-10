@@ -11,7 +11,7 @@ pub struct AAAA {
 impl AAAA {
     #[inline]
     pub fn new(ipv6_address: Ipv6Addr) -> Self {
-        AAAA { ipv6_address }
+        Self { ipv6_address }
     }
 
     #[inline]

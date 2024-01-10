@@ -222,6 +222,7 @@ mod tokenizer_tests {
     use super::A6;
 
     const GOOD_DOMAIN: &str = "www.example.org.";
+    const BAD_DOMAIN: &str = "..www.example.org.";
     const GOOD_IP: &str = "a:9:8:7:6:5:4:3";
     const BAD_IP: &str = "a:9:8:7:6:5:4:3:2:1";
 
@@ -240,6 +241,7 @@ mod tokenizer_tests {
     gen_fail_record_test!(test_fail_two_tokens_bad_large_prefix, A6, ["129", GOOD_IP]);
 
     gen_fail_record_test!(test_fail_three_tokens_bad_ip, A6, ["64", BAD_IP, GOOD_DOMAIN]);
+    gen_fail_record_test!(test_fail_three_tokens_bad_domain, A6, ["64", GOOD_IP, BAD_DOMAIN]);
     gen_fail_record_test!(test_fail_three_tokens_bad_negative_prefix, A6, ["-1", GOOD_IP, GOOD_DOMAIN]);
     gen_fail_record_test!(test_fail_three_tokens_bad_large_prefix, A6, ["129", GOOD_IP, GOOD_DOMAIN]);
 }

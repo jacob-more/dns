@@ -45,10 +45,16 @@ mod tokenizer_tests {
     use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::c_domain_name::CDomainName};
     use super::MINFO;
 
-    const GOOD_DOMAIN_NAME: &str = "www.example.com.";
+    const GOOD_DOMAIN: &str = "www.example.com.";
+    const BAD_DOMAIN: &str = "..www.example.com.";
 
-    gen_ok_record_test!(test_ok, MINFO, MINFO { responsible_mailbox: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap(), error_mailbox: CDomainName::from_utf8(GOOD_DOMAIN_NAME).unwrap() }, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME]);
-    gen_fail_record_test!(test_fail_three_tokens, MINFO, [GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME, GOOD_DOMAIN_NAME]);
-    gen_fail_record_test!(test_fail_one_tokens, MINFO, [GOOD_DOMAIN_NAME]);
+    gen_ok_record_test!(test_ok, MINFO, MINFO { responsible_mailbox: CDomainName::from_utf8(GOOD_DOMAIN).unwrap(), error_mailbox: CDomainName::from_utf8(GOOD_DOMAIN).unwrap() }, [GOOD_DOMAIN, GOOD_DOMAIN]);
+
+    gen_fail_record_test!(test_fail_three_tokens, MINFO, [GOOD_DOMAIN, GOOD_DOMAIN, GOOD_DOMAIN]);
+    gen_fail_record_test!(test_fail_one_tokens, MINFO, [GOOD_DOMAIN]);
     gen_fail_record_test!(test_fail_no_tokens, MINFO, []);
+
+    gen_fail_record_test!(test_fail_bad_rmailbox, MINFO, [BAD_DOMAIN, GOOD_DOMAIN]);
+    gen_fail_record_test!(test_fail_bad_emailbox, MINFO, [GOOD_DOMAIN, BAD_DOMAIN]);
+    gen_fail_record_test!(test_fail_bad_mailboxes, MINFO, [BAD_DOMAIN, BAD_DOMAIN]);
 }

@@ -1,5 +1,3 @@
-use std::net::Ipv6Addr;
-
 use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode, ToPresentation};
 
 use crate::types::domain_name::DomainName;
