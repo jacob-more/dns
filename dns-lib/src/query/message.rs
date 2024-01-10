@@ -92,7 +92,7 @@ impl From<Question> for Message {
     #[inline]
     fn from(question: Question) -> Self {
         Self {
-            id: rand::random(),
+            id: 0,  //< An ID will be assigned when the message is sent over the network
             qr: QR::Query,
             opcode: OpCode::Query,
             authoritative_answer: false,

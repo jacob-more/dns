@@ -14,13 +14,11 @@ pub async fn query_network<CCache>(client: &DNSAsyncClient, cache: Arc<CCache>, 
         *name_server_address,
         UPSTREAM_PORT,
     );
-    let message_question = Message::from(question);
-
-    // TODO: Double check that the id is not already in use
+    let mut message_question = Message::from(question);
 
     // Send Question Over UDP
     let udp_start_time = Instant::now();
-    let message = query_over_udp(client, upstream_dns_address, &message_question).await?;
+    let message = query_over_udp(client, upstream_dns_address, &mut message_question).await?;
     let udp_end_time = Instant::now();
 
     // If the truncation flag is set, we need to try again with TCP
@@ -36,7 +34,7 @@ pub async fn query_network<CCache>(client: &DNSAsyncClient, cache: Arc<CCache>, 
     }
 
     let tcp_start_time = Instant::now();
-    let message = query_over_tcp(client, upstream_dns_address, &message_question).await?;
+    let message = query_over_tcp(client, upstream_dns_address, &mut message_question).await?;
     let tcp_end_time = Instant::now();
 
     let overall_end_time = Instant::now();
@@ -49,13 +47,17 @@ pub async fn query_network<CCache>(client: &DNSAsyncClient, cache: Arc<CCache>, 
     return Ok(message);
 }
 
-async fn query_over_udp(_client: &DNSAsyncClient, upstream_socket: SocketAddr, query: &Message) -> io::Result<Message> {
+async fn query_over_udp(_client: &DNSAsyncClient, upstream_socket: SocketAddr, query: &mut Message) -> io::Result<Message> {
     let local_socket = match upstream_socket.ip() {
         IpAddr::V4(_) if !IPV4_ENABLED => return Err(io::Error::from(io::ErrorKind::Unsupported)),
         IpAddr::V6(_) if !IPV6_ENABLED => return Err(io::Error::from(io::ErrorKind::Unsupported)),
         IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
         IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
     };
+
+    // The ID sent via UDP does not need to be checked for uniqueness since only one message can be
+    // sent per udp socket.
+    query.id = rand::random();
 
     // Connect to upstream dns
     println!("Connecting to {upstream_socket} via UDP...");
@@ -82,6 +84,6 @@ async fn query_over_udp(_client: &DNSAsyncClient, upstream_socket: SocketAddr, q
     return Ok(response);
 }
 
-async fn query_over_tcp(client: &DNSAsyncClient, upstream_socket: SocketAddr, question: &Message) -> io::Result<Message> {
+async fn query_over_tcp(client: &DNSAsyncClient, upstream_socket: SocketAddr, question: &mut Message) -> io::Result<Message> {
     TCPManager::query_tcp(client.tcp_manager.clone(), upstream_socket, question).await
 }

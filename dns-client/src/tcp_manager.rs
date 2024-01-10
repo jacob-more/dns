@@ -194,39 +194,26 @@ impl TCPManager {
     }
 
     #[async_recursion]
-    async fn get_responder(&self, socket: SocketAddr, id: u16) -> Option<Receiver<Message>> {
+    async fn new_responder(&self, socket: SocketAddr) -> Option<(Receiver<Message>, u16)> {
         let read_locked_tcp_manager = self.tcp_connections.read().await;
         match read_locked_tcp_manager.get(&socket) {
             Some(TCPConnection::Stream(_, response_manager, _)) => {
-                let locked_response_manager = response_manager.read().await;
-                // Work with the read lock first.
-                if let Some(responder) = locked_response_manager.get(&id) {
-                    let responder = responder.subscribe();
-                    drop(locked_response_manager);
-                    return Some(responder);
-                }
-                drop(locked_response_manager);
-
-                let mut locked_response_manager = response_manager.write().await;
-                // Work with the write lock if the read lock found nothing.
-                // Since we dropped the lock, we need to check if a responder was added while the
-                // lock was dropped.
-                let responder = match locked_response_manager.get(&id) {
-                    Some(responder) => responder.subscribe(),
-                    None => {
+                let mut write_locked_response_manager = response_manager.write().await;
+                loop {
+                    let message_id = rand::random();
+                    if !write_locked_response_manager.contains_key(&message_id) {
                         let (sender, responder) = broadcast::channel(1);
-                        locked_response_manager.insert(id, sender);
-                        responder
-                    },
-                };
-                drop(locked_response_manager);
-                drop(read_locked_tcp_manager);
-                return Some(responder)
+                        write_locked_response_manager.insert(message_id, sender);
+                        drop(write_locked_response_manager);
+                        drop(read_locked_tcp_manager);
+                        return Some((responder, message_id));
+                    }
+                }
             },
             Some(TCPConnection::Establishing(notifier)) => {
                 notifier.notified().await;
                 drop(read_locked_tcp_manager);
-                return self.get_responder(socket, id).await;
+                return self.new_responder(socket).await;
             },
             None => {
                 drop(read_locked_tcp_manager);
@@ -235,24 +222,26 @@ impl TCPManager {
         }
     }
 
-    pub async fn query_tcp(manager: Arc<Self>, upstream_socket: SocketAddr, question: &Message) -> io::Result<Message> {
+    pub async fn query_tcp(manager: Arc<Self>, upstream_socket: SocketAddr, question: &mut Message) -> io::Result<Message> {
         match upstream_socket.ip() {
             IpAddr::V4(_) if !IPV4_ENABLED => return Err(io::Error::from(io::ErrorKind::Unsupported)),
             IpAddr::V6(_) if !IPV6_ENABLED => return Err(io::Error::from(io::ErrorKind::Unsupported)),
             _ => (),
         };
 
-        let message_id = question.id;
         println!("Connecting to {upstream_socket} via TCP...");
         let tcp_stream = TCPManager::get_connection(manager.clone(), upstream_socket).await?;
 
-        let mut responder = match manager.get_responder(upstream_socket, message_id).await {
-            Some(responder) => responder,
+        let (mut responder, message_id) = match manager.new_responder(upstream_socket).await {
+            Some((responder, message_id)) => (responder, message_id),
             None => return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
-                format!("Failed to get the responder for socket {upstream_socket} to send message {message_id}. A connection must be established in order to get a responder.")
+                format!("Failed to get the responder for socket {upstream_socket}. A connection must be established in order to get a responder.")
             )),
         };
+        // The ID sent via TCP must be unique on a per socket basis. The `new_responder()` function
+        // ensures that the generated ID will be unique.
+        question.id = message_id;
 
         // IMPORTANT: All `return ...` after this point must clean up the `response_manager` first.
 
