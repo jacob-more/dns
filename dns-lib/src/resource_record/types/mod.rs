@@ -4,7 +4,7 @@ pub mod aaaa;
 pub mod afsdb;
 pub mod amtrelay;
 pub mod any;
-// pub mod APL;
+pub mod apl;
 // pub mod ATMA;
 // pub mod AVC;
 pub mod axfr;

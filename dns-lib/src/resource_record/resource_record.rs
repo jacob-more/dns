@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
 
-use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT, a6::A6, ptr::PTR, wks::WKS, afsdb::AFSDB, amtrelay::AMTRELAY}, rtype::RType, time::Time};
+use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT, a6::A6, ptr::PTR, wks::WKS, afsdb::AFSDB, amtrelay::AMTRELAY, apl::APL}, rtype::RType, time::Time};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
@@ -47,6 +47,9 @@ impl RRHeader {
     }
 }
 
+// TODO: Most of this file can probably be written using macros to reduce the "wall-o-text" to
+//      something more readable and maintainable.
+
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.3
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ResourceRecord {
@@ -57,7 +60,7 @@ pub enum ResourceRecord {
     AFSDB(RRHeader, AFSDB),
     AMTRELAY(RRHeader, AMTRELAY),
     ANY(RRHeader, ANY),
-    // APL(RRHeader, APL),
+    APL(RRHeader, APL),
     // ATMA(RRHeader, ATMA),
     // AVC(RRHeader, AVC),
     AXFR(RRHeader, AXFR),
@@ -160,7 +163,7 @@ impl ResourceRecord {
             Self::AAAA(header, _) => (header, RType::AAAA),
             Self::AFSDB(header, _) => (header, RType::AFSDB),
             Self::AMTRELAY(header, _) => (header, RType::AMTRELAY),
-            // Self::APL(header, _) => (header, RType::APL),
+            Self::APL(header, _) => (header, RType::APL),
             // Self::ATMA(header, _) => (header, RType::ATMA),
             // Self::AVC(header, _) => (header, RType::AVC),
             Self::AXFR(header, _) => (header, RType::AXFR),
@@ -256,7 +259,7 @@ impl ResourceRecord {
             Self::AAAA(header, _) => (header, RType::AAAA),
             Self::AFSDB(header, _) => (header, RType::AFSDB),
             Self::AMTRELAY(header, _) => (header, RType::AMTRELAY),
-            // Self::APL(header, _) => (header, RType::APL),
+            Self::APL(header, _) => (header, RType::APL),
             // Self::ATMA(header, _) => (header, RType::ATMA),
             // Self::AVC(header, _) => (header, RType::AVC),
             Self::AXFR(header, _) => (header, RType::AXFR),
@@ -377,7 +380,7 @@ impl ResourceRecord {
             Self::AAAA(_, rdata) => rdata.serial_length(),
             Self::AFSDB(_, rdata) => rdata.serial_length(),
             Self::AMTRELAY(_, rdata) => rdata.serial_length(),
-            // Self::APL(_, rdata) => rdata.serial_length(),
+            Self::APL(_, rdata) => rdata.serial_length(),
             // Self::ATMA(_, rdata) => rdata.serial_length(),
             // Self::AVC(_, rdata) => rdata.serial_length(),
             Self::AXFR(_, rdata) => rdata.serial_length(),
@@ -484,7 +487,7 @@ impl ResourceRecord {
             (Self::AAAA(self_header, self_rdata), Self::AAAA(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             (Self::AFSDB(self_header, self_rdata), Self::AFSDB(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             (Self::AMTRELAY(self_header, self_rdata), Self::AMTRELAY(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
-            // (Self::APL(self_header, self_rdata), Self::APL(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
+            (Self::APL(self_header, self_rdata), Self::APL(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::ATMA(self_header, self_rdata), Self::ATMA(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::AVC(self_header, self_rdata), Self::AVC(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             (Self::AXFR(self_header, self_rdata), Self::AXFR(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
@@ -595,7 +598,7 @@ impl ToWire for ResourceRecord {
             Self::AAAA(_, rdata) => rdata.to_wire_format(wire, compression)?,
             Self::AFSDB(_, rdata) => rdata.to_wire_format(wire, compression)?,
             Self::AMTRELAY(_, rdata) => rdata.to_wire_format(wire, compression)?,
-            // Self::APL(_, rdata) => rdata.to_wire_format(wire, compression)?,
+            Self::APL(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::ATMA(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::AVC(_, rdata) => rdata.to_wire_format(wire, compression)?,
             Self::AXFR(_, rdata) => rdata.to_wire_format(wire, compression)?,
@@ -951,10 +954,9 @@ impl FromWire for ResourceRecord {
                 // (Self::OPT(header, rdata), rd_length)
             },
             RType::APL => {
-                return Err(ReadWireError::UnsupportedRType(rtype));
-                // let rdata = APL::from_wire_format(&mut rdata_wire)?;
-                // let rd_length = rdata.serial_length();
-                // (Self::APL(header, rdata), rd_length)
+                let rdata = APL::from_wire_format(&mut rdata_wire)?;
+                let rd_length = rdata.serial_length();
+                (Self::APL(header, rdata), rd_length)
             },
             RType::DS => {
                 return Err(ReadWireError::UnsupportedRType(rtype));
@@ -1261,6 +1263,7 @@ impl FromTokenizedRecord for ResourceRecord {
             RType::AAAA => Self::AAAA(rr_header, AAAA::from_tokenized_record(record)?),
             RType::AFSDB => Self::AFSDB(rr_header, AFSDB::from_tokenized_record(record)?),
             RType::AMTRELAY => Self::AMTRELAY(rr_header, AMTRELAY::from_tokenized_record(record)?),
+            RType::APL => Self::APL(rr_header, APL::from_tokenized_record(record)?),
             RType::CNAME => Self::CNAME(rr_header, CNAME::from_tokenized_record(record)?),
             RType::DNAME => Self::DNAME(rr_header, DNAME::from_tokenized_record(record)?),
             RType::HINFO => Self::HINFO(rr_header, HINFO::from_tokenized_record(record)?),
@@ -1303,6 +1306,7 @@ impl ToPresentation for ResourceRecord {
             Self::AAAA(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::AFSDB(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::AMTRELAY(_, rdata) => rdata.to_presentation_format(out_buffer),
+            Self::APL(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::ANY(_, _) => panic!("Cannot convert {rtype} to presentation"),
             Self::AXFR(_, _) => panic!("Cannot convert {rtype} to presentation"),
             Self::CNAME(_, rdata) => rdata.to_presentation_format(out_buffer),

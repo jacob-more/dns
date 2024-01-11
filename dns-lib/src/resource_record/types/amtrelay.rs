@@ -112,6 +112,7 @@ impl FromWire for AMTRELAY {
 }
 
 impl FromTokenizedRecord for AMTRELAY {
+    #[inline]
     fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
         match record.rdata.as_slice() {
             &[precedence, discovery_optional, relay_type, relay] => {
@@ -152,6 +153,7 @@ impl FromTokenizedRecord for AMTRELAY {
 }
 
 impl ToPresentation for AMTRELAY {
+    #[inline]
     fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
         self.precedence.to_presentation_format(out_buffer);
         self.discovery_optional.to_presentation_format(out_buffer);
