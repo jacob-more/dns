@@ -1,7 +1,9 @@
 use lazy_static::lazy_static;
 use regex::Regex;
 
-const CHARACTER_STR_UNQUOTED: &str = "\\A(([[:ascii:]&&[^ \\t;\\r\\n\"\\(\\)]]|(\\[^0-9]))+)";
+// Opening or closing parenthesis on their own are a text literal. However, if they are a part of a
+// larger non-quoted text literal, they should be pulled out as their own text literal.
+const CHARACTER_STR_UNQUOTED: &str = "\\A((([[:ascii:]&&[^ \\t;\\r\\n\"\\(\\)]]|(\\[^0-9]))+)|(\\()|(\\)))";
 const CHARACTER_STR_QUOTED: &str = "\\A(\"(([[:ascii:]&&[^\"]]|(\\[^0-9]))*)\")";
 
 lazy_static! {
