@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use super::{errors::TokenizerError, text_tokens::TextToken, entry_text_tokens::EntryTokenIter, regex::{REGEX_RTYPE, REGEX_RCLASS, REGEX_TTL}};
+use super::{errors::TokenizerError, entry_text_tokens::{EntryTokenIter, EntryTextToken}, regex::{REGEX_RCLASS, REGEX_RTYPE, REGEX_TTL}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Entry<'a> {
@@ -73,24 +73,22 @@ impl<'a> Iterator for EntryIter<'a> {
                 &[] => continue,    //< Skip entries that are empty
     
                 // $ORIGIN <domain-name> [<comment>]
-                &[TextToken::TextLiteral("$ORIGIN"), TextToken::TextLiteral(domain_name)] => return Some(Ok(
+                &[EntryTextToken::TextLiteral("$ORIGIN"), EntryTextToken::TextLiteral(domain_name)] => return Some(Ok(
                     Entry::Origin{ origin: domain_name }
                 )),
     
                 // $INCLUDE <file-name> [<domain-name>] [<comment>]
-                &[TextToken::TextLiteral("$INCLUDE"), TextToken::TextLiteral(file_name)] => return Some(Ok(
+                &[EntryTextToken::TextLiteral("$INCLUDE"), EntryTextToken::TextLiteral(file_name)] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: None }
                 )),
-                &[TextToken::TextLiteral("$INCLUDE"), TextToken::TextLiteral(file_name), TextToken::TextLiteral(domain_name)] => return Some(Ok(
+                &[EntryTextToken::TextLiteral("$INCLUDE"), EntryTextToken::TextLiteral(file_name), EntryTextToken::TextLiteral(domain_name)] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: Some(domain_name) }
                 )),
     
                 // <domain-name> [<TTL>] [<class>] <type> <RDATA> [<comment>]
-                &[TextToken::TextLiteral(domain_name), ..] => return Some(Self::parse_rr(Some(domain_name), &entry_tokens.text_tokens[1..])),
+                &[EntryTextToken::TextLiteral(domain_name), ..] => return Some(Self::parse_rr(Some(domain_name), &entry_tokens.text_tokens[1..])),
                 // <blank> [<TTL>] [<class>] <type> <RDATA> [<comment>]
-                &[TextToken::Separator(_), ..] => return Some(Self::parse_rr(None, &entry_tokens.text_tokens[1..])),
-    
-                _ => return Some(Err(TokenizerError::UnknownTokens)),
+                &[EntryTextToken::Separator(_), ..] => return Some(Self::parse_rr(None, &entry_tokens.text_tokens[1..])),
             }
         }
     }
@@ -98,7 +96,7 @@ impl<'a> Iterator for EntryIter<'a> {
 
 impl<'a> EntryIter<'a> {
     #[inline]
-    fn new_rr<'b>(domain_name: Option<&'a str>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: impl Iterator<Item = &'b TextToken<'a>>) -> Entry<'a> where 'a: 'b {
+    fn new_rr<'b>(domain_name: Option<&'a str>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: impl Iterator<Item = &'b EntryTextToken<'a>>) -> Entry<'a> where 'a: 'b {
         Entry::ResourceRecord{
             domain_name,
             ttl,
@@ -109,9 +107,9 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr(domain_name: Option<&'a str>, other_tokens: &[TextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr(domain_name: Option<&'a str>, other_tokens: &[EntryTextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         match other_tokens {
-            &[TextToken::TextLiteral(token_1), TextToken::TextLiteral(token_2), ..] => {
+            &[EntryTextToken::TextLiteral(token_1), EntryTextToken::TextLiteral(token_2), ..] => {
                 // If the first token is an rtype, then the rest is the rdata and we should not read it
                 if (!REGEX_RCLASS.is_match(token_1)) && REGEX_RTYPE.is_match(token_1) {
                     return Self::parse_rr_rtype_first(domain_name, token_1, &other_tokens[1..]);
@@ -139,7 +137,7 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr_rtype_first(domain_name: Option<&'a str>, rtype: &'a str, other_tokens: &[TextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_first(domain_name: Option<&'a str>, rtype: &'a str, other_tokens: &[EntryTextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         Ok(Self::new_rr(
             domain_name,
             None,
@@ -150,7 +148,7 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr_rtype_second(domain_name: Option<&'a str>, token_1: &'a str, rtype: &'a str, other_tokens: &[TextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_second(domain_name: Option<&'a str>, token_1: &'a str, rtype: &'a str, other_tokens: &[EntryTextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         if REGEX_RCLASS.is_match(token_1) {
             Ok(Self::new_rr(
                 domain_name,
@@ -173,7 +171,7 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr_rtype_third(domain_name: Option<&'a str>, token_1: &'a str, token_2: &'a str, rtype: &'a str, other_tokens: &[TextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_third(domain_name: Option<&'a str>, token_1: &'a str, token_2: &'a str, rtype: &'a str, other_tokens: &[EntryTextToken<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         if REGEX_RCLASS.is_match(token_1) && REGEX_TTL.is_match(token_2) {
             Ok(Self::new_rr(
                 domain_name,

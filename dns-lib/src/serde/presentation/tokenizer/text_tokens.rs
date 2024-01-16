@@ -5,6 +5,7 @@ use super::{errors::TokenizerError, regex::{REGEX_CHARACTER_STR_UNQUOTED, REGEX_
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum TextToken<'a> {
     TextLiteral(&'a str),
+    QuotedTextLiteral(&'a str),
     Separator(&'a str),
     NewLine(&'a str),
     Comment(&'a str),
@@ -13,10 +14,11 @@ pub enum TextToken<'a> {
 impl<'a> Display for TextToken<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TextToken::TextLiteral(text) => write!(f, "TextLiteral: '{text}'"),
-            TextToken::Separator(text) => write!(f, "Separator: '{text}'"),
-            TextToken::NewLine(text) => write!(f, "NewLine: '{text}'"),
-            TextToken::Comment(text) => write!(f, "Comment: '{text}'"),
+            Self::TextLiteral(text) => write!(f, "TextLiteral: '{text}'"),
+            Self::QuotedTextLiteral(text) => write!(f, "QuotedTextLiteral: '{text}'"),
+            Self::Separator(text) => write!(f, "Separator: '{text}'"),
+            Self::NewLine(text) => write!(f, "NewLine: '{text}'"),
+            Self::Comment(text) => write!(f, "Comment: '{text}'"),
         }
     }
 }
@@ -25,10 +27,11 @@ impl<'a> Into<&'a str> for TextToken<'a> {
     #[inline]
     fn into(self) -> &'a str {
         match &self {
-            TextToken::TextLiteral(string) => string,
-            TextToken::Separator(string) => string,
-            TextToken::NewLine(string) => string,
-            TextToken::Comment(string) => string,
+            Self::TextLiteral(string) => string,
+            Self::QuotedTextLiteral(string) => string,
+            Self::Separator(string) => string,
+            Self::NewLine(string) => string,
+            Self::Comment(string) => string,
         }
     }
 }
@@ -38,6 +41,7 @@ impl<'a> Into<&'a str> for &TextToken<'a> {
     fn into(self) -> &'a str {
         match &self {
             TextToken::TextLiteral(string) => string,
+            TextToken::QuotedTextLiteral(string) => string,
             TextToken::Separator(string) => string,
             TextToken::NewLine(string) => string,
             TextToken::Comment(string) => string,
@@ -74,7 +78,7 @@ impl<'a> Iterator for TextTokenIter<'a> {
         }
         if let Some(next_literal) = REGEX_CHARACTER_STR_QUOTED.find(self.feed) {
             // Exclude quotation marks from actual token string
-            let result = TextToken::TextLiteral(&self.feed[1..(next_literal.end()-1)]);
+            let result = TextToken::QuotedTextLiteral(&self.feed[1..(next_literal.end()-1)]);
             self.feed = &self.feed[next_literal.end()..];
             return Some(Ok(result));
         }
