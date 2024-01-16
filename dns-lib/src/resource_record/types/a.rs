@@ -1,9 +1,9 @@
 use std::net::Ipv4Addr;
 
-use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.4.1
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRecord, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
 pub struct A {
     ipv4_address: Ipv4Addr,
 }
@@ -36,7 +36,7 @@ mod circular_serde_sanity_test {
 #[cfg(test)]
 mod tokenizer_tests {
     use std::net::Ipv4Addr;
-    use crate::serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test};
+    use crate::serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test};
     use super::A;
 
     gen_ok_record_test!(test_ok, A, A { ipv4_address: Ipv4Addr::new(192, 168, 86, 1) }, ["192.168.86.1"]);

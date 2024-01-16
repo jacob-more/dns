@@ -2,7 +2,7 @@ use std::net::Ipv6Addr;
 
 use dns_macros::RTypeCode;
 
-use crate::{types::domain_name::DomainName, serde::{wire::{to_wire::ToWire, write_wire::WriteWire, from_wire::FromWire, read_wire::{ReadWireError, ReadWire}}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, to_presentation::ToPresentation}}};
+use crate::{types::domain_name::DomainName, serde::{wire::{to_wire::ToWire, write_wire::WriteWire, from_wire::FromWire, read_wire::{ReadWireError, ReadWire}}, presentation::{from_tokenized_rdata::FromTokenizedRData, from_presentation::FromPresentation, to_presentation::ToPresentation}}};
 
 
 const IPV6_ADDRESS_LENGTH: usize = 128 / 8;
@@ -109,10 +109,10 @@ impl FromWire for A6 {
     }
 }
 
-impl FromTokenizedRecord for A6 {
+impl FromTokenizedRData for A6 {
     #[inline]
-    fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
-        match record.rdata.as_slice() {
+    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+        match rdata.as_slice() {
             &[token1, token2] => {
                 let prefix_length = u8::from_token_format(token1)?;
                 if prefix_length > Self::MAX_PREFIX_LENGTH {
@@ -167,7 +167,7 @@ impl FromTokenizedRecord for A6 {
                 })
             },
             _ => return Err(crate::serde::presentation::errors::TokenizedRecordError::ValueError(
-                format!("An A6 record must have either 2 or 3 rdata tokens. It has {}", record.rdata.len())
+                format!("An A6 record must have either 2 or 3 rdata tokens. It has {}", rdata.len())
             )),
         }
     }
@@ -218,7 +218,7 @@ mod circular_serde_sanity_test {
 #[cfg(test)]
 mod tokenizer_tests {
     use std::net::Ipv6Addr;
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::domain_name::DomainName};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, types::domain_name::DomainName};
     use super::A6;
 
     const GOOD_DOMAIN: &str = "www.example.org.";

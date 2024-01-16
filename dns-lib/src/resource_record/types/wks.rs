@@ -4,7 +4,7 @@ use dns_macros::{ToWire, FromWire, RTypeCode};
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use crate::{serde::presentation::{from_tokenized_record::FromTokenizedRecord, to_presentation::ToPresentation, errors::{TokenizedRecordError, TokenError}, from_presentation::FromPresentation}, resource_record::{protocol::Protocol, port_from_service::port_from_service}};
+use crate::{serde::presentation::{from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation, errors::{TokenizedRecordError, TokenError}, from_presentation::FromPresentation}, resource_record::{protocol::Protocol, port_from_service::port_from_service}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RTypeCode)]
 pub struct WKS {
@@ -13,22 +13,22 @@ pub struct WKS {
     bit_map: Vec<u8>,
 }
 
-impl FromTokenizedRecord for WKS {
+impl FromTokenizedRData for WKS {
     #[inline]
-    fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
         lazy_static!{
             static ref REGEX_UNSIGNED_INT: Regex = Regex::new(r"\A((\d)+)\z").unwrap();
         }
 
-        if record.rdata.len() < 3 {
-            return Err(TokenizedRecordError::TooFewRDataTokensError{expected: 3, received: record.rdata.len()});
+        if rdata.len() < 3 {
+            return Err(TokenizedRecordError::TooFewRDataTokensError{expected: 3, received: rdata.len()});
         }
         
-        let address = Ipv4Addr::from_token_format(record.rdata[0])?;
-        let protocol = Protocol::from_token_format(record.rdata[1])?;
+        let address = Ipv4Addr::from_token_format(rdata[0])?;
+        let protocol = Protocol::from_token_format(rdata[1])?;
         let mut port_bitmap: Vec<u8> = Vec::new();
 
-        for service in &record.rdata[2..] {
+        for service in &rdata[2..] {
             if REGEX_UNSIGNED_INT.is_match_at(service, 0) {
                 add_port_to_bitmap(
                     &mut port_bitmap,
@@ -146,7 +146,7 @@ mod circular_serde_sanity_test {
 #[cfg(test)]
 mod tokenizer_tests {
     use std::net::Ipv4Addr;
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, resource_record::protocol::Protocol};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, resource_record::protocol::Protocol};
     use super::WKS;
 
     const GOOD_IP: &str = "192.168.86.1";

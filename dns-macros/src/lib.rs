@@ -6,8 +6,8 @@ mod from_wire;
 use to_wire::impl_to_wire_macro;
 use from_wire::impl_from_wire_macro;
 
-mod from_tokenized_record;
-use from_tokenized_record::impl_from_tokenized_record_macro;
+mod from_tokenized_rdata;
+use from_tokenized_rdata::impl_from_tokenized_rdata_macro;
 
 mod to_presentation;
 use to_presentation::impl_to_presentation_macro;
@@ -35,14 +35,14 @@ pub fn derive_from_wire(input: TokenStream) -> TokenStream {
     impl_from_wire_macro(&ast)
 }
 
-#[proc_macro_derive(FromTokenizedRecord)]
-pub fn derive_from_tokenized_record(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(FromTokenizedRData)]
+pub fn derive_from_tokenized_rdata(input: TokenStream) -> TokenStream {
     // Construct a representation of Rust code as a syntax tree
     // that we can manipulate
     let ast = syn::parse(input).unwrap();
 
     // Build the trait implementation
-    impl_from_tokenized_record_macro(&ast)
+    impl_from_tokenized_rdata_macro(&ast)
 }
 
 #[proc_macro_derive(ToPresentation)]

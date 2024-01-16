@@ -1,6 +1,6 @@
 use dns_macros::{ToWire, FromWire, RTypeCode};
 
-use crate::{types::character_string::CharacterString, serde::presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, to_presentation::ToPresentation}};
+use crate::{types::character_string::CharacterString, serde::presentation::{from_tokenized_rdata::FromTokenizedRData, from_presentation::FromPresentation, to_presentation::ToPresentation}};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.14
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RTypeCode)]
@@ -20,18 +20,18 @@ impl TXT {
     }
 }
 
-impl FromTokenizedRecord for TXT {
+impl FromTokenizedRData for TXT {
     #[inline]
-    fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
-        match record.rdata.as_slice() {
+    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+        match rdata.as_slice() {
             &[_, ..] => {
-                let mut strings = Vec::with_capacity(record.rdata.len());
-                for string_token in &record.rdata {
+                let mut strings = Vec::with_capacity(rdata.len());
+                for string_token in rdata {
                     strings.push(CharacterString::from_token_format(&string_token)?);
                 }
                 Ok(Self { strings })
             },
-            _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: 1, received: record.rdata.len()}),
+            _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: 1, received: rdata.len()}),
         }
     }
 }
@@ -72,7 +72,7 @@ mod circular_serde_sanity_test {
 
 #[cfg(test)]
 mod tokenizer_tests {
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::character_string::CharacterString};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, types::character_string::CharacterString};
     use super::TXT;
 
     const GOOD_STRING: &str = "This is a string with some characters";

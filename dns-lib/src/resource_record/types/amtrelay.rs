@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use dns_macros::RTypeCode;
 use ux::{u1, u7};
 
-use crate::{types::domain_name::DomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, to_presentation::ToPresentation}}};
+use crate::{types::domain_name::DomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_tokenized_rdata::FromTokenizedRData, from_presentation::FromPresentation, to_presentation::ToPresentation}}};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8777#name-amtrelay-rdata-format
 ///
@@ -111,10 +111,10 @@ impl FromWire for AMTRELAY {
     }
 }
 
-impl FromTokenizedRecord for AMTRELAY {
+impl FromTokenizedRData for AMTRELAY {
     #[inline]
-    fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
-        match record.rdata.as_slice() {
+    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+        match rdata.as_slice() {
             &[precedence, discovery_optional, relay_type, relay] => {
                 let precedence = u8::from_token_format(precedence)?;
                 let discovery_optional = u1::from_token_format(discovery_optional)?;
@@ -146,8 +146,8 @@ impl FromTokenizedRecord for AMTRELAY {
                     relay,
                 })
             },
-            &[_, _, _, _, ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: 4, received: record.rdata.len()}),
-            _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: 4, received: record.rdata.len()}),
+            &[_, _, _, _, ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: 4, received: rdata.len()}),
+            _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: 4, received: rdata.len()}),
         }
     }
 }
@@ -205,7 +205,7 @@ mod tokenizer_tests {
 
     use ux::u1;
 
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::domain_name::DomainName, resource_record::types::amtrelay::RelayType};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, types::domain_name::DomainName, resource_record::types::amtrelay::RelayType};
     use super::AMTRELAY;
 
     const GOOD_PRECEDENCE: &str = "1";

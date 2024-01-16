@@ -1,8 +1,8 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
 
 use crate::types::c_domain_name::CDomainName;
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRecord, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
 pub struct CNAME {
     primary_name: CDomainName,
 }
@@ -32,7 +32,7 @@ mod circular_serde_sanity_test {
 
 #[cfg(test)]
 mod tokenizer_tests {
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::c_domain_name::CDomainName};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, types::c_domain_name::CDomainName};
     use super::CNAME;
 
     const GOOD_DOMAIN: &str = "www.example.com.";

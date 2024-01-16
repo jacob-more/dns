@@ -5,7 +5,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use ux::{u1, u7};
 
-use crate::{resource_record::address_family::AddressFamily, serde::{wire::{to_wire::ToWire, from_wire::FromWire, write_wire::WriteWire, read_wire::{ReadWireError, ReadWire}}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
+use crate::{resource_record::address_family::AddressFamily, serde::{wire::{to_wire::ToWire, from_wire::FromWire, write_wire::WriteWire, read_wire::{ReadWireError, ReadWire}}, presentation::{from_tokenized_rdata::FromTokenizedRData, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc3123
 #[derive(Clone, PartialEq, Eq, Hash, Debug, RTypeCode)]
@@ -191,9 +191,9 @@ impl FromWire for APL {
     }
 }
 
-impl FromTokenizedRecord for APL {
+impl FromTokenizedRData for APL {
     #[inline]
-    fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
         lazy_static!(
             static ref REGEX_ADDRESS_FAMILY: Regex = Regex::new(r"\A([0-9]+):").unwrap();
             static ref REGEX_NEGATION_FLAG: Regex = Regex::new(r"\A!").unwrap();
@@ -204,7 +204,7 @@ impl FromTokenizedRecord for APL {
         // records per line, we will only support one per line. Supporting multiple records per line
         // would require redesigning this trait.
 
-        match record.rdata.as_slice() {
+        match rdata.as_slice() {
             &[mut token] => {
                 let mut negation_flag = false;
     
@@ -301,8 +301,8 @@ impl FromTokenizedRecord for APL {
                     afd_part,
                 })
             },
-            &[] => return Err(TokenizedRecordError::TooFewRDataTokensError{expected: 1, received: record.rdata.len()}),
-            &[_, ..] => return Err(TokenizedRecordError::TooManyRDataTokensError{expected: 1, received: record.rdata.len()}),
+            &[] => return Err(TokenizedRecordError::TooFewRDataTokensError{expected: 1, received: rdata.len()}),
+            &[_, ..] => return Err(TokenizedRecordError::TooManyRDataTokensError{expected: 1, received: rdata.len()}),
         }
     }
 }
@@ -429,7 +429,7 @@ mod tokenizer_tests {
     use lazy_static::lazy_static;
     use ux::u7;
 
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, resource_record::{address_family::AddressFamily, types::apl::AFDPart}};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, resource_record::{address_family::AddressFamily, types::apl::AFDPart}};
     use super::APL;
 
     const IPV4_FAMILY: &str = "1";

@@ -1,6 +1,6 @@
 use crate::resource_record::resource_record::ResourceRecord;
 
-use super::{tokenizer::tokenizer::Tokenizer, from_tokenized_record::FromTokenizedRecord, errors::TokenizedRecordError};
+use super::{tokenizer::tokenizer::Tokenizer, errors::TokenizedRecordError};
 
 pub struct ResourceRecordReader<'a> {
     tokenizer: Tokenizer<'a>

@@ -1,11 +1,11 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
 
 use crate::types::domain_name::DomainName;
 
 /// TODO: read RFC 2672
 /// 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc6672
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRecord, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
 pub struct DNAME {
     target: DomainName,
 }
@@ -35,7 +35,7 @@ mod circular_serde_sanity_test {
 
 #[cfg(test)]
 mod tokenizer_tests {
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::domain_name::DomainName};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, types::domain_name::DomainName};
     use super::DNAME;
 
     const GOOD_DOMAIN: &str = "www.example.com.";

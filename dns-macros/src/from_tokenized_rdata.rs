@@ -2,15 +2,15 @@ use proc_macro;
 use syn::{DeriveInput, Data, DataStruct};
 use quote::quote;
 
-pub fn impl_from_tokenized_record_macro(ast: &DeriveInput) -> proc_macro::TokenStream {
+pub fn impl_from_tokenized_rdata_macro(ast: &DeriveInput) -> proc_macro::TokenStream {
     match &ast.data {
-        Data::Struct(data) => impl_from_tokenized_record_struct_macro(data, ast),
+        Data::Struct(data) => impl_from_tokenized_rdata_struct_macro(data, ast),
         Data::Enum(_) => panic!("Enum not implemented"),
         Data::Union(_) => panic!("Union not implemented"),
     }
 }
 
-fn impl_from_tokenized_record_struct_macro(data: &DataStruct, ast: &DeriveInput) -> proc_macro::TokenStream {
+fn impl_from_tokenized_rdata_struct_macro(data: &DataStruct, ast: &DeriveInput) -> proc_macro::TokenStream {
     let name = &ast.ident;
 
     let mut from_token_calls = quote!{};
@@ -43,12 +43,12 @@ fn impl_from_tokenized_record_struct_macro(data: &DataStruct, ast: &DeriveInput)
     if struct_declaration_builder.is_empty() {
         // Case 1: Struct has no fields.
         gen = quote! {
-            impl crate::serde::presentation::from_tokenized_record::FromTokenizedRecord for #name {
+            impl crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData for #name {
                 #[inline]
-                fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
-                    match record.rdata.as_slice() {
+                fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+                    match rdata.as_slice() {
                         &[] => Ok(Self {}),
-                        &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError(0, record.rdata.len())),
+                        &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError(0, rdata.len())),
                     }
                 }
             }
@@ -56,18 +56,18 @@ fn impl_from_tokenized_record_struct_macro(data: &DataStruct, ast: &DeriveInput)
     } else {
         // Case 2: Struct has 1+ fields.
         gen = quote! {
-            impl crate::serde::presentation::from_tokenized_record::FromTokenizedRecord for #name {
+            impl crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData for #name {
                 #[inline]
-                fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
-                    match record.rdata.as_slice() {
+                fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+                    match rdata.as_slice() {
                         &[#pattern_match] => {
                             #from_token_calls
                             Ok(Self {
                                 #struct_declaration_builder
                             })
                         },
-                        &[#ignored_pattern_match ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: #field_count, received: record.rdata.len()}),
-                        &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: #field_count, received: record.rdata.len()}),
+                        &[#ignored_pattern_match ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: #field_count, received: rdata.len()}),
+                        &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: #field_count, received: rdata.len()}),
                     }
                 }
             }

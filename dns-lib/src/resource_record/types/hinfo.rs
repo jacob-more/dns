@@ -1,9 +1,9 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
 
 use crate::types::character_string::CharacterString;
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.2
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRecord, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
 pub struct HINFO {
     cpu: CharacterString,
     os: CharacterString,
@@ -42,7 +42,7 @@ mod circular_serde_sanity_test {
 
 #[cfg(test)]
 mod tokenizer_tests {
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::character_string::CharacterString};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, types::character_string::CharacterString};
     use super::HINFO;
 
     const GOOD_CPU: &str = "PRIME-9650";

@@ -1,9 +1,9 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRecord, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
 
 use crate::types::domain_name::DomainName;
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc3596
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRecord, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
 pub struct AFSDB {
     subtype: u16,
     hostname: DomainName
@@ -39,7 +39,7 @@ mod circular_serde_sanity_test {
 
 #[cfg(test)]
 mod tokenizer_tests {
-    use crate::{serde::presentation::test_from_tokenized_record::{gen_ok_record_test, gen_fail_record_test}, types::domain_name::DomainName};
+    use crate::{serde::presentation::test_from_tokenized_rdata::{gen_ok_record_test, gen_fail_record_test}, types::domain_name::DomainName};
     use super::AFSDB;
 
     const GOOD_SUBTYPE: &str = "1";

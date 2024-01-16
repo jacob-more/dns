@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_tokenized_record::FromTokenizedRecord, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
+use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation, from_tokenized_rdata::FromTokenizedRData}}};
 
 use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT, a6::A6, ptr::PTR, wks::WKS, afsdb::AFSDB, amtrelay::AMTRELAY, apl::APL}, rtype::RType, time::Time};
 
@@ -1248,8 +1248,8 @@ impl FromWire for ResourceRecord {
     }
 }
 
-impl FromTokenizedRecord for ResourceRecord {
-    fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+impl ResourceRecord {
+    pub fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
         let rr_header = RRHeader {
             name: CDomainName::from_token_format(record.domain_name)?,
             rclass: RClass::from_token_format(record.rclass)?,
@@ -1258,27 +1258,27 @@ impl FromTokenizedRecord for ResourceRecord {
 
         let rtype = RType::from_token_format(record.rtype)?;
         let record = match rtype {
-            RType::A => Self::A(rr_header, A::from_tokenized_record(record)?),
-            RType::A6 => Self::A6(rr_header, A6::from_tokenized_record(record)?),
-            RType::AAAA => Self::AAAA(rr_header, AAAA::from_tokenized_record(record)?),
-            RType::AFSDB => Self::AFSDB(rr_header, AFSDB::from_tokenized_record(record)?),
-            RType::AMTRELAY => Self::AMTRELAY(rr_header, AMTRELAY::from_tokenized_record(record)?),
-            RType::APL => Self::APL(rr_header, APL::from_tokenized_record(record)?),
-            RType::CNAME => Self::CNAME(rr_header, CNAME::from_tokenized_record(record)?),
-            RType::DNAME => Self::DNAME(rr_header, DNAME::from_tokenized_record(record)?),
-            RType::HINFO => Self::HINFO(rr_header, HINFO::from_tokenized_record(record)?),
-            RType::MB => Self::MB(rr_header, MB::from_tokenized_record(record)?),
-            RType::MD => Self::MD(rr_header, MD::from_tokenized_record(record)?),
-            RType::MF => Self::MF(rr_header, MF::from_tokenized_record(record)?),
-            RType::MG => Self::MG(rr_header, MG::from_tokenized_record(record)?),
-            RType::MINFO => Self::MINFO(rr_header, MINFO::from_tokenized_record(record)?),
-            RType::MR => Self::MR(rr_header, MR::from_tokenized_record(record)?),
-            RType::MX => Self::MX(rr_header, MX::from_tokenized_record(record)?),
-            RType::NS => Self::NS(rr_header, NS::from_tokenized_record(record)?),
-            RType::SOA => Self::SOA(rr_header, SOA::from_tokenized_record(record)?),
-            RType::TXT => Self::TXT(rr_header, TXT::from_tokenized_record(record)?),
-            RType::PTR => Self::PTR(rr_header, PTR::from_tokenized_record(record)?),
-            RType::WKS => Self::WKS(rr_header, WKS::from_tokenized_record(record)?),
+            RType::A => Self::A(rr_header, A::from_tokenized_rdata(&record.rdata)?),
+            RType::A6 => Self::A6(rr_header, A6::from_tokenized_rdata(&record.rdata)?),
+            RType::AAAA => Self::AAAA(rr_header, AAAA::from_tokenized_rdata(&record.rdata)?),
+            RType::AFSDB => Self::AFSDB(rr_header, AFSDB::from_tokenized_rdata(&record.rdata)?),
+            RType::AMTRELAY => Self::AMTRELAY(rr_header, AMTRELAY::from_tokenized_rdata(&record.rdata)?),
+            RType::APL => Self::APL(rr_header, APL::from_tokenized_rdata(&record.rdata)?),
+            RType::CNAME => Self::CNAME(rr_header, CNAME::from_tokenized_rdata(&record.rdata)?),
+            RType::DNAME => Self::DNAME(rr_header, DNAME::from_tokenized_rdata(&record.rdata)?),
+            RType::HINFO => Self::HINFO(rr_header, HINFO::from_tokenized_rdata(&record.rdata)?),
+            RType::MB => Self::MB(rr_header, MB::from_tokenized_rdata(&record.rdata)?),
+            RType::MD => Self::MD(rr_header, MD::from_tokenized_rdata(&record.rdata)?),
+            RType::MF => Self::MF(rr_header, MF::from_tokenized_rdata(&record.rdata)?),
+            RType::MG => Self::MG(rr_header, MG::from_tokenized_rdata(&record.rdata)?),
+            RType::MINFO => Self::MINFO(rr_header, MINFO::from_tokenized_rdata(&record.rdata)?),
+            RType::MR => Self::MR(rr_header, MR::from_tokenized_rdata(&record.rdata)?),
+            RType::MX => Self::MX(rr_header, MX::from_tokenized_rdata(&record.rdata)?),
+            RType::NS => Self::NS(rr_header, NS::from_tokenized_rdata(&record.rdata)?),
+            RType::SOA => Self::SOA(rr_header, SOA::from_tokenized_rdata(&record.rdata)?),
+            RType::TXT => Self::TXT(rr_header, TXT::from_tokenized_rdata(&record.rdata)?),
+            RType::PTR => Self::PTR(rr_header, PTR::from_tokenized_rdata(&record.rdata)?),
+            RType::WKS => Self::WKS(rr_header, WKS::from_tokenized_rdata(&record.rdata)?),
             
             RType::ANY => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
             RType::AXFR => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
