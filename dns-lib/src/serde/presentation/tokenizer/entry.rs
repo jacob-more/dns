@@ -3,76 +3,44 @@ use std::fmt::Display;
 use super::{errors::TokenizerError, text_tokens::TextToken, entry_text_tokens::EntryTokenIter, regex::{REGEX_RTYPE, REGEX_RCLASS, REGEX_TTL}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Origin<'a> {
-    pub origin: &'a str,
-}
-
-impl<'a> Display for Origin<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "ORIGIN")?;
-        writeln!(f, "\tDomain Name: {}", self.origin)
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Include<'a> {
-    pub file_name: &'a str,
-    pub domain_name: Option<&'a str>,
-}
-
-impl<'a> Display for Include<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "INCLUDE")?;
-        writeln!(f, "\tFile Name: {}", self.file_name)?;
-        if let Some(domain_name) = &self.domain_name {
-            writeln!(f, "\tDomain Name: {}", domain_name)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct ResourceRecord<'a> {
-    pub domain_name: Option<&'a str>,
-    pub ttl: Option<&'a str>,
-    pub rclass: Option<&'a str>,
-    pub rtype: &'a str,
-    pub rdata: Vec<&'a str>,
-}
-
-impl<'a> Display for ResourceRecord<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Resource Record")?;
-        if let Some(domain_name) = self.domain_name {
-            writeln!(f, "\tDomain Name: {}", domain_name)?;
-        }
-        if let Some(ttl) = self.ttl {
-            writeln!(f, "\tTTL: {}", ttl)?;
-        }
-        if let Some(rclass) = self.rclass {
-            writeln!(f, "\tClass: {}", rclass)?;
-        }
-        writeln!(f, "\tType: {}", self.rtype)?;
-        for rdata in &self.rdata {
-            writeln!(f, "\tRData: {}", rdata)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Entry<'a> {
-    Origin(Origin<'a>),
-    Include(Include<'a>),
-    ResourceRecord(ResourceRecord<'a>),
+    Origin{origin: &'a str},
+    Include{file_name: &'a str, domain_name: Option<&'a str>},
+    ResourceRecord{domain_name: Option<&'a str>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: Vec<&'a str>},
 }
 
 impl<'a> Display for Entry<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Entry::Origin(token) => write!(f, "{token}"),
-            Entry::Include(token) => write!(f, "{token}"),
-            Entry::ResourceRecord(token) => write!(f, "{token}"),
+            Entry::Origin{origin} => {
+                writeln!(f, "ORIGIN")?;
+                writeln!(f, "\tDomain Name: {origin}")
+            },
+            Entry::Include{file_name, domain_name} => {
+                writeln!(f, "INCLUDE")?;
+                writeln!(f, "\tFile Name: {file_name}")?;
+                if let Some(domain_name) = domain_name {
+                    writeln!(f, "\tDomain Name: {domain_name}")?;
+                }
+                Ok(())
+            },
+            Entry::ResourceRecord{domain_name, ttl, rclass, rtype, rdata} => {
+                writeln!(f, "Resource Record")?;
+                if let Some(domain_name) = domain_name {
+                    writeln!(f, "\tDomain Name: {}", domain_name)?;
+                }
+                if let Some(ttl) = ttl {
+                    writeln!(f, "\tTTL: {}", ttl)?;
+                }
+                if let Some(rclass) = rclass {
+                    writeln!(f, "\tClass: {}", rclass)?;
+                }
+                writeln!(f, "\tType: {}", rtype)?;
+                for rdata in rdata {
+                    writeln!(f, "\tRData: {}", rdata)?;
+                }
+                Ok(())
+            },
         }
     }
 }
@@ -106,23 +74,15 @@ impl<'a> Iterator for EntryIter<'a> {
     
                 // $ORIGIN <domain-name> [<comment>]
                 &[TextToken::TextLiteral("$ORIGIN"), TextToken::TextLiteral(domain_name)] => return Some(Ok(
-                    Entry::Origin(Origin {
-                        origin: domain_name
-                    })
+                    Entry::Origin{ origin: domain_name }
                 )),
     
                 // $INCLUDE <file-name> [<domain-name>] [<comment>]
                 &[TextToken::TextLiteral("$INCLUDE"), TextToken::TextLiteral(file_name)] => return Some(Ok(
-                    Entry::Include(Include {
-                        file_name: file_name,
-                        domain_name: None,
-                    })
+                    Entry::Include{ file_name, domain_name: None }
                 )),
                 &[TextToken::TextLiteral("$INCLUDE"), TextToken::TextLiteral(file_name), TextToken::TextLiteral(domain_name)] => return Some(Ok(
-                    Entry::Include(Include {
-                        file_name: file_name,
-                        domain_name: Some(domain_name),
-                    })
+                    Entry::Include{ file_name, domain_name: Some(domain_name) }
                 )),
     
                 // <domain-name> [<TTL>] [<class>] <type> <RDATA> [<comment>]
@@ -139,13 +99,13 @@ impl<'a> Iterator for EntryIter<'a> {
 impl<'a> EntryIter<'a> {
     #[inline]
     fn new_rr<'b>(domain_name: Option<&'a str>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: impl Iterator<Item = &'b TextToken<'a>>) -> Entry<'a> where 'a: 'b {
-        Entry::ResourceRecord(ResourceRecord {
+        Entry::ResourceRecord{
             domain_name,
             ttl,
             rclass,
             rtype,
             rdata: rdata.map(|token| token.into()).collect(),
-        })
+        }
     }
 
     #[inline]

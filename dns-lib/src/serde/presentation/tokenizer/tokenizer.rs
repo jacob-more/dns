@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::serde::presentation::tokenizer::entry::Entry;
 
-use super::{entry::{EntryIter, self}, errors::TokenizerError};
+use super::{entry::EntryIter, errors::TokenizerError};
 
 const DEFAULT_DOMAIN_NAME: Option<&str> = None;
 const DEFAULT_TTL: Option<&str> = Some("86400");
@@ -65,15 +65,15 @@ impl<'a> Iterator for Tokenizer<'a> {
                 None => return None,
                 Some(Err(error)) => return Some(Err(error)),
     
-                Some(Ok(Entry::Origin(origin))) => self.origin = Some(origin.origin),
-                Some(Ok(Entry::Include(_))) => todo!("Load the file and read the sub-iterator"),
-                Some(Ok(Entry::ResourceRecord(mut rr))) => {
+                Some(Ok(Entry::Origin{origin})) => self.origin = Some(origin),
+                Some(Ok(Entry::Include{ file_name: _, domain_name: _ })) => todo!("Load the file and read the sub-iterator"),
+                Some(Ok(Entry::ResourceRecord{mut domain_name, ttl, rclass, rtype, mut rdata})) => {
                     // Replace any free-standing `@` with the domain name defined by the $ORIGIN token
-                    if let Some("@") = rr.domain_name {
+                    if let Some("@") = domain_name {
                         if self.origin.is_none() { return Some(Err(TokenizerError::OriginUsedBeforeDefined)); }
-                        rr.domain_name = self.origin;
+                        domain_name = self.origin;
                     }
-                    for rdata in rr.rdata.iter_mut() {
+                    for rdata in rdata.iter_mut() {
                         if "@" == *rdata {
                             if let Some(origin) = self.origin {
                                 *rdata = origin;
@@ -85,45 +85,38 @@ impl<'a> Iterator for Tokenizer<'a> {
 
                     // Fill in any blank domain names. If one is already defined, record it as being
                     // the last known domain name.
-                    if let Some(this_domain_name) = rr.domain_name {
+                    let domain_name = if let Some(this_domain_name) = domain_name {
                         self.last_domain_name = Some(this_domain_name);
+                        this_domain_name
                     } else if let Some(last_domain_name) = self.last_domain_name {
-                        rr.domain_name = Some(last_domain_name);
+                        last_domain_name
                     } else {
                         return Some(Err(TokenizerError::BlankDomainUsedBeforeDefined));
-                    }
+                    };
 
                     // Fill in any blank ttl's. If one is already defined, record it as being
                     // the last known ttl.
-                    if let Some(this_ttl) = rr.ttl {
+                    let ttl = if let Some(this_ttl) = ttl {
                         self.last_ttl = Some(this_ttl);
+                        this_ttl
                     } else if let Some(last_ttl) = self.last_ttl {
-                        rr.ttl = Some(last_ttl);
+                        last_ttl
                     } else {
                         return Some(Err(TokenizerError::BlankDomainUsedBeforeDefined));
-                    }
+                    };
 
                     // Fill in any blank classes. If one is already defined, record it as being
                     // the last known class.
-                    if let Some(this_rclass) = rr.rclass {
+                    let rclass = if let Some(this_rclass) = rclass {
                         self.last_rclass = Some(this_rclass);
+                        this_rclass
                     } else if let Some(last_rclass) = self.last_rclass {
-                        rr.rclass = Some(last_rclass);
+                        last_rclass
                     } else {
                         return Some(Err(TokenizerError::BlankDomainUsedBeforeDefined));
-                    }
+                    };
 
-                    if let entry::ResourceRecord {
-                        domain_name: Some(domain_name),
-                        ttl: Some(ttl),
-                        rclass: Some(rclass),
-                        rtype,
-                        rdata 
-                    } = rr {
-                        return Some(Ok(ResourceRecord { domain_name, ttl, rclass, rtype, rdata }));
-                    } else {
-                        panic!("Unexpected Error: The resource record should have all required fields filled out but it does not.");
-                    }
+                    return Some(Ok(ResourceRecord { domain_name, ttl, rclass, rtype, rdata }))
                 }
             }
         }
