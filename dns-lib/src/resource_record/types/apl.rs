@@ -301,8 +301,8 @@ impl FromTokenizedRecord for APL {
                     afd_part,
                 })
             },
-            &[] => return Err(TokenizedRecordError::TooFewRDataTokensError(1, record.rdata.len())),
-            &[_, ..] => return Err(TokenizedRecordError::TooManyRDataTokensError(1, record.rdata.len())),
+            &[] => return Err(TokenizedRecordError::TooFewRDataTokensError{expected: 1, received: record.rdata.len()}),
+            &[_, ..] => return Err(TokenizedRecordError::TooManyRDataTokensError{expected: 1, received: record.rdata.len()}),
         }
     }
 }

@@ -66,8 +66,8 @@ fn impl_from_tokenized_record_struct_macro(data: &DataStruct, ast: &DeriveInput)
                                 #struct_declaration_builder
                             })
                         },
-                        &[#ignored_pattern_match ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError(#field_count, record.rdata.len())),
-                        &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError(#field_count, record.rdata.len())),
+                        &[#ignored_pattern_match ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: #field_count, received: record.rdata.len()}),
+                        &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: #field_count, received: record.rdata.len()}),
                     }
                 }
             }

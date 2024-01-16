@@ -146,8 +146,8 @@ impl FromTokenizedRecord for AMTRELAY {
                     relay,
                 })
             },
-            &[_, _, _, _, ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError(4, record.rdata.len())),
-            _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError(4, record.rdata.len())),
+            &[_, _, _, _, ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: 4, received: record.rdata.len()}),
+            _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: 4, received: record.rdata.len()}),
         }
     }
 }

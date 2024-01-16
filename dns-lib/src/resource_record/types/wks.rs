@@ -21,7 +21,7 @@ impl FromTokenizedRecord for WKS {
         }
 
         if record.rdata.len() < 3 {
-            return Err(TokenizedRecordError::TooFewRDataTokensError(3, record.rdata.len()));
+            return Err(TokenizedRecordError::TooFewRDataTokensError{expected: 3, received: record.rdata.len()});
         }
         
         let address = Ipv4Addr::from_token_format(record.rdata[0])?;

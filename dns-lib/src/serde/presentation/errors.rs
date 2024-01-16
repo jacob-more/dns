@@ -10,8 +10,8 @@ use super::tokenizer::errors::TokenizerError;
 pub enum TokenizedRecordError<'a> {
     TokenizerError(TokenizerError<'a>),
     TokenError(TokenError<'a>),
-    TooManyRDataTokensError(usize, usize),
-    TooFewRDataTokensError(usize, usize),
+    TooManyRDataTokensError{ expected: usize, received: usize },
+    TooFewRDataTokensError{ expected: usize, received: usize },
     UnsupportedRType(RType),
     RTypeNotAllowed(RType),
     OutOfBoundsError(String),
@@ -23,8 +23,8 @@ impl<'a> Display for TokenizedRecordError<'a> {
         match self {
             Self::TokenizerError(error) => write!(f, "{error}"),
             Self::TokenError(error) => write!(f, "{error}"),
-            Self::TooManyRDataTokensError(expected, received) => write!(f, "too many tokens; expected {expected} but received {received}"),
-            Self::TooFewRDataTokensError(expected, received) => write!(f, "too few tokens; expected {expected} but received {received}"),
+            Self::TooManyRDataTokensError{expected, received} => write!(f, "too many tokens; expected {expected} but received {received}"),
+            Self::TooFewRDataTokensError{expected, received} => write!(f, "too few tokens; expected {expected} but received {received}"),
             Self::UnsupportedRType(rtype) => write!(f, "Resource Record Type {rtype} is not supported"),
             Self::RTypeNotAllowed(rtype) => write!(f, "Resource Record Type {rtype} is not allowed in files"),
             Self::OutOfBoundsError(error) => write!(f, "Out Of Bounds: {error}"),

@@ -31,7 +31,7 @@ impl FromTokenizedRecord for TXT {
                 }
                 Ok(Self { strings })
             },
-            _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError(1, record.rdata.len())),
+            _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: 1, received: record.rdata.len()}),
         }
     }
 }
