@@ -55,7 +55,7 @@ impl<'a> Iterator for EntryTokenIter<'a> {
                 // Separators are removed at this step. We should only care about the text
                 // literals from this point onwards. The only time they matter is if they are
                 // the first token.
-                (Some(Ok(TextToken::Separator(token_str))), _) if (tokens.len() == 0) => tokens.push(TextToken::Separator(token_str)),
+                (Some(Ok(TextToken::Separator(token_str))), _) if tokens.is_empty() => tokens.push(TextToken::Separator(token_str)),
                 (Some(Ok(TextToken::Separator(_))), _) => (),
 
                 (Some(Ok(TextToken::NewLine(_))), true) => (),

@@ -222,7 +222,7 @@ impl RType {
     #[inline]
     pub fn mnemonic(&self) -> String {
         return match self {
-            Self::Unknown(code) => format!("TYPE{}", code),
+            Self::Unknown(code) => format!("TYPE{code}"),
 
             Self::A =>            "A".to_string(),
             Self::NS =>           "NS".to_string(),

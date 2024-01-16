@@ -384,6 +384,34 @@ pub const fn is_numeric(character: AsciiChar) -> bool {
 }
 
 #[inline]
+pub const fn is_alphanumeric(character: AsciiChar) -> bool {
+    match character {
+        ASCII_ZERO..=ASCII_NINE => true,
+        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
+        ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
+        _ => false,
+    }
+}
+
+#[inline]
+pub const fn is_lower_alphanumeric(character: AsciiChar) -> bool {
+    match character {
+        ASCII_ZERO..=ASCII_NINE => true,
+        ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
+        _ => false,
+    }
+}
+
+#[inline]
+pub const fn is_upper_alphanumeric(character: AsciiChar) -> bool {
+    match character {
+        ASCII_ZERO..=ASCII_NINE => true,
+        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
+        _ => false,
+    }
+}
+
+#[inline]
 pub const fn is_control_char(character: AsciiChar) -> bool {
     match character {
         ASCII_NUL..=ASCII_UNIT_SEPARATOR => true,
@@ -616,42 +644,22 @@ impl AsciiString {
 
     #[inline]
     pub fn is_numeric(&self) -> bool {
-        self.string.len() != 0
-        && self.string.iter().all(|character| match character {
-            ASCII_ZERO..=ASCII_NINE => true,
-            _ => false,
-        })
+        (!self.string.is_empty()) && self.string.iter().all(|character| is_numeric(*character))
     }
 
     #[inline]
     pub fn is_alphanumeric(&self) -> bool {
-        self.string.len() != 0 
-        && self.string.iter().all(|character| match character {
-            ASCII_ZERO..=ASCII_NINE => true,
-            ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
-            ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
-            _ => false,
-        })
+        (!self.string.is_empty()) && self.string.iter().all(|character| is_alphanumeric(*character))
     }
 
     #[inline]
     pub fn is_lower_alphanumeric(&self) -> bool {
-        self.string.len() != 0
-        && self.string.iter().all(|character| match character {
-            ASCII_ZERO..=ASCII_NINE => true,
-            ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
-            _ => false,
-        })
+        (!self.string.is_empty()) && self.string.iter().all(|character| is_lower_alphanumeric(*character))
     }
 
     #[inline]
     pub fn is_upper_alphanumeric(&self) -> bool {
-        self.string.len() != 0
-        && self.string.iter().all(|character| match character {
-            ASCII_ZERO..=ASCII_NINE => true,
-            ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
-            _ => false,
-        })
+        (!self.string.is_empty()) && self.string.iter().all(|character| is_upper_alphanumeric(*character))
     }
 }
 

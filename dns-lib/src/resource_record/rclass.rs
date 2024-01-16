@@ -50,7 +50,7 @@ impl RClass {
     #[inline]
     pub fn mnemonic(&self) -> String {
         return match self {
-            Self::Unknown(code) => format!("CLASS{}", code),
+            Self::Unknown(code) => format!("CLASS{code}"),
 
             Self::Internet => "IN".to_string(),
             Self::CSNet =>    "CS".to_string(),

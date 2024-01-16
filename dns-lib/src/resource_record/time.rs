@@ -462,42 +462,35 @@ fn datetime_parse<'a, 'b>(token: &'a str) -> Result<TimeInt, DateTimeError> wher
         todo!("Error: cannot parse");
     }
 
-    let year = TimeInt::from_str_radix(&token[0..4], 10)?;
-    match year {
-        0 => return Err(DateTimeError::YearTooLarge(year)),
-        1..=9999 => (),
-        1000.. => return Err(DateTimeError::YearTooSmall(year)),
-    }
-    let month = TimeInt::from_str_radix(&token[4..6], 10)?;
-    match month {
-        0 => return Err(DateTimeError::MonthTooLarge(month)),
-        1..=12 => (),
-        13.. => return Err(DateTimeError::MonthTooSmall(month)),
-    }
-    let day = TimeInt::from_str_radix(&token[6..8], 10)?;
-    match day {
-        0 => return Err(DateTimeError::DayTooLarge(day)),
-        1..=31 => (),
-        32.. => return Err(DateTimeError::DayTooSmall(day)),
-    }
-    let hour = TimeInt::from_str_radix(&token[8..10], 10)?;
-    match hour {
-        0..=23 => (),
-        24.. => return Err(DateTimeError::HourTooLarge(hour)),
-    }
-    let minute = TimeInt::from_str_radix(&token[10..12], 10)?;
-    match minute {
-        0..=59 => (),
-        60.. => return Err(DateTimeError::MinuteTooLarge(minute)),
-    }
-    let second = TimeInt::from_str_radix(&token[12..14], 10)?;
-    match second {
-        0..=59 => (),
-        60.. => return Err(DateTimeError::SecondTooLarge(second)),
-    }
+    let year = match TimeInt::from_str_radix(&token[0..4], 10)? {
+        year @ 0 => return Err(DateTimeError::YearTooLarge(year)),
+        year @ 1..=9999 => year,
+        year @ 1000.. => return Err(DateTimeError::YearTooSmall(year)),
+    };
+    let month = match TimeInt::from_str_radix(&token[4..6], 10)? {
+        month @ 0 => return Err(DateTimeError::MonthTooLarge(month)),
+        month @ 1..=12 => month,
+        month @ 13.. => return Err(DateTimeError::MonthTooSmall(month)),
+    };
+    let day = match TimeInt::from_str_radix(&token[6..8], 10)? {
+        day @ 0 => return Err(DateTimeError::DayTooLarge(day)),
+        day @ 1..=31 => day,
+        day @ 32.. => return Err(DateTimeError::DayTooSmall(day)),
+    };
+    let hour = match TimeInt::from_str_radix(&token[8..10], 10)? {
+        hour @ 0..=23 => hour,
+        hour @ 24.. => return Err(DateTimeError::HourTooLarge(hour)),
+    };
+    let minute = match TimeInt::from_str_radix(&token[10..12], 10)? {
+        minute @ 0..=59 => minute,
+        minute @ 60.. => return Err(DateTimeError::MinuteTooLarge(minute)),
+    };
+    let second = match TimeInt::from_str_radix(&token[12..14], 10)? {
+        second @ 0..=59 => second,
+        second @ 60.. => return Err(DateTimeError::SecondTooLarge(second)),
+    };
 
-    let seconds = seconds_since_1970(year, month, day, hour, minute, second);
-    match seconds {
+    match seconds_since_1970(year, month, day, hour, minute, second) {
         Some(seconds) => Ok(seconds),
         None => Err(DateTimeError::IntegerOverflow),
     }

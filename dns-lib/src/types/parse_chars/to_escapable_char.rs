@@ -47,34 +47,30 @@ impl<T> Iterator for EscapedCharsIter<T> where T: Iterator<Item = AsciiChar> {
 impl<T> EscapedCharsIter<T> where T: Iterator<Item = AsciiChar> {
     #[inline]
     fn next_after_escape(&mut self) -> Option<EscapableChar> {
-        let character = self.chars.next();
-        match character {
-            Some(ASCII_ZERO..=ASCII_NINE) => Self::next_after_escaped_digit(self, character),
+        match self.chars.next() {
+            Some(digit @ ASCII_ZERO..=ASCII_NINE) => Self::next_after_escaped_digit(self, digit),
             Some(character) => Some(EscapableChar::Escaped(character)),
             None => panic!("Trailing escape character '\\' not followed by any characters"),
         }
     }
 
     #[inline]
-    fn next_after_escaped_digit(&mut self, first_char: Option<AsciiChar>) -> Option<EscapableChar> {
-        let second_char = self.chars.next();
-        let third_char = self.chars.next();
-        match (first_char, second_char, third_char) {
-            (Some(ASCII_ZERO..=ASCII_NINE), Some(ASCII_ZERO..=ASCII_NINE), Some(ASCII_ZERO..=ASCII_NINE)) => Some(EscapableChar::Escaped(octal_to_ascii(first_char?, second_char?, third_char?))),
+    fn next_after_escaped_digit(&mut self, first_char: AsciiChar) -> Option<EscapableChar> {
+        match (first_char, self.chars.next(), self.chars.next()) {
+            (ASCII_ZERO..=ASCII_NINE, Some(second_char @ ASCII_ZERO..=ASCII_NINE), Some(third_char @ ASCII_ZERO..=ASCII_NINE)) => Some(EscapableChar::Escaped(octal_to_ascii(first_char, second_char, third_char))),
 
-            (Some(_), Some(ASCII_ZERO..=ASCII_NINE), Some(ASCII_ZERO..=ASCII_NINE)) => panic!("The first escaped character is not a digit"),
-            (Some(ASCII_ZERO..=ASCII_NINE), Some(_), Some(ASCII_ZERO..=ASCII_NINE)) => panic!("The second escaped character is not a digit"),
-            (Some(ASCII_ZERO..=ASCII_NINE), Some(ASCII_ZERO..=ASCII_NINE), Some(_)) => panic!("The third escaped character is not a digit"),
+            (_, Some(ASCII_ZERO..=ASCII_NINE), Some(ASCII_ZERO..=ASCII_NINE)) => panic!("The first escaped character is not a digit"),
+            (ASCII_ZERO..=ASCII_NINE, Some(_), Some(ASCII_ZERO..=ASCII_NINE)) => panic!("The second escaped character is not a digit"),
+            (ASCII_ZERO..=ASCII_NINE, Some(ASCII_ZERO..=ASCII_NINE), Some(_)) => panic!("The third escaped character is not a digit"),
 
-            (Some(_), Some(_), Some(ASCII_ZERO..=ASCII_NINE)) => panic!("The first & second escaped characters are not digits"),
-            (Some(_), Some(ASCII_ZERO..=ASCII_NINE), Some(_)) => panic!("The first & third escaped characters are not digits"),
-            (Some(ASCII_ZERO..=ASCII_NINE), Some(_), Some(_)) => panic!("The second & third escaped characters are not digits"),
+            (_, Some(_), Some(ASCII_ZERO..=ASCII_NINE)) => panic!("The first & second escaped characters are not digits"),
+            (_, Some(ASCII_ZERO..=ASCII_NINE), Some(_)) => panic!("The first & third escaped characters are not digits"),
+            (ASCII_ZERO..=ASCII_NINE, Some(_), Some(_)) => panic!("The second & third escaped characters are not digits"),
 
-            (Some(_), Some(_), Some(_)) => panic!("None of the escaped characters are digits"),
+            (_, Some(_), Some(_)) => panic!("None of the escaped characters are digits"),
 
-            (None, _, _) => panic!("Trailing escape character '\\' not followed by any characters"),
-            (_, None, _) => panic!("There was only one escaped character but three were expected"),
-            (_, _, None) => panic!("There was only two escaped characters but three were expected"),
+            (_, None, _) => panic!("There was only one escaped character but three escaped digits were expected"),
+            (_, _, None) => panic!("There were only two escaped characters but three escaped digits were expected"),
         }
     }
 }
@@ -115,32 +111,29 @@ impl<T> EscapedCharsEnumerateIter<T> where T: Iterator<Item = (usize, AsciiChar)
     fn next_after_escape(&mut self) -> Option<(usize, EscapableChar)> {
         let character = self.chars.next();
         match character {
-            Some((_, ASCII_ZERO..=ASCII_NINE)) => Self::next_after_escaped_digit(self, character),
+            Some((_, digit @ ASCII_ZERO..=ASCII_NINE)) => Self::next_after_escaped_digit(self, digit),
             Some((index, character)) => Some((index, EscapableChar::Escaped(character))),
             None => panic!("Trailing escape character '\\' not followed by any characters"),
         }
     }
 
     #[inline]
-    fn next_after_escaped_digit(&mut self, first_char: Option<(usize, AsciiChar)>) -> Option<(usize, EscapableChar)> {
-        let second_char = self.chars.next();
-        let third_char = self.chars.next();
-        match (first_char, second_char, third_char) {
-            (Some((_, ASCII_ZERO..=ASCII_NINE)), Some((_, ASCII_ZERO..=ASCII_NINE)), Some((_, ASCII_ZERO..=ASCII_NINE))) => Some((third_char?.0, EscapableChar::Escaped(octal_to_ascii(first_char?.1, second_char?.1, third_char?.1)))),
+    fn next_after_escaped_digit(&mut self, first_char: AsciiChar) -> Option<(usize, EscapableChar)> {
+        match (first_char, self.chars.next(), self.chars.next()) {
+            (ASCII_ZERO..=ASCII_NINE, Some((_, second_char @ ASCII_ZERO..=ASCII_NINE)), Some((third_index, third_char @ ASCII_ZERO..=ASCII_NINE))) => Some((third_index, EscapableChar::Escaped(octal_to_ascii(first_char, second_char, third_char)))),
 
-            (Some(_), Some((_, ASCII_ZERO..=ASCII_NINE)), Some((_, ASCII_ZERO..=ASCII_NINE))) => panic!("The first escaped character is not a digit"),
-            (Some((_, ASCII_ZERO..=ASCII_NINE)), Some(_), Some((_, ASCII_ZERO..=ASCII_NINE))) => panic!("The second escaped character is not a digit"),
-            (Some((_, ASCII_ZERO..=ASCII_NINE)), Some((_, ASCII_ZERO..=ASCII_NINE)), Some(_)) => panic!("The third escaped character is not a digit"),
+            (_, Some((_, ASCII_ZERO..=ASCII_NINE)), Some((_, ASCII_ZERO..=ASCII_NINE))) => panic!("The first escaped character is not a digit"),
+            (ASCII_ZERO..=ASCII_NINE, Some(_), Some((_, ASCII_ZERO..=ASCII_NINE))) => panic!("The second escaped character is not a digit"),
+            (ASCII_ZERO..=ASCII_NINE, Some((_, ASCII_ZERO..=ASCII_NINE)), Some(_)) => panic!("The third escaped character is not a digit"),
 
-            (Some(_), Some(_), Some((_, ASCII_ZERO..=ASCII_NINE))) => panic!("The first & second escaped characters are not digits"),
-            (Some(_), Some((_, ASCII_ZERO..=ASCII_NINE)), Some(_)) => panic!("The first & third escaped characters are not digits"),
-            (Some((_, ASCII_ZERO..=ASCII_NINE)), Some(_), Some(_)) => panic!("The second & third escaped characters are not digits"),
+            (_, Some(_), Some((_, ASCII_ZERO..=ASCII_NINE))) => panic!("The first & second escaped characters are not digits"),
+            (_, Some((_, ASCII_ZERO..=ASCII_NINE)), Some(_)) => panic!("The first & third escaped characters are not digits"),
+            (ASCII_ZERO..=ASCII_NINE, Some(_), Some(_)) => panic!("The second & third escaped characters are not digits"),
 
-            (Some(_), Some(_), Some(_)) => panic!("None of the escaped characters are digits"),
+            (_, Some(_), Some(_)) => panic!("None of the escaped characters are digits"),
 
-            (None, _, _) => panic!("Trailing escape character '\\' not followed by any characters"),
-            (_, None, _) => panic!("There was only one escaped character but three were expected"),
-            (_, _, None) => panic!("There was only two escaped characters but three were expected"),
+            (_, None, _) => panic!("There was only one escaped character but three escaped digits were expected"),
+            (_, _, None) => panic!("There were only two escaped characters but three escaped digits were expected"),
         }
     }
 }

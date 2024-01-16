@@ -149,10 +149,9 @@ impl ToWire for Message {
 
         let ra = bool_to_u1(self.recursion_available);
         let z = self.z;
-        let rcode = self.rcode.code();
         let rcode = match self.rcode.code() {
-            0..=255 => u4::new(rcode as u8),
-            256.. => return Err(WriteWireError::OutOfBoundsError(format!("The Message RCode must be within the range 0 to 255 but it was {rcode}"))),
+            rcode @ 0..=255 => u4::new(rcode as u8),
+            rcode @ 256.. => return Err(WriteWireError::OutOfBoundsError(format!("The Message RCode must be within the range 0 to 255 but it was {rcode}"))),
         };
         (ra, z, rcode).to_wire_format(wire, compression)?;
 
