@@ -3,8 +3,8 @@ use regex::Regex;
 
 // Opening or closing parenthesis on their own are a text literal. However, if they are a part of a
 // larger non-quoted text literal, they should be pulled out as their own text literal.
-const CHARACTER_STR_UNQUOTED: &str = "\\A((([[:ascii:]&&[^ \\t;\\r\\n\"\\(\\)]]|(\\[^0-9]))+)|(\\()|(\\)))";
-const CHARACTER_STR_QUOTED: &str = "\\A(\"(([[:ascii:]&&[^\"]]|(\\[^0-9]))*)\")";
+const CHARACTER_STR_UNQUOTED: &str = "\\A((([[:ascii:]&&[^ \\t;\\r\\n\"\\(\\)\\\\]]|(\\\\[^0-9])|(\\\\[0-7]{3}))+)|(\\()|(\\)))";
+const CHARACTER_STR_QUOTED: &str = "\\A(\"(([[:ascii:]&&[^\"\\\\]]|(\\\\[^0-9])|(\\\\[0-7]{3}))*)\")";
 
 lazy_static! {
     pub static ref REGEX_CHARACTER_STR_UNQUOTED: Regex = Regex::new(CHARACTER_STR_UNQUOTED).unwrap();
