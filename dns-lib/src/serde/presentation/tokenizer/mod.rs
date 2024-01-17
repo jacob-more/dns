@@ -1,7 +1,7 @@
 mod regex;
 pub mod errors;
 
-mod text_tokens;
-mod entry_text_tokens;
-mod entry;
+mod raw_literals;
+mod raw_entries;
+mod token_entries;
 pub(crate) mod tokenizer;

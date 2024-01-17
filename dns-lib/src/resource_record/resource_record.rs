@@ -1249,7 +1249,7 @@ impl FromWire for ResourceRecord {
 }
 
 impl ResourceRecord {
-    pub fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecord<'a>) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    pub fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecordToken<'a>) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
         let rr_header = RRHeader {
             name: CDomainName::from_token_format(record.domain_name)?,
             rclass: RClass::from_token_format(record.rclass)?,

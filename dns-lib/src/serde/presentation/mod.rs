@@ -1,5 +1,5 @@
 pub mod tokenizer;
-pub mod read_resource_records;
+pub mod zone_file_reader;
 
 pub mod from_tokenized_rdata;
 pub mod from_presentation;
