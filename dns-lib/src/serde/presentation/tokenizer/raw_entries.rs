@@ -5,18 +5,18 @@ use super::{raw_literals::{RawLiteral, RawLiteralIter}, errors::TokenizerError};
 /// A version of [RawLiteral] that has fewer variants. This way, impossible states cannot be
 /// represented. This version only has [EntryRawLiteral::Text], [EntryRawLiteral::Origin], &
 /// [EntryRawLiteral::Separator].
-/// - [EntryRawLiteral::Text] is used to represent any string literal, quoted or unquoted. If
-///   quoted, the quotation marks are removed.
-/// - [EntryRawLiteral::Origin] is used to represent a token that needs to be replaced with the
-///   origin.
+/// - [EntryRawLiteral::Text] is used to represent any string literal that is unquoted.
+/// - [EntryRawLiteral::QuotedText] to represent any string literal that is quoted (quotation marks
+///   are removed).
 /// - [EntryRawLiteral::Separator] is used to represent a non-empty sequence of tab and/or space
 ///   characters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum EntryRawLiteral<'a> {
-    /// A set of ascii characters, including escaped characters, and octal sequences.
+    /// A sequence of ascii characters, including escaped characters, and octal sequences.
     Text(&'a str),
-    /// An @ sign from a non-quoted string, which will get replaced by the origin value
-    Origin,
+    /// A sequence of ascii characters, including escaped characters, and octal sequences. The sequence
+    /// does not have special meaning (e.g. '@' does not get read as the origin)
+    QuotedText(&'a str),
     /// Either a single newline character or a return carriage followed by a newline character.
     Separator(&'a str),
 }
@@ -25,7 +25,7 @@ impl<'a> Display for EntryRawLiteral<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Text(text) => write!(f, "Text: '{text}'"),
-            Self::Origin => write!(f, "Origin: '@'"),
+            Self::QuotedText(text) => write!(f, "QuotedText: '{text}'"),
             Self::Separator(text) => write!(f, "Separator: '{text}'"),
         }
     }
@@ -36,7 +36,7 @@ impl<'a> Into<&'a str> for EntryRawLiteral<'a> {
     fn into(self) -> &'a str {
         match &self {
             Self::Text(string) => string,
-            Self::Origin => "@",
+            Self::QuotedText(string) => string,
             Self::Separator(string) => string,
         }
     }
@@ -47,7 +47,7 @@ impl<'a> Into<&'a str> for &EntryRawLiteral<'a> {
     fn into(self) -> &'a str {
         match &self {
             EntryRawLiteral::Text(string) => string,
-            EntryRawLiteral::Origin => "@",
+            EntryRawLiteral::QuotedText(string) => string,
             EntryRawLiteral::Separator(string) => string,
         }
     }
@@ -103,13 +103,10 @@ impl<'a> Iterator for RawLiteralEntriesIter<'a> {
                 (Some(Ok(RawLiteral::Text(")"))), true) => ignore_new_line = false,
                 (Some(Ok(RawLiteral::Text(")"))), false) => return Some(Err(TokenizerError::UnopenedClosingParenthesis)),
 
-                // Loose, unquoted @, is an origin token
-                (Some(Ok(RawLiteral::Text("@"))), _) => tokens.push(EntryRawLiteral::Origin),
-
                 // Any text literals that are not a part of a comment should be included as part
                 // of the entry
                 (Some(Ok(RawLiteral::Text(token_str))), _) => tokens.push(EntryRawLiteral::Text(token_str)),
-                (Some(Ok(RawLiteral::QuotedText(token_str))), _) => tokens.push(EntryRawLiteral::Text(token_str)),
+                (Some(Ok(RawLiteral::QuotedText(token_str))), _) => tokens.push(EntryRawLiteral::QuotedText(token_str)),
 
                 // Comments have no meaning
                 (Some(Ok(RawLiteral::Comment(_))), _) => (),

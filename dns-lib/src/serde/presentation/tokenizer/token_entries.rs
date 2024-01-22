@@ -59,6 +59,7 @@ impl<'a> Display for Entry<'a> {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum StringLiteral<'a> {
     Raw(&'a str),
+    Quoted(&'a str),
     Origin,
 }
 
@@ -66,6 +67,7 @@ impl<'a> Display for StringLiteral<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StringLiteral::Raw(string) => write!(f, "{string}"),
+            StringLiteral::Quoted(string) => write!(f, "{string}"),
             StringLiteral::Origin => write!(f, "@"),
         }
     }
@@ -102,27 +104,34 @@ impl<'a> Iterator for EntryIter<'a> {
                 &[] => continue,    //< Skip entries that are empty
     
                 // $ORIGIN <domain-name> [<comment>]
+                &[EntryRawLiteral::Text("$ORIGIN"), EntryRawLiteral::Text("@")] => return Some(Ok(
+                    Entry::Origin{ origin: StringLiteral::Origin }
+                )),
                 &[EntryRawLiteral::Text("$ORIGIN"), EntryRawLiteral::Text(domain_name)] => return Some(Ok(
                     Entry::Origin{ origin: StringLiteral::Raw(domain_name) }
                 )),
-                &[EntryRawLiteral::Text("$ORIGIN"), EntryRawLiteral::Origin] => return Some(Ok(
-                    Entry::Origin{ origin: StringLiteral::Origin }
+                &[EntryRawLiteral::Text("$ORIGIN"), EntryRawLiteral::QuotedText(domain_name)] => return Some(Ok(
+                    Entry::Origin{ origin: StringLiteral::Quoted(domain_name) }
                 )),
     
                 // $INCLUDE <file-name> [<domain-name>] [<comment>]
                 &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name)] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: None }
                 )),
-                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name), EntryRawLiteral::Text(domain_name)] => return Some(Ok(
+                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name) | EntryRawLiteral::QuotedText(file_name), EntryRawLiteral::Text("@")] => return Some(Ok(
+                    Entry::Include{ file_name, domain_name: Some(StringLiteral::Origin) }
+                )),
+                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name) | EntryRawLiteral::QuotedText(file_name), EntryRawLiteral::Text(domain_name)] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: Some(StringLiteral::Raw(domain_name)) }
                 )),
-                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name), EntryRawLiteral::Origin] => return Some(Ok(
-                    Entry::Include{ file_name, domain_name: Some(StringLiteral::Origin) }
+                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name) | EntryRawLiteral::QuotedText(file_name), EntryRawLiteral::QuotedText(domain_name)] => return Some(Ok(
+                    Entry::Include{ file_name, domain_name: Some(StringLiteral::Quoted(domain_name)) }
                 )),
 
                 // <domain-name> [<TTL>] [<class>] <type> <RDATA> [<comment>]
+                &[EntryRawLiteral::Text("@"), ..] => return Some(Self::parse_rr(Some(StringLiteral::Origin), &entry_tokens.entry_raw_literals[1..])),
                 &[EntryRawLiteral::Text(domain_name), ..] => return Some(Self::parse_rr(Some(StringLiteral::Raw(domain_name)), &entry_tokens.entry_raw_literals[1..])),
-                &[EntryRawLiteral::Origin, ..] => return Some(Self::parse_rr(Some(StringLiteral::Origin), &entry_tokens.entry_raw_literals[1..])),
+                &[EntryRawLiteral::QuotedText(domain_name), ..] => return Some(Self::parse_rr(Some(StringLiteral::Quoted(domain_name)), &entry_tokens.entry_raw_literals[1..])),
                 // <blank> [<TTL>] [<class>] <type> <RDATA> [<comment>]
                 &[EntryRawLiteral::Separator(_), ..] => return Some(Self::parse_rr(None, &entry_tokens.entry_raw_literals[1..])),
             }
@@ -139,8 +148,9 @@ impl<'a> EntryIter<'a> {
             rclass,
             rtype,
             rdata: rdata.map(|token| match token {
+                EntryRawLiteral::Text("@") => StringLiteral::Origin,
                 EntryRawLiteral::Text(string) => StringLiteral::Raw(string),
-                EntryRawLiteral::Origin => StringLiteral::Origin,
+                EntryRawLiteral::QuotedText(string) => StringLiteral::Quoted(string),
                 EntryRawLiteral::Separator(string) => StringLiteral::Raw(string),
             }).collect(),
         }

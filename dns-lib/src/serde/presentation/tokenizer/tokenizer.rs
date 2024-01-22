@@ -90,6 +90,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 // Replace any free-standing `@` with the domain name defined by the $ORIGIN token
                 Some(Ok(Entry::Origin{origin})) => match (origin, self.origin) {
                     (StringLiteral::Raw(origin), _) => self.origin = Some(origin),
+                    (StringLiteral::Quoted(origin), _) => self.origin = Some(origin),
                     (StringLiteral::Origin, Some(_)) => (),  //< Origin remains unchanged
                     (StringLiteral::Origin, None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
                 },
@@ -97,6 +98,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     // Replace any free-standing `@` with the domain name defined by the $ORIGIN token
                     let domain_name = match (domain_name, self.origin) {
                         (Some(StringLiteral::Raw(domain_name)), _) => Some(domain_name),
+                        (Some(StringLiteral::Quoted(domain_name)), _) => Some(domain_name),
                         (Some(StringLiteral::Origin), Some(origin)) => Some(origin),
                         (Some(StringLiteral::Origin), None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
                         // The included file inherits the parent file's origin if one is not given
@@ -110,6 +112,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     // Replace any free-standing `@` with the domain name defined by the $ORIGIN token
                     let domain_name = match (domain_name, self.origin) {
                         (Some(StringLiteral::Raw(domain_name)), _) => Some(domain_name),
+                        (Some(StringLiteral::Quoted(domain_name)), _) => Some(domain_name),
                         (Some(StringLiteral::Origin), Some(origin)) => Some(origin),
                         (Some(StringLiteral::Origin), None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
                         (None, _) => None,
@@ -119,6 +122,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                     for rdata in rdata.iter() {
                         match (rdata, self.origin) {
                             (StringLiteral::Raw(literal), _) => raw_rdata.push(*literal),
+                            (StringLiteral::Quoted(literal), _) => raw_rdata.push(*literal),
                             (StringLiteral::Origin, Some(origin)) => raw_rdata.push(origin),
                             (StringLiteral::Origin, None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
                         }
