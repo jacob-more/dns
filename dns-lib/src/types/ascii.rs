@@ -1,10 +1,8 @@
 use std::{fmt::{Display, Debug}, slice::{Iter, IterMut}, iter::Rev, error::Error, ops::Add};
 
-use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}};
+use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation, parse_chars::non_escaped_to_escaped::NonEscapedIntoEscapedIter}};
 
 use self::constants::*;
-
-use super::parse_chars::to_escaped_char::EscapedCharsIter;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum AsciiError {
@@ -436,8 +434,8 @@ pub struct AsciiString {
 impl Display for AsciiString {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for character in EscapedCharsIter::from(self.string.iter().map(|character| *character)) {
-            write!(f, "{}", character)?;
+        for character in NonEscapedIntoEscapedIter::from(self.string.iter().map(|character| *character)) {
+            write!(f, "{character}")?;
         }
         Ok(())
     }
@@ -445,7 +443,7 @@ impl Display for AsciiString {
 
 impl Debug for AsciiString {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "AsciiString(\"{}\")", self)
+        write!(f, "AsciiString(\"{self}\")")
     }
 }
 

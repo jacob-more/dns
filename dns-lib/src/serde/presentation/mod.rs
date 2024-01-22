@@ -1,5 +1,6 @@
 pub mod tokenizer;
 pub mod zone_file_reader;
+pub(crate) mod parse_chars;
 
 pub mod from_tokenized_rdata;
 pub mod from_presentation;

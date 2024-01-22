@@ -1,8 +1,6 @@
 use std::{fmt::{Display, Debug}, error::Error, ops::Add};
 
-use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}}};
-
-use super::{parse_chars::{to_escapable_char, to_escaped_char::{EscapedChar, self}}, ascii::AsciiChar};
+use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation, parse_chars::{escaped_to_escapable::{EscapedToEscapableIter, EscapedCharsEnumerateIter, ParseError}, non_escaped_to_escaped::{self}, char_token::EscapableChar}}}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
@@ -17,6 +15,7 @@ pub enum CDomainNameError {
     InvalidPointer,
     BadRData,
     AsciiError(AsciiError),
+    ParseError(ParseError)
 }
 
 impl Error for CDomainNameError {}
@@ -33,7 +32,8 @@ impl Display for CDomainNameError {
             Self::ForwardPointers => write!(f, "Forward Pointer: domain name pointers can only point backwards. Cannot point forward in the buffer"),
             Self::InvalidPointer =>  write!(f, "Invalid Pointer: domain name pointer cannot use the first two bits. These are reserved"),
             Self::BadRData =>        write!(f, "Bad RData."),
-            Self::AsciiError(error) => write!(f, "{}", error),
+            Self::AsciiError(error) => write!(f, "{error}"),
+            Self::ParseError(error) => write!(f, "{error}"),
         }
     }
 }
@@ -56,18 +56,23 @@ impl Label {
 
     #[inline]
     pub fn new(string: &AsciiString) -> Result<Self, CDomainNameError> {
-        let string = to_escapable_char::EscapedCharsIter::from(string.iter().map(|character| *character))
-            .map(|character| match character {
-                to_escapable_char::EscapableChar::Regular(character) => character,
-                to_escapable_char::EscapableChar::Escaped(character) => character,
-            }).collect::<Vec<AsciiChar>>();
+        let mut ascii = Vec::with_capacity(string.len());
+        for character in EscapedToEscapableIter::from(string.iter().map(|character| *character)) {
+            match character {
+                Ok(EscapableChar::Ascii(character)) => ascii.push(character),
+                Ok(EscapableChar::EscapedAscii(character)) => ascii.push(character),
+                Ok(EscapableChar::EscapedOctal(character)) => ascii.push(character),
+                Err(error) => return Err(CDomainNameError::ParseError(error)),
+            }
+        }
 
         // +1 for the byte length of the string.
-        if string.len() + 1 > Self::MAX_OCTETS {
+        if ascii.len() + 1 > Self::MAX_OCTETS {
             return Err(CDomainNameError::LongLabel);
         }
 
-        Ok(Self { ascii: AsciiString::from(&string) })
+        ascii.shrink_to_fit();
+        Ok(Self { ascii: AsciiString::from(&ascii) })
     }
 
     #[inline]
@@ -104,11 +109,11 @@ impl Label {
     }
 
     #[inline]
-    fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = to_escaped_char::EscapableChar> + 'a {
-        to_escaped_char::EscapedCharsIter::from(self.ascii.iter().map(|character| *character))
+    fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
+        non_escaped_to_escaped::NonEscapedIntoEscapedIter::from(self.ascii.iter().map(|character| *character))
             .map(|character| match character {
-                to_escaped_char::EscapableChar::Regular(ASCII_PERIOD) => to_escaped_char::EscapableChar::Escaped(EscapedChar::EscapedAscii(ASCII_PERIOD)),
-                to_escaped_char::EscapableChar::Regular(character) => to_escaped_char::EscapableChar::Regular(character),
+                EscapableChar::Ascii(ASCII_PERIOD) => EscapableChar::EscapedAscii(ASCII_PERIOD),
+                EscapableChar::Ascii(character) => EscapableChar::Ascii(character),
                 _ => character,
             })
     }
@@ -240,15 +245,15 @@ impl CDomainName {
         let mut label_start = 0;
         let mut was_dot = false;
         let mut serial_length: u16 = 0;
-        for (index, character) in to_escapable_char::EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate()) {
-            match (character, index, string.len(), was_dot) {
+        for escaped_char_result in EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate()) {
+            match (escaped_char_result, string.len(), was_dot) {
                 // leading dots are not legal except for the root zone
-                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 0, 1, _) => labels.push(Label::ROOT_LABEL),
-                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 0, 2.., _) => return Err(CDomainNameError::LeadingDot),
+                (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), 1, _) => labels.push(Label::ROOT_LABEL),
+                (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), 2.., _) => return Err(CDomainNameError::LeadingDot),
                 // consecutive dots are never legal
-                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 1.., _, true) => return Err(CDomainNameError::ConsecutiveDots),
+                (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), _, true) => return Err(CDomainNameError::ConsecutiveDots),
                 // a label is found
-                (to_escapable_char::EscapableChar::Regular(ASCII_PERIOD), 1.., string_len, false) => {
+                (Ok((index @ 1.., EscapableChar::Ascii(ASCII_PERIOD))), string_len, false) => {
                     let label = Label::new(&string.from_range(label_start, index))?;
                     serial_length += label.serial_length();
 
@@ -272,7 +277,7 @@ impl CDomainName {
                         labels.push(label);
                     }
                 },
-                (_, index, string_len, _) => {
+                (Ok((index, _)), string_len, _) => {
                     // If this is the last character in the buffer, then this is also the end of the
                     // label.
                     if index == string_len-1 {
@@ -287,6 +292,7 @@ impl CDomainName {
                     }
                     was_dot = false;
                 },
+                (Err(error), _, _) => return Err(CDomainNameError::ParseError(error)),
             }
         }
 
