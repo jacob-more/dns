@@ -57,6 +57,11 @@ pub struct Tokenizer<'a> {
     last_domain_name: Option<&'a str>,
     last_ttl: Option<&'a str>,
     last_rclass: Option<&'a str>,
+
+    /// A TTL specified by the last $TTL directive. This takes precedence over "last_ttl"
+    ttl_directive: Option<&'a str>,
+    /// An RCLASS specified by the last $RCLASS directive. This takes precedence over "last_rclass"
+    rclass_directive: Option<&'a str>,
     /// The most recent domain name associated with a $ORIGIN token. Free standing `@` is replaced
     /// by the iterator. However, relative domain names are not updated by the iterator and may need
     /// to be updated by the user.
@@ -71,9 +76,35 @@ impl<'a> Tokenizer<'a> {
             last_domain_name: DEFAULT_DOMAIN_NAME,
             last_ttl: DEFAULT_TTL,
             last_rclass: DEFAULT_CLASS,
+
+            rclass_directive: None,
+            ttl_directive: None,
             origin: None,
             entry_iter: EntryIter::new(feed),
         }
+    }
+
+    #[inline]
+    fn default_ttl(&self) -> Option<&'a str> {
+        match (self.ttl_directive, self.last_ttl) {
+            (Some(ttl_directive), _) => Some(ttl_directive),
+            (None, Some(last_ttl)) => Some(last_ttl),
+            (None, None) => None,
+        }
+    }
+
+    #[inline]
+    fn default_rclass(&self) -> Option<&'a str> {
+        match (self.rclass_directive, self.last_rclass) {
+            (Some(rclass_directive), _) => Some(rclass_directive),
+            (None, Some(last_rclass)) => Some(last_rclass),
+            (None, None) => None,
+        }
+    }
+
+    #[inline]
+    fn default_domain_name(&self) -> Option<&'a str> {
+        self.last_domain_name
     }
 }
 
@@ -93,6 +124,12 @@ impl<'a> Iterator for Tokenizer<'a> {
                     (StringLiteral::Quoted(origin), _) => self.origin = Some(origin),
                     (StringLiteral::Origin, Some(_)) => (),  //< Origin remains unchanged
                     (StringLiteral::Origin, None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
+                },
+                Some(Ok(Entry::TTL{ttl})) => {
+                    self.ttl_directive = Some(ttl)
+                },
+                Some(Ok(Entry::RClass{rclass})) => {
+                    self.rclass_directive = Some(rclass)
                 },
                 Some(Ok(Entry::Include{ file_name, domain_name })) => {
                     // Replace any free-standing `@` with the domain name defined by the $ORIGIN token
@@ -131,34 +168,34 @@ impl<'a> Iterator for Tokenizer<'a> {
 
                     // Fill in any blank domain names. If one is already defined, record it as being
                     // the last known domain name.
-                    let domain_name = match (domain_name, self.last_domain_name) {
+                    let domain_name = match (domain_name, self.default_domain_name()) {
                         (Some(this_domain_name), _) => {
                             self.last_domain_name = Some(this_domain_name);
                             this_domain_name
                         },
-                        (None, Some(last_domain_name)) => last_domain_name,
+                        (None, Some(default_domain_name)) => default_domain_name,
                         (None, None) => return Some(Err(TokenizerError::BlankDomainUsedBeforeDefined)),
                     };
 
                     // Fill in any blank ttl's. If one is already defined, record it as being
                     // the last known ttl.
-                    let ttl = match (ttl, self.last_ttl) {
+                    let ttl = match (ttl, self.default_ttl()) {
                         (Some(this_ttl), _) => {
                             self.last_ttl = Some(this_ttl);
                             this_ttl
                         },
-                        (None, Some(last_ttl)) => last_ttl,
+                        (None, Some(default_ttl)) => default_ttl,
                         (None, None) => return Some(Err(TokenizerError::BlankTTLUsedBeforeDefined)),
                     };
 
                     // Fill in any blank classes. If one is already defined, record it as being
                     // the last known class.
-                    let rclass = match (rclass, self.last_rclass) {
+                    let rclass = match (rclass, self.default_rclass()) {
                         (Some(this_rclass), _) => {
                             self.last_rclass = Some(this_rclass);
                             this_rclass
                         },
-                        (None, Some(last_rclass)) => last_rclass,
+                        (None, Some(default_rclass)) => default_rclass,
                         (None, None) => return Some(Err(TokenizerError::BlankClassUsedBeforeDefined)),
                     };
 

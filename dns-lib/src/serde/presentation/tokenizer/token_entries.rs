@@ -9,6 +9,12 @@ pub enum Entry<'a> {
     /// parsing (unless changed by another Origin entry). The `origin` value should be a fully
     /// qualified domain name.
     Origin{origin: StringLiteral<'a>},
+    /// Using the "$TTL" string, sets the ttl that will be used from this point forwards while
+    /// parsing (unless changed by another TTL entry).
+    TTL{ttl: &'a str},
+    /// Using the "$RCLASS" string, sets the rclass that will be used from this point forwards while
+    /// parsing (unless changed by another RCLASS entry).
+    RClass{rclass: &'a str},
     /// Indicates that another file should be read in at this point. The optional `domain_name` sets
     /// the initial origin when reading that file but does not affect the current origin in this
     /// file.
@@ -25,6 +31,14 @@ impl<'a> Display for Entry<'a> {
             Entry::Origin{origin} => {
                 writeln!(f, "Origin")?;
                 writeln!(f, "\tDomain Name: {origin}")
+            },
+            Entry::TTL{ttl} => {
+                writeln!(f, "TTL")?;
+                writeln!(f, "\tTTL: {ttl}")
+            },
+            Entry::RClass{rclass} => {
+                writeln!(f, "RCLASS")?;
+                writeln!(f, "\tClass: {rclass}")
             },
             Entry::Include{file_name, domain_name} => {
                 writeln!(f, "Include")?;
@@ -112,6 +126,16 @@ impl<'a> Iterator for EntryIter<'a> {
                 )),
                 &[EntryRawLiteral::Text("$ORIGIN"), EntryRawLiteral::QuotedText(domain_name)] => return Some(Ok(
                     Entry::Origin{ origin: StringLiteral::Quoted(domain_name) }
+                )),
+
+                // $TTL <ttl> [<comment>]
+                &[EntryRawLiteral::Text("$TTL"), EntryRawLiteral::Text(ttl_str) | EntryRawLiteral::QuotedText(ttl_str)] => return Some(Ok(
+                    Entry::TTL { ttl: ttl_str }
+                )),
+
+                // $RCLASS <rclass> [<comment>]
+                &[EntryRawLiteral::Text("$RCLASS"), EntryRawLiteral::Text(rclass_str) | EntryRawLiteral::QuotedText(rclass_str)] => return Some(Ok(
+                    Entry::RClass { rclass: rclass_str }
                 )),
     
                 // $INCLUDE <file-name> [<domain-name>] [<comment>]
