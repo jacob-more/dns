@@ -160,7 +160,7 @@ impl FromWire for RTypeBitmap {
 
 #[cfg(test)]
 mod circular_sanity_tests {
-    use crate::{resource_record::rtype::RType, serde::wire::circular_test::gen_test_circular_serde_sanity_test};
+    use crate::{resource_record::rtype::RType, serde::wire::{circular_test::gen_test_circular_serde_sanity_test, to_wire::ToWire, write_wire::WriteWire}};
     use super::{RTypeBitmap, WindowBlock};
 
     macro_rules! circular_sanity_test {
@@ -213,4 +213,33 @@ mod circular_sanity_tests {
     circular_sanity_test!(test_11_rtypes_from_to_collection, test_11_rtypes_wire, vec![RType::A, RType::NS, RType::MF, RType::CNAME, RType::SOA, RType::MB, RType::MG, RType::MR, RType::NULL, RType::WKS, RType::PTR, RType::DLV]);
     circular_sanity_test!(test_12_rtypes_from_to_collection, test_12_rtypes_wire, vec![RType::A, RType::NS, RType::MF, RType::CNAME, RType::SOA, RType::MB, RType::MG, RType::MR, RType::NULL, RType::WKS, RType::PTR, RType::HINFO]);
     circular_sanity_test!(test_12_rtypes_2_repeats_from_to_collection, test_12_rtypes_2_repeats_wire, vec![RType::SOA, RType::NS, RType::MF, RType::CNAME, RType::SOA, RType::MB, RType::MG, RType::MR, RType::WKS, RType::WKS, RType::PTR, RType::HINFO]);
+
+    /// Verify correct format from the example in RFC 3845: https://datatracker.ietf.org/doc/html/rfc3845#section-2.3
+    #[test]
+    fn rfc3845_example_test() {
+        let init_rtypes = vec![RType::A, RType::MX, RType::RRSIG, RType::NSEC, RType::Unknown(1234)];
+        let bitmap = RTypeBitmap::from_rtypes(init_rtypes.clone().into_iter());
+        let expected_wire_format: Vec<u8> = vec![
+            0x00, 0x06, 0x40, 0x01, 0x00, 0x00, 0x00, 0x03,
+            0x04, 0x1b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x20,
+        ];
+
+        let write_wire = &mut [0_u8; u16::MAX as usize];
+        let write_wire = &mut WriteWire::from_bytes(write_wire);
+        let compression = &mut None;
+        let output = bitmap.to_wire_format(write_wire, compression);
+
+        assert!(output.is_ok());
+        assert_eq!(expected_wire_format.as_slice(), write_wire.current_state());
+        assert_eq!(init_rtypes.len(), bitmap.rtype_count());
+        for rtype in &init_rtypes {
+            assert!(bitmap.has_rtype(rtype))
+        }
+        for rtype in bitmap.to_rtypes() {
+            assert!(init_rtypes.contains(&rtype));
+        }
+    }
 }
