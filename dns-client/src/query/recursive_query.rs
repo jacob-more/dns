@@ -57,13 +57,12 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
                     return QueryResponse::Records(response_records);
                 }
 
-                if index == 0 && response_records.iter().any(|record| record.rtype() == RType::CNAME) {
-                    for record in response_records {
+                if index == 0 {
+                    for record in &response_records {
                         if let ResourceRecord::CNAME(_, cname_rdata) = record {
                             return recursive_query(client, joined_cache, &question.with_new_qname(cname_rdata.primary_name().clone())).await;
                         }
                     }
-                    panic!("A CNAME was guaranteed to be one of the records but one was not found upon a second iteration");
                 }
 
                 // TODO: Handle DNAME; similar to CNAME
@@ -85,13 +84,10 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         QueryResponse::Error(error) => return QueryResponse::Error(error),
         QueryResponse::NoRecords => (),
         QueryResponse::Records(response_records) => {
-            if response_records.iter().any(|record| record.rtype() == RType::CNAME) {
-                for record in response_records {
-                    if let ResourceRecord::CNAME(_, cname_rdata) = record {
-                        return recursive_query(client, joined_cache, &question.with_new_qname(cname_rdata.primary_name().clone())).await;
-                    }
+            for record in &response_records {
+                if let ResourceRecord::CNAME(_, cname_rdata) = record {
+                    return recursive_query(client, joined_cache, &question.with_new_qname(cname_rdata.primary_name().clone())).await;
                 }
-                panic!("A CNAME was guaranteed to be one of the records but one was not found upon a second iteration");
             }
 
             // TODO: Add exception for DNAME, similar to CNAME
@@ -105,13 +101,10 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         QueryResponse::Error(error) => return QueryResponse::Error(error),
         QueryResponse::NoRecords => (),
         QueryResponse::Records(response_records) => {
-            if response_records.iter().any(|record| record.rtype() == RType::CNAME) {
-                for record in response_records {
-                    if let ResourceRecord::CNAME(_, cname_rdata) = record {
-                        return recursive_query(client, joined_cache, &question.with_new_qname(cname_rdata.primary_name().clone())).await;
-                    }
+            for record in &response_records {
+                if let ResourceRecord::CNAME(_, cname_rdata) = record {
+                    return recursive_query(client, joined_cache, &question.with_new_qname(cname_rdata.primary_name().clone())).await;
                 }
-                panic!("A CNAME was guaranteed to be one of the records but one was not found upon a second iteration");
             }
 
             // TODO: Add exception for DNAME, similar to CNAME
