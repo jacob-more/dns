@@ -254,8 +254,8 @@ impl Base64 {
                 &[_, PADDING_CHAR, _, _] => return Err(Base64Error::Overflow),
                 // 3rd character can only be padding if 4th is as well
                 &[char1, char2, PADDING_CHAR, PADDING_CHAR] => {
-                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b00000000_111111_000000_000000_000000;
-                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b00000000_000000_110000_000000_000000;
+                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b111111_000000_000000_000000;
+                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b000000_110000_000000_000000;
                     let merged_bytes = bits0_5 | bits6_11;
 
                     let [_, byte1, _, _] = u32::to_be_bytes(merged_bytes);
@@ -266,9 +266,9 @@ impl Base64 {
                 &[_, _, PADDING_CHAR, _] => return Err(Base64Error::Overflow),
                 // 4th character can be padding
                 &[char1, char2, char3, PADDING_CHAR] => {
-                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b00000000_111111_000000_000000_000000;
-                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b00000000_000000_111111_000000_000000;
-                    let bits12_15 = (u32::from(base64_to_u6(char3)?) << 6)  & 0b00000000_000000_000000_111100_000000;
+                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b111111_000000_000000_000000;
+                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b000000_111111_000000_000000;
+                    let bits12_15 = (u32::from(base64_to_u6(char3)?) << 6)  & 0b000000_000000_111100_000000;
                     let merged_bytes = bits0_5 | bits6_11 | bits12_15;
 
                     let [_, byte1, byte2, _] = u32::to_be_bytes(merged_bytes);
@@ -276,10 +276,10 @@ impl Base64 {
                     break;
                 },
                 &[char1, char2, char3, char4] => {
-                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b00000000_111111_000000_000000_000000;
-                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b00000000_000000_111111_000000_000000;
-                    let bits12_17 = (u32::from(base64_to_u6(char3)?) << 6)  & 0b00000000_000000_000000_111111_000000;
-                    let bits18_23 = (u32::from(base64_to_u6(char4)?) << 0)  & 0b00000000_000000_000000_000000_111111;
+                    let bits0_5   = (u32::from(base64_to_u6(char1)?) << 18) & 0b111111_000000_000000_000000;
+                    let bits6_11  = (u32::from(base64_to_u6(char2)?) << 12) & 0b000000_111111_000000_000000;
+                    let bits12_17 = (u32::from(base64_to_u6(char3)?) << 6)  & 0b000000_000000_111111_000000;
+                    let bits18_23 = (u32::from(base64_to_u6(char4)?) << 0)  & 0b000000_000000_000000_111111;
                     let merged_bytes = bits0_5 | bits6_11 | bits12_17 | bits18_23;
 
                     let [_, byte1, byte2, byte3] = u32::to_be_bytes(merged_bytes);
@@ -301,10 +301,10 @@ impl Base64 {
         byte_chunks.for_each(|chunk| {
             let merged_bytes = u32::from_be_bytes([0, chunk[0], chunk[1], chunk[2]]);
 
-            let bits0_5   = ((merged_bytes & 0b00000000_111111_000000_000000_000000) >> 18) as u8;
-            let bits6_11  = ((merged_bytes & 0b00000000_000000_111111_000000_000000) >> 12) as u8;
-            let bits12_17 = ((merged_bytes & 0b00000000_000000_000000_111111_000000) >> 6) as u8;
-            let bits18_23 = ((merged_bytes & 0b00000000_000000_000000_000000_111111) >> 0) as u8;
+            let bits0_5   = ((merged_bytes & 0b111111_000000_000000_000000) >> 18) as u8;
+            let bits6_11  = ((merged_bytes & 0b000000_111111_000000_000000) >> 12) as u8;
+            let bits12_17 = ((merged_bytes & 0b000000_000000_111111_000000) >> 6) as u8;
+            let bits18_23 = ((merged_bytes & 0b000000_000000_000000_111111) >> 0) as u8;
 
             decoded_chars.extend([
                 u6_to_base64(u6::new(bits0_5)),
@@ -319,8 +319,8 @@ impl Base64 {
             1 => {
                 let merged_bytes = u32::from_be_bytes([0, remainder[0], 0, 0]);
 
-                let bits0_5 = ((merged_bytes & 0b00000000_111111_000000_000000_000000) >> 18) as u8;
-                let bits6_7 = ((merged_bytes & 0b00000000_000000_110000_000000_000000) >> 12) as u8;
+                let bits0_5 = ((merged_bytes & 0b111111_000000_000000_000000) >> 18) as u8;
+                let bits6_7 = ((merged_bytes & 0b000000_110000_000000_000000) >> 12) as u8;
 
                 decoded_chars.extend([
                     u6_to_base64(u6::new(bits0_5)),
@@ -332,9 +332,9 @@ impl Base64 {
             2 => {
                 let merged_bytes = u32::from_be_bytes([0, remainder[0], remainder[1], 0]);
 
-                let bits0_5   = ((merged_bytes & 0b00000000_111111_000000_000000_000000) >> 18) as u8;
-                let bits6_11  = ((merged_bytes & 0b00000000_000000_111111_000000_000000) >> 12) as u8;
-                let bits12_15 = ((merged_bytes & 0b00000000_000000_000000_111100_000000) >> 6) as u8;
+                let bits0_5   = ((merged_bytes & 0b111111_000000_000000_000000) >> 18) as u8;
+                let bits6_11  = ((merged_bytes & 0b000000_111111_000000_000000) >> 12) as u8;
+                let bits12_15 = ((merged_bytes & 0b000000_000000_111100_000000) >> 6) as u8;
 
                 decoded_chars.extend([
                     u6_to_base64(u6::new(bits0_5)),
