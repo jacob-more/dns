@@ -9,4 +9,4 @@ pub mod extended_base32;
 pub mod base64;
 
 pub mod base_conversions;
-mod rtype_bitmap;
+pub mod rtype_bitmap;
