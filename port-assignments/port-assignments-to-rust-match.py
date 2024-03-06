@@ -5,7 +5,10 @@
 # script, redirect the output from the script "get-port-assignments.sh" into this file and direct
 # the output into a Rust file.
 
-import sys;
+import sys
+from typing import Optional, Tuple;
+from defusedxml.ElementTree import parse
+
 
 class Service:
     def __init__(self, name, protocol, port) -> None:
@@ -17,17 +20,51 @@ class Service:
         self.ports.add(port)
 
 
+def parse_record(record) -> Optional[Tuple[str, str, str]]:
+    name = record.find("{http://www.iana.org/assignments}name")
+    if (name is None) or (name.text is None):
+        return None
+    protocol = record.find("{http://www.iana.org/assignments}protocol")
+    if (protocol is None) or (protocol.text is None):
+        return None
+    port = record.find("{http://www.iana.org/assignments}number")
+    if (port is None) or (port.text is None):
+        return None
+    return name.text.lower(), protocol.text.lower(), port.text.lower()
+
+
 if __name__ == "__main__":
     # From stdin, read and parse out all the services and their associated ports/protocols
     services = dict()
-    for input_line in sys.stdin.readlines():
-        (service, port, protocol) = input_line.strip().split(',', maxsplit=2)
-        service = service.lower()
-        protocol = protocol.lower()
-        if (service, protocol) in services:
-            services[(service, protocol)].add_port(port)
+    xml_file = open("./port-assignments")
+    element_tree = parse(xml_file, forbid_dtd=True, forbid_entities=True, forbid_external=True)
+    for child in element_tree.getroot():
+        if child.tag != "{http://www.iana.org/assignments}record":
+            continue
+        data = parse_record(child)
+        if data is None:
+            continue
+        (service, protocol, port) = data
+        # Case 1: The port is given as a range.
+        if len(port.split("-")) != 1:
+            lower, upper = port.split("-")
+            lower = int(lower)
+            upper = int(upper)
+            for port in range(lower, upper + 1):
+                if (service, protocol) in services:
+                    services[(service, protocol)].add_port(str(port))
+                else:
+                    services[(service, protocol)] = Service(service, protocol, str(port))
+        # Case 2: The port is given as a number
         else:
-            services[(service, protocol)] = Service(service, protocol, port)
+            if (service, protocol) in services:
+                services[(service, protocol)].add_port(port)
+            else:
+                services[(service, protocol)] = Service(service, protocol, port)
+
+    # Quickly go back through and sort the order that ports are listed.
+    for service in services.values():
+        service.ports = sorted(list(service.ports))
 
     # Once everything has been read in, output the same data, but grouped:
     # {service,protocol,port,port,...,port} etc. There will be one line in the file per

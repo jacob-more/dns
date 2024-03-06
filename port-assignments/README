@@ -1,5 +1,5 @@
 These scripts are intended to help generate the match statement that is used to figure out which
-ports are associated with which services. As of the time of writing, the file is around 7,200 lines
+ports are associated with which services. As of the time of writing, the file is around 11,600 lines
 long so it is much easier to generate using the scripts. To generate an updated match statement,
 run:
 ```sh
