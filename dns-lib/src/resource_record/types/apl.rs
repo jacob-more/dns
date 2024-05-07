@@ -1,4 +1,4 @@
-use std::{net::{Ipv4Addr, Ipv6Addr}, fmt::Display};
+use std::{fmt::Display, net::{Ipv4Addr, Ipv6Addr}};
 
 use dns_macros::RTypeCode;
 use lazy_static::lazy_static;
@@ -15,6 +15,53 @@ pub struct APL {
     negation_flag: bool,
     afd_length: u7,
     afd_part: AFDPart,
+}
+
+impl APL {
+    #[inline]
+    pub fn new(address_family: AddressFamily, prefix: u8, negation_flag: bool, afd_part: AFDPart) -> Self {
+        let afd_length = match afd_part {
+            AFDPart::Ipv4(ipv4) => match ipv4.octets() {
+                [0, 0, 0, 0] => u7::new(0),
+                [_, 0, 0, 0] => u7::new(1),
+                [_, _, 0, 0] => u7::new(2),
+                [_, _, _, 0] => u7::new(3),
+                [_, _, _, _] => u7::new(4),
+            },
+            AFDPart::Ipv6(ipv6) => match ipv6.octets() {
+                [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(0),
+                [_, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(1),
+                [_, _, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(2),
+                [_, _, _, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(3),
+                [_, _, _, _, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(4),
+                [_, _, _, _, _, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(5),
+                [_, _, _, _, _, _, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(6),
+                [_, _, _, _, _, _, _, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(7),
+                [_, _, _, _, _, _, _, _, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(8),
+                [_, _, _, _, _, _, _, _, _, 0, 0, 0, 0, 0, 0, 0] => u7::new(9),
+                [_, _, _, _, _, _, _, _, _, _, 0, 0, 0, 0, 0, 0] => u7::new(10),
+                [_, _, _, _, _, _, _, _, _, _, _, 0, 0, 0, 0, 0] => u7::new(11),
+                [_, _, _, _, _, _, _, _, _, _, _, _, 0, 0, 0, 0] => u7::new(12),
+                [_, _, _, _, _, _, _, _, _, _, _, _, _, 0, 0, 0] => u7::new(13),
+                [_, _, _, _, _, _, _, _, _, _, _, _, _, _, 0, 0] => u7::new(14),
+                [_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, 0] => u7::new(15),
+                [_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _] => u7::new(16),
+            },
+        };
+        Self { address_family, prefix, negation_flag, afd_length, afd_part }
+    }
+
+    #[inline]
+    pub fn address_family(&self) -> &AddressFamily { &self.address_family }
+
+    #[inline]
+    pub fn prefix(&self) -> u8 { self.prefix }
+
+    #[inline]
+    pub fn negation_flag(&self) -> bool { self.negation_flag }
+
+    #[inline]
+    pub fn afd_part(&self) -> &AFDPart { &self.afd_part }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
