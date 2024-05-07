@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 use crate::mixed_tcp_udp::MixedSocket;
 
 pub struct SocketManager {
-    sockets: RwLock<HashMap<SocketAddr, Arc<RwLock<MixedSocket>>>>
+    sockets: RwLock<HashMap<SocketAddr, Arc<MixedSocket>>>
 }
 
 impl SocketManager {
@@ -13,7 +13,7 @@ impl SocketManager {
         Self { sockets: RwLock::new(HashMap::new()) }
     }
 
-    pub async fn get(&self, address: &SocketAddr) -> Arc<RwLock<MixedSocket>> {
+    pub async fn get(&self, address: &SocketAddr) -> Arc<MixedSocket> {
         let r_sockets = self.sockets.read().await;
         match r_sockets.get(address) {
             Some(socket) => return socket.clone(),
