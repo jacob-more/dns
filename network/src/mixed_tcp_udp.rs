@@ -1,8 +1,9 @@
 use std::{collections::HashMap, io::ErrorKind, net::SocketAddr, sync::Arc, time::Duration};
 
+use async_recursion::async_recursion;
 use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
 use socket2::{SockRef, TcpKeepalive};
-use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast::{self}, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time};
+use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time};
 
 use crate::cancel::Cancel;
 
@@ -32,7 +33,6 @@ enum UdpState {
 struct InFlight {
     send_response: broadcast::Sender<Message>,
     payload: Message,
-    
 }
 
 pub struct MixedSocket {
@@ -120,7 +120,12 @@ impl MixedSocket {
     async fn listen_udp_cleanup(socket: Arc<RwLock<Self>>) {
         let mut w_socket = socket.write().await;
         println!("Cleaning up UDP socket {}", w_socket.upstream_socket);
-        w_socket.udp_connection = UdpState::None;
+
+        match w_socket.udp_connection {
+            UdpState::Managed(_) => w_socket.udp_connection = UdpState::None,
+            UdpState::None => (),
+            UdpState::Blocked => (),
+        }
 
         // We don't want anyone else to register for this cancellation token. Instead, we'll replace
         // it with a new cancel that new tasks can subscribe to.
@@ -179,7 +184,13 @@ impl MixedSocket {
     async fn listen_tcp_cleanup(socket: Arc<RwLock<Self>>) {
         let mut w_socket = socket.write().await;
         println!("Cleaning up TCP socket {}", w_socket.upstream_socket);
-        w_socket.tcp_connection = TcpState::None;
+
+        match w_socket.tcp_connection {
+            TcpState::Managed(_) => w_socket.tcp_connection = TcpState::None,
+            TcpState::Establishing(_) => panic!("TCP listener exists but TcpState is TcpState::Establishing"),
+            TcpState::None => (),
+            TcpState::Blocked => (),
+        }
 
         // We don't want anyone else to register for this cancellation token. Instead, we'll replace
         // it with a new cancel that new tasks can subscribe to.
@@ -188,6 +199,37 @@ impl MixedSocket {
         drop(w_socket);
 
         old_tcp_kill.cancel();
+    }
+
+    #[inline]
+    pub async fn start_udp(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        match Self::init_udp(socket).await {
+            Ok(_) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    #[inline]
+    pub async fn start_tcp(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        match Self::init_tcp(socket).await {
+            Ok(_) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    #[inline]
+    pub async fn start_both(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        match join!(
+            Self::start_udp(socket.clone()),
+            Self::start_tcp(socket)
+        ) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(tcp_error)) => Err(tcp_error),
+            (Err(udp_error), Ok(())) => Err(udp_error),
+            // FIXME: it is probably worth deciding on a method of returning both errors, since they
+            //        may not be the same.
+            (Err(udp_error), Err(_tcp_error)) => Err(udp_error),
+        }
     }
 
     #[inline]
@@ -218,6 +260,119 @@ impl MixedSocket {
             drop(w_tcp_socket);
         }
         Ok(())
+    }
+
+    #[inline]
+    pub async fn shutdown_both(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        match join!(
+            Self::shutdown_udp(socket.clone()),
+            Self::shutdown_tcp(socket)
+        ) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(tcp_error)) => Err(tcp_error),
+            (Err(udp_error), Ok(())) => Err(udp_error),
+            // FIXME: it is probably worth deciding on a method of returning both errors, since they
+            //        may not be the same.
+            (Err(udp_error), Err(_tcp_error)) => Err(udp_error),
+        }
+    }
+
+    #[inline]
+    pub async fn disable_udp(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        let mut w_socket = socket.write().await;
+        println!("Disabling TCP socket {}", w_socket.upstream_socket);
+
+        match &w_socket.udp_connection {
+            UdpState::Managed(_) => w_socket.udp_connection = UdpState::Blocked,
+            UdpState::None => w_socket.tcp_connection = TcpState::Blocked,
+            UdpState::Blocked => return Ok(()), //< Already disabled
+        }
+        drop(w_socket);
+
+        Self::shutdown_udp(socket.clone()).await
+    }
+
+    #[inline]
+    #[async_recursion]
+    pub async fn disable_tcp(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        let mut w_socket = socket.write().await;
+        println!("Disabling UDP socket {}", w_socket.upstream_socket);
+
+        match &w_socket.tcp_connection {
+            TcpState::Managed(_) => w_socket.tcp_connection = TcpState::Blocked,
+            TcpState::Establishing(sender) => {
+                let mut receiver = sender.subscribe();
+                drop(w_socket);
+                // We don't care about the result, we just need to know that a connection has been
+                // established so we can no recurse and kill it.
+                let _ = receiver.recv().await;
+                return Self::disable_tcp(socket).await;
+            },
+            TcpState::None => w_socket.tcp_connection = TcpState::Blocked,
+            TcpState::Blocked => return Ok(()), //< Already disabled
+        }
+        drop(w_socket);
+
+        Self::shutdown_tcp(socket.clone()).await
+    }
+
+    #[inline]
+    pub async fn disable_both(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        match join!(
+            Self::disable_udp(socket.clone()),
+            Self::disable_tcp(socket)
+        ) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(tcp_error)) => Err(tcp_error),
+            (Err(udp_error), Ok(())) => Err(udp_error),
+            // FIXME: it is probably worth deciding on a method of returning both errors, since they
+            //        may not be the same.
+            (Err(udp_error), Err(_tcp_error)) => Err(udp_error),
+        }
+    }
+
+    #[inline]
+    pub async fn enable_udp(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        let mut w_socket = socket.write().await;
+        println!("Enabling UDP socket {}", w_socket.upstream_socket);
+
+        match &w_socket.udp_connection {
+            UdpState::Managed(_) => (),
+            UdpState::None => (),
+            UdpState::Blocked => w_socket.udp_connection = UdpState::None,
+        }
+        drop(w_socket);
+        return Ok(());
+    }
+
+    #[inline]
+    pub async fn enable_tcp(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        let mut w_socket = socket.write().await;
+        println!("Enabling TCP socket {}", w_socket.upstream_socket);
+
+        match &w_socket.tcp_connection {
+            TcpState::Managed(_) => (),
+            TcpState::Establishing(_) => (),
+            TcpState::None => (),
+            TcpState::Blocked => w_socket.tcp_connection = TcpState::None,
+        }
+        drop(w_socket);
+        return Ok(());
+    }
+
+    #[inline]
+    pub async fn enable_both(socket: Arc<RwLock<Self>>) -> io::Result<()> {
+        match join!(
+            Self::enable_udp(socket.clone()),
+            Self::enable_tcp(socket)
+        ) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(tcp_error)) => Err(tcp_error),
+            (Err(udp_error), Ok(())) => Err(udp_error),
+            // FIXME: it is probably worth deciding on a method of returning both errors, since they
+            //        may not be the same.
+            (Err(udp_error), Err(_tcp_error)) => Err(udp_error),
+        }
     }
 
     #[inline]
@@ -368,22 +523,6 @@ impl MixedSocket {
         let _ = tcp_socket_sender.send(tcp_writer.clone());
 
         return Ok(tcp_writer);
-    }
-
-    #[inline]
-    pub async fn start_udp(socket: Arc<RwLock<Self>>) -> io::Result<()> {
-        match Self::init_udp(socket).await {
-            Ok(_) => Ok(()),
-            Err(error) => Err(error),
-        }
-    }
-
-    #[inline]
-    pub async fn start_tcp(socket: Arc<RwLock<Self>>) -> io::Result<()> {
-        match Self::init_tcp(socket).await {
-            Ok(_) => Ok(()),
-            Err(error) => Err(error),
-        }
     }
 
     #[inline]
