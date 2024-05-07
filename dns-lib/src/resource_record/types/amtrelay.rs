@@ -15,6 +15,26 @@ pub struct AMTRELAY {
     relay: RelayType,
 }
 
+impl AMTRELAY {
+    #[inline]
+    pub fn new(precedence: u8, discovery_optional: bool, relay: RelayType) -> Self {
+        Self {
+            precedence,
+            discovery_optional: u1::from(discovery_optional),
+            relay,
+        }
+    }
+
+    #[inline]
+    pub fn precedence(&self) -> u8 { self.precedence }
+
+    #[inline]
+    pub fn discovery_optional(&self) -> bool{ bool::from(self.discovery_optional) }
+
+    #[inline]
+    pub fn relay_type(&self) -> &RelayType { &self.relay }
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum RelayType {
     Unknown(u7, Vec<u8>),
