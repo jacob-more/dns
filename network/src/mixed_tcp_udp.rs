@@ -17,15 +17,15 @@ pub enum QueryOptions {
 }
 
 enum TcpState {
-    Managed(Arc<Mutex<OwnedWriteHalf>>),
-    Establishing(broadcast::Sender<Arc<Mutex<OwnedWriteHalf>>>),
+    Managed(Arc<Mutex<OwnedWriteHalf>>, Arc<Cancel>),
+    Establishing(broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<Cancel>)>),
     None,
     Blocked,
 }
 
 enum UdpState {
     // FIXME: Not sure if a lock is needed or not. As best I can tell, it is.
-    Managed(Arc<UdpSocket>),
+    Managed(Arc<UdpSocket>, Arc<Cancel>),
     None,
     Blocked,
 }
@@ -39,14 +39,12 @@ struct InFlight {
 struct SharedUdp {
     udp_connection: UdpState,
     udp_listener: Option<JoinHandle<()>>,
-    udp_kill: Arc<Cancel>,
 }
 
 /// The shared mutable state for the TCP socket. This struct is stored behind a lock.
 struct SharedTcp {
     tcp_connection: TcpState,
     tcp_listener: Option<JoinHandle<()>>,
-    tcp_kill: Arc<Cancel>,
 }
 
 pub struct MixedSocket {
@@ -70,14 +68,12 @@ impl MixedSocket {
             udp_shared: RwLock::new(SharedUdp {
                 udp_connection: UdpState::None,
                 udp_listener: None,
-                udp_kill: Arc::new(Cancel::new()),
             }),
 
             tcp_timeout: Duration::from_millis(500),
             tcp_shared: RwLock::new(SharedTcp {
                 tcp_connection: TcpState::None,
                 tcp_listener: None,
-                tcp_kill: Arc::new(Cancel::new()),
             }),
 
             upstream_socket: upstream_socket,
@@ -127,19 +123,17 @@ impl MixedSocket {
         println!("Cleaning up UDP socket {}", self.upstream_socket);
 
         let mut w_udp = self.udp_shared.write().await;
-        match w_udp.udp_connection {
-            UdpState::Managed(_) => w_udp.udp_connection = UdpState::None,
+        match &w_udp.udp_connection {
+            UdpState::Managed(_, udp_kill) => {
+                let udp_kill = udp_kill.clone();
+                w_udp.udp_connection = UdpState::None;
+                drop(w_udp);
+
+                udp_kill.cancel();
+            },
             UdpState::None => (),
             UdpState::Blocked => (),
         }
-
-        // We don't want anyone else to register for this cancellation token. Instead, we'll replace
-        // it with a new cancel that new tasks can subscribe to.
-        let old_udp_kill = w_udp.udp_kill.clone();
-        w_udp.udp_kill = Arc::new(Cancel::new());
-        drop(w_udp);
-
-        old_udp_kill.cancel();
     }
 
     #[inline]
@@ -183,20 +177,18 @@ impl MixedSocket {
         println!("Cleaning up TCP socket {}", self.upstream_socket);
 
         let mut w_tcp = self.tcp_shared.write().await;
-        match w_tcp.tcp_connection {
-            TcpState::Managed(_) => w_tcp.tcp_connection = TcpState::None,
+        match &w_tcp.tcp_connection {
+            TcpState::Managed(_, tcp_kill) => {
+                let tcp_kill = tcp_kill.clone();
+                w_tcp.tcp_connection = TcpState::None;
+                drop(w_tcp);
+
+                tcp_kill.cancel();
+            },
             TcpState::Establishing(_) => panic!("TCP listener exists but TcpState is TcpState::Establishing"),
             TcpState::None => (),
             TcpState::Blocked => (),
         }
-
-        // We don't want anyone else to register for this cancellation token. Instead, we'll replace
-        // it with a new cancel that new tasks can subscribe to.
-        let old_tcp_kill = w_tcp.tcp_kill.clone();
-        w_tcp.tcp_kill = Arc::new(Cancel::new());
-        drop(w_tcp);
-
-        old_tcp_kill.cancel();
     }
 
     #[inline]
@@ -233,12 +225,15 @@ impl MixedSocket {
     #[inline]
     pub async fn shutdown_udp(self: Arc<Self>) -> io::Result<()> {
         let r_udp = self.udp_shared.read().await;
-        if let UdpState::Managed(udp_socket) = &r_udp.udp_connection {
+        if let UdpState::Managed(udp_socket, _) = &r_udp.udp_connection {
             let udp_socket = udp_socket.clone();
             drop(r_udp);
             
             println!("Shutting down UDP socket {}", self.upstream_socket);
             SockRef::from(udp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
+
+            // Note: this task is not responsible for actual cleanup. Once the listener closes, it
+            // will cancel any active queries and change the UdpState.
         }
         Ok(())
     }
@@ -246,7 +241,7 @@ impl MixedSocket {
     #[inline]
     pub async fn shutdown_tcp(self: Arc<Self>) -> io::Result<()> {
         let r_tcp = self.tcp_shared.read().await;
-        if let TcpState::Managed(tcp_socket) = &r_tcp.tcp_connection {
+        if let TcpState::Managed(tcp_socket, _) = &r_tcp.tcp_connection {
             let tcp_socket = tcp_socket.clone();
             drop(r_tcp);
             
@@ -254,6 +249,9 @@ impl MixedSocket {
             let w_tcp_socket = tcp_socket.lock().await;
             SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
             drop(w_tcp_socket);
+
+            // Note: this task is not responsible for actual cleanup. Once the listener closes, it
+            // will cancel any active queries and change the TcpState.
         }
         Ok(())
     }
@@ -279,13 +277,31 @@ impl MixedSocket {
         
         let mut w_udp = self.udp_shared.write().await;
         match &w_udp.udp_connection {
-            UdpState::Managed(_) => w_udp.udp_connection = UdpState::Blocked,
-            UdpState::None => w_udp.udp_connection = UdpState::Blocked,
-            UdpState::Blocked => return Ok(()), //< Already disabled
-        }
-        drop(w_udp);
+            UdpState::Managed(udp_socket, udp_kill) => {
+                // Since we are removing the reference the udp_kill by setting state to Blocked, we
+                // need to cancel them now since the listener won't be able to cancel them.
+                let udp_kill = udp_kill.clone();
+                let udp_socket = udp_socket.clone();
+                w_udp.udp_connection = UdpState::Blocked;
+                drop(w_udp);
 
-        self.shutdown_udp().await
+                udp_kill.cancel();
+
+                println!("Shutting down UDP socket {}", self.upstream_socket);
+                SockRef::from(udp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
+
+                Ok(())
+            },
+            UdpState::None => {
+                w_udp.udp_connection = UdpState::Blocked;
+                drop(w_udp);
+                Ok(())
+            },
+            UdpState::Blocked => { //< Already disabled
+                drop(w_udp);
+                Ok(())
+            },
+        }
     }
 
     #[inline]
@@ -295,21 +311,42 @@ impl MixedSocket {
         
         let mut w_tcp = self.tcp_shared.write().await;
         match &w_tcp.tcp_connection {
-            TcpState::Managed(_) => w_tcp.tcp_connection = TcpState::Blocked,
+            TcpState::Managed(tcp_socket, tcp_kill) => {
+                // Since we are removing the reference the tcp_kill by setting state to Blocked, we
+                // need to cancel them now since the listener won't be able to cancel them.
+                let tcp_kill = tcp_kill.clone();
+                let tcp_socket = tcp_socket.clone();
+                w_tcp.tcp_connection = TcpState::Blocked;
+                drop(w_tcp);
+
+                tcp_kill.cancel();
+
+                println!("Shutting down TCP socket {}", self.upstream_socket);
+                let w_tcp_socket = tcp_socket.lock().await;
+                SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
+                drop(w_tcp_socket);
+
+                Ok(())
+            },
             TcpState::Establishing(sender) => {
                 let mut receiver = sender.subscribe();
                 drop(w_tcp);
+
                 // We don't care about the result, we just need to know that a connection has been
                 // established so we can no recurse and kill it.
                 let _ = receiver.recv().await;
-                return self.disable_tcp().await;
+                self.disable_tcp().await
             },
-            TcpState::None => w_tcp.tcp_connection = TcpState::Blocked,
-            TcpState::Blocked => return Ok(()), //< Already disabled
+            TcpState::None => {
+                w_tcp.tcp_connection = TcpState::Blocked;
+                drop(w_tcp);
+                Ok(())
+            },
+            TcpState::Blocked => { //< Already disabled
+                drop(w_tcp);
+                Ok(())
+            },
         }
-        drop(w_tcp);
-
-        self.shutdown_tcp().await
     }
 
     #[inline]
@@ -333,8 +370,8 @@ impl MixedSocket {
         
         let mut w_udp = self.udp_shared.write().await;
         match &w_udp.udp_connection {
-            UdpState::Managed(_) => (),
-            UdpState::None => (),
+            UdpState::Managed(_, _) => (),  //< Already enabled
+            UdpState::None => (),           //< Already enabled
             UdpState::Blocked => w_udp.udp_connection = UdpState::None,
         }
         drop(w_udp);
@@ -347,9 +384,9 @@ impl MixedSocket {
         
         let mut w_tcp = self.tcp_shared.write().await;
         match &w_tcp.tcp_connection {
-            TcpState::Managed(_) => (),
-            TcpState::Establishing(_) => (),
-            TcpState::None => (),
+            TcpState::Managed(_, _) => (),      //< Already enabled
+            TcpState::Establishing(_) => (),    //< Already enabled
+            TcpState::None => (),               //< Already enabled
             TcpState::Blocked => w_tcp.tcp_connection = TcpState::None,
         }
         drop(w_tcp);
@@ -372,11 +409,11 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn init_udp(self: Arc<Self>) -> io::Result<Arc<UdpSocket>> {
+    async fn init_udp(self: Arc<Self>) -> io::Result<(Arc<UdpSocket>, Arc<Cancel>)> {
         // Initially, verify if the connection has already been established.
         let r_udp = self.udp_shared.read().await;
         match &r_udp.udp_connection {
-            UdpState::Managed(udp_socket) => return Ok(udp_socket.clone()),
+            UdpState::Managed(udp_socket, udp_kill) => return Ok((udp_socket.clone(), udp_kill.clone())),
             UdpState::None => (),
             UdpState::Blocked => {
                 drop(r_udp);
@@ -389,6 +426,7 @@ impl MixedSocket {
         udp_socket.connect(self.upstream_socket).await?;
         let udp_reader = udp_socket.clone();
         let udp_writer = udp_socket;
+        let udp_kill = Arc::new(Cancel::new());
 
         let listener = task::spawn(self.clone().listen_udp(udp_reader));
 
@@ -398,12 +436,12 @@ impl MixedSocket {
 
         let mut w_udp = self.udp_shared.write().await;
         match &w_udp.udp_connection {
-            UdpState::Managed(existing_udp_socket) => {
+            UdpState::Managed(existing_udp_socket, _) => {
                 listener.abort();
-                return Ok(existing_udp_socket.clone());
+                return Ok((existing_udp_socket.clone(), udp_kill.clone()));
             },
             UdpState::None => {
-                w_udp.udp_connection = UdpState::Managed(udp_writer.clone());
+                w_udp.udp_connection = UdpState::Managed(udp_writer.clone(), udp_kill.clone());
             },
             UdpState::Blocked => {
                 drop(w_udp);
@@ -412,20 +450,20 @@ impl MixedSocket {
         }
         drop(w_udp);
 
-        return Ok(udp_writer);
+        return Ok((udp_writer, udp_kill));
     }
 
     #[inline]
-    async fn init_tcp(self: Arc<Self>) -> io::Result<Arc<Mutex<OwnedWriteHalf>>> {
+    async fn init_tcp(self: Arc<Self>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<Cancel>)> {
         // Initially, verify if the connection has already been established.
         let r_tcp = self.tcp_shared.read().await;
         match &r_tcp.tcp_connection {
-            TcpState::Managed(tcp_socket) => return Ok(tcp_socket.clone()),
+            TcpState::Managed(tcp_socket, udp_kill) => return Ok((tcp_socket.clone(), udp_kill.clone())),
             TcpState::Establishing(sender) => {
                 let mut receiver = sender.subscribe();
                 drop(r_tcp);
                 match receiver.recv().await {
-                    Ok(tcp_socket) => return Ok(tcp_socket.clone()),
+                    Ok((tcp_socket, udp_kill)) => return Ok((tcp_socket.clone(), udp_kill.clone())),
                     Err(_) => {
                         eprintln!("Failed to establish TCP connection to {}", self.upstream_socket);
                         return Err(io::Error::from(io::ErrorKind::Interrupted));
@@ -446,12 +484,12 @@ impl MixedSocket {
         // Need to re-verify state with new lock. State could have changed in between.
         let mut w_tcp = self.tcp_shared.write().await;
         match &w_tcp.tcp_connection {
-            TcpState::Managed(tcp_socket) => return Ok(tcp_socket.clone()),
+            TcpState::Managed(tcp_socket, udp_kill) => return Ok((tcp_socket.clone(), udp_kill.clone())),
             TcpState::Establishing(sender) => {
                 let mut receiver = sender.subscribe();
                 drop(w_tcp);
                 match receiver.recv().await {
-                    Ok(tcp_socket) => return Ok(tcp_socket.clone()),
+                    Ok((tcp_socket, udp_kill)) => return Ok((tcp_socket.clone(), udp_kill.clone())),
                     Err(_) => {
                         eprintln!("Failed to establish TCP connection to {}", self.upstream_socket);
                         return Err(io::Error::from(io::ErrorKind::Interrupted));
@@ -503,16 +541,17 @@ impl MixedSocket {
         };
         let (tcp_reader, tcp_writer) = tcp_socket.into_split();
         let tcp_writer = Arc::new(Mutex::new(tcp_writer));
+        let tcp_kill = Arc::new(Cancel::new());
 
         task::spawn(self.clone().listen_tcp(tcp_reader));
 
         let mut w_tcp = self.tcp_shared.write().await;
-        w_tcp.tcp_connection = TcpState::Managed(tcp_writer.clone());
+        w_tcp.tcp_connection = TcpState::Managed(tcp_writer.clone(), tcp_kill.clone());
         drop(w_tcp);
 
-        let _ = tcp_socket_sender.send(tcp_writer.clone());
+        let _ = tcp_socket_sender.send((tcp_writer.clone(), tcp_kill.clone()));
 
-        return Ok(tcp_writer);
+        return Ok((tcp_writer, tcp_kill));
     }
 
     #[inline]
@@ -525,15 +564,12 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn manage_udp_query(self: Arc<Self>, udp_socket: Arc<UdpSocket>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
+    async fn manage_udp_query(self: Arc<Self>, udp_socket: Arc<UdpSocket>, udp_kill: Arc<Cancel>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
         let mut in_flight_receiver = in_flight_sender.subscribe();
         drop(in_flight_sender);
         let query_id = query.id;
 
-        let r_udp = self.udp_shared.read().await;
-        let udp_kill = r_udp.udp_kill.clone();
-        drop(r_udp);
-        pin!{let udp_canceled = udp_kill.canceled();}
+        pin!{let udp_canceled = udp_kill.clone().canceled();}
 
         // Timeout Case 1: resend with UDP
         select! {
@@ -561,7 +597,7 @@ impl MixedSocket {
         }
 
         // Timeout Case 2: resend with TCP
-        select! {
+        let tcp_kill = select! {
             biased;
             response = in_flight_receiver.recv() => {
                 match response {
@@ -577,18 +613,21 @@ impl MixedSocket {
             },
             _ = time::sleep(self.udp_retransmit) => {
                 match self.clone().init_tcp().await {
-                    Ok(tcp_writer) => {
+                    Ok((tcp_writer, tcp_kill)) => {
                         println!("UDP Timeout: Retransmitting message with ID {} via TCP", query_id);
                         Self::retransmit_query_tcp(tcp_writer, query).await.expect("Failed to retransmit message via TCP");
+                        tcp_kill
                     },
-                    Err(error) => eprintln!("UDP Timeout: Unable to retransmit via TCP; {error}"),
-                };
+                    Err(error) => {
+                        eprintln!("UDP Timeout: Unable to retransmit via TCP; {error}");
+                        // If we cannot re-transmit with TCP, then we are still waiting on UDP. So,
+                        // we are still actually interested in the UDP cancellation token since
+                        // that's the socket that is going to give us our answer.
+                        udp_kill
+                    },
+                }
             },
-        }
-
-        let r_tcp = self.tcp_shared.read().await;
-        let tcp_kill = r_tcp.tcp_kill.clone();
-        drop(r_tcp);
+        };
 
         // Once TCP is used, no more retransmissions will be done via this
         // manager. Its last job is to clean up after the message is received
@@ -613,8 +652,13 @@ impl MixedSocket {
     #[inline]
     async fn query_udp_rsocket<'a>(self: Arc<Self>, r_udp: RwLockReadGuard<'a, SharedUdp>, query: Message) -> io::Result<broadcast::Receiver<Message>> {
         let udp_socket;
+        let udp_kill;
         match &r_udp.udp_connection {
-            UdpState::Managed(state_udp_socket) => udp_socket = state_udp_socket.clone(),
+            UdpState::Managed(state_udp_socket, state_udp_kill) => {
+                udp_socket = state_udp_socket.clone();
+                udp_kill = state_udp_kill.clone();
+                drop(r_udp);
+            },
             UdpState::None => {
                 drop(r_udp);
                 return self.clone().query_udp_wsocket(self.udp_shared.write().await, query).await;
@@ -624,32 +668,33 @@ impl MixedSocket {
                 return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
             },
         }
-        drop(r_udp);
-        self.query_udp(udp_socket.clone(), query).await
+        self.query_udp(udp_socket.clone(), udp_kill, query).await
     }
 
     #[inline]
     async fn query_udp_wsocket<'a, 'b>(self: Arc<Self>, w_udp: RwLockWriteGuard<'b, SharedUdp>, query: Message) -> io::Result<broadcast::Receiver<Message>> where 'a: 'b {
         let udp_socket;
+        let udp_kill;
         match &w_udp.udp_connection {
-            UdpState::Managed(state_udp_socket) => {
+            UdpState::Managed(state_udp_socket, state_udp_kill) => {
                 udp_socket = state_udp_socket.clone();
+                udp_kill = state_udp_kill.clone();
                 drop(w_udp);
             },
             UdpState::None => {
                 drop(w_udp);
-                udp_socket = self.clone().init_udp().await?;
+                (udp_socket, udp_kill) = self.clone().init_udp().await?;
             },
             UdpState::Blocked => {
                 drop(w_udp);
                 return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
             },
         }
-        self.query_udp(udp_socket, query).await
+        self.query_udp(udp_socket, udp_kill, query).await
     }
 
     #[inline]
-    async fn query_udp(self: Arc<Self>, udp_socket: Arc<UdpSocket>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
+    async fn query_udp(self: Arc<Self>, udp_socket: Arc<UdpSocket>, udp_kill: Arc<Cancel>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
         // Step 1: Register the query as an in-flight message.
         let (sender, receiver) = broadcast::channel(1);
 
@@ -684,7 +729,7 @@ impl MixedSocket {
         // Now that the message is registered, set up a task to ensure the
         // message is retransmitted as needed and cleaned up once done.
         let query_id = query.id;
-        task::spawn(self.clone().manage_udp_query(udp_socket.clone(), sender, query.clone()));
+        task::spawn(self.clone().manage_udp_query(udp_socket.clone(), udp_kill, sender, query.clone()));
 
         // Step 4: Send the message via UDP.
         println!("Sending on UDP socket {} :: {:?}", self.upstream_socket, query);
@@ -778,13 +823,9 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn manage_tcp_query(self: Arc<Self>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
+    async fn manage_tcp_query(self: Arc<Self>, tcp_kill: Arc<Cancel>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
         let mut in_flight_receiver = in_flight_sender.subscribe();
         drop(in_flight_sender);
-
-        let r_tcp = self.tcp_shared.read().await;
-        let tcp_kill = r_tcp.tcp_kill.clone();
-        drop(r_tcp);
 
         // Once TCP is used, no more retransmissions will be done via this
         // manager. Its last job is to clean up after the message is received.
@@ -807,23 +848,24 @@ impl MixedSocket {
     #[inline]
     async fn query_tcp_rsocket<'a>(self: Arc<Self>, r_tcp: RwLockReadGuard<'a, SharedTcp>, query: Message) -> io::Result<broadcast::Receiver<Message>> {
         match &r_tcp.tcp_connection {
-            TcpState::Managed(tcp_socket) => {
+            TcpState::Managed(tcp_socket, tcp_kill) => {
                 let tcp_socket = tcp_socket.clone();
+                let tcp_kill = tcp_kill.clone();
                 drop(r_tcp);
-                return self.query_tcp(tcp_socket, query).await;
+                return self.query_tcp(tcp_socket, tcp_kill, query).await;
             },
             TcpState::Establishing(tcp_socket_sender) => {
                 let mut tcp_socket_receiver = tcp_socket_sender.subscribe();
                 drop(r_tcp);
                 match tcp_socket_receiver.recv().await {
-                    Ok(tcp_socket) => return self.query_tcp(tcp_socket, query).await,
+                    Ok((tcp_socket, tcp_kill)) => return self.query_tcp(tcp_socket, tcp_kill, query).await,
                     Err(_) => Err(io::Error::from(ErrorKind::Interrupted)),
                 }
             },
             TcpState::None => {
                 drop(r_tcp);
-                let tcp_socket = self.clone().init_tcp().await?;
-                return self.query_tcp(tcp_socket, query).await;
+                let (tcp_socket, tcp_kill) = self.clone().init_tcp().await?;
+                return self.query_tcp(tcp_socket, tcp_kill, query).await;
             },
             TcpState::Blocked => {
                 drop(r_tcp);
@@ -857,7 +899,7 @@ impl MixedSocket {
     // }
 
     #[inline]
-    async fn query_tcp(self: Arc<Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
+    async fn query_tcp(self: Arc<Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, tcp_kill: Arc<Cancel>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
         // Step 1: Register the query as an in-flight message.
         let (sender, receiver) = broadcast::channel(1);
 
@@ -910,7 +952,7 @@ impl MixedSocket {
         // Now that the message is registered, set up a task to ensure the
         // message is retransmitted as needed and cleaned up once done.
         let query_id = query.id;
-        task::spawn(self.clone().manage_tcp_query(sender, query.clone()));
+        task::spawn(self.clone().manage_tcp_query(tcp_kill, sender, query.clone()));
 
         // Step 4: Send the message via TCP.
         let mut w_tcp_stream = tcp_socket.lock().await;
@@ -940,12 +982,12 @@ impl MixedSocket {
         );
         let udp_timeout_count = self.udp_timeout_count.load(Ordering::SeqCst);
         let mut receiver = match (options, udp_timeout_count, &r_udp.udp_connection, &r_tcp.tcp_connection) {
-            (QueryOptions::Both, 0..=3, UdpState::None | UdpState::Managed(_), _) => {
+            (QueryOptions::Both, 0..=3, UdpState::None | UdpState::Managed(_, _), _) => {
                 drop(r_tcp);
                 self.query_udp_rsocket(r_udp, query).await?
             },
             // Too many UDP timeouts, no TCP socket has been established.
-            (QueryOptions::Both, 4.., UdpState::None | UdpState::Managed(_), TcpState::None) => {
+            (QueryOptions::Both, 4.., UdpState::None | UdpState::Managed(_, _), TcpState::None) => {
                 drop(r_tcp);
                 // It will query via UDP but will start setting up a TCP connection to fall back on.
                 task::spawn(self.clone().init_tcp());
@@ -953,12 +995,12 @@ impl MixedSocket {
             },
 
             // Only TCP is allowed
-            (QueryOptions::TcpOnly, _, _, TcpState::None | TcpState::Establishing(_) | TcpState::Managed(_)) => {
+            (QueryOptions::TcpOnly, _, _, TcpState::None | TcpState::Establishing(_) | TcpState::Managed(_, _)) => {
                 drop(r_udp);
                 self.query_tcp_rsocket(r_tcp, query).await?
             },
             // Too many UDP timeouts, a TCP socket is still being setup or already exists.
-            (QueryOptions::Both, 4.., _, TcpState::Establishing(_) | TcpState::Managed(_)) => {
+            (QueryOptions::Both, 4.., _, TcpState::Establishing(_) | TcpState::Managed(_, _)) => {
                 drop(r_udp);
                 self.query_tcp_rsocket(r_tcp, query).await?
             },
@@ -972,11 +1014,11 @@ impl MixedSocket {
                 drop(r_tcp);
                 return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
             },
-            (QueryOptions::Both, 4.., UdpState::None | UdpState::Managed(_), TcpState::Blocked) => {
+            (QueryOptions::Both, 4.., UdpState::None | UdpState::Managed(_, _), TcpState::Blocked) => {
                 drop(r_tcp);
                 self.query_udp_rsocket(r_udp, query).await?
             },
-            (QueryOptions::Both, _, UdpState::Blocked, TcpState::None | TcpState::Establishing(_) | TcpState::Managed(_)) => {
+            (QueryOptions::Both, _, UdpState::Blocked, TcpState::None | TcpState::Establishing(_) | TcpState::Managed(_, _)) => {
                 drop(r_udp);
                 self.query_tcp_rsocket(r_tcp, query).await?
             },
