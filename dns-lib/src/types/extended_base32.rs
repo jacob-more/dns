@@ -309,10 +309,10 @@ impl ExtendedBase32 {
             ]);
         });
 
-        match remainder.len() {
-            0 => (),
-            1 => {
-                let merged_bytes = u64::from_be_bytes([0, 0, 0, remainder[0], 0, 0, 0, 0]);
+        match remainder {
+            &[] => (),
+            &[byte0] => {
+                let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, 0, 0, 0, 0]);
 
                 let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
                 let bits5_7   = ((merged_bytes & 0b00000_11100_00000_00000_00000_00000_00000_00000) >> 30) as u8;
@@ -328,8 +328,8 @@ impl ExtendedBase32 {
                     PADDING_CHAR,
                 ]);
             },
-            2 => {
-                let merged_bytes = u64::from_be_bytes([0, 0, 0, remainder[0], remainder[1], 0, 0, 0]);
+            &[byte0, byte1] => {
+                let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, 0, 0, 0]);
 
                 let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
                 let bits5_9   = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000) >> 30) as u8;
@@ -347,8 +347,8 @@ impl ExtendedBase32 {
                     PADDING_CHAR,
                 ]);
             },
-            3 => {
-                let merged_bytes = u64::from_be_bytes([0, 0, 0, remainder[0], remainder[1], remainder[2], 0, 0]);
+            &[byte0, byte1, byte2] => {
+                let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, byte2, 0, 0]);
 
                 let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
                 let bits5_9   = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000) >> 30) as u8;
@@ -367,8 +367,8 @@ impl ExtendedBase32 {
                     PADDING_CHAR,
                 ]);
             },
-            4 => {
-                let merged_bytes = u64::from_be_bytes([0, 0, 0, remainder[0], remainder[1], remainder[2], remainder[3], 0]);
+            &[byte0, byte1, byte2, byte3] => {
+                let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, byte2, byte3, 0]);
 
                 let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
                 let bits5_9   = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000) >> 30) as u8;

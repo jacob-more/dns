@@ -314,10 +314,10 @@ impl Base64 {
             ]);
         });
 
-        match remainder.len() {
-            0 => (),
-            1 => {
-                let merged_bytes = u32::from_be_bytes([0, remainder[0], 0, 0]);
+        match remainder {
+            &[] => (),
+            &[byte0] => {
+                let merged_bytes = u32::from_be_bytes([0, byte0, 0, 0]);
 
                 let bits0_5 = ((merged_bytes & 0b111111_000000_000000_000000) >> 18) as u8;
                 let bits6_7 = ((merged_bytes & 0b000000_110000_000000_000000) >> 12) as u8;
@@ -329,8 +329,8 @@ impl Base64 {
                     PADDING_CHAR,
                 ]);
             },
-            2 => {
-                let merged_bytes = u32::from_be_bytes([0, remainder[0], remainder[1], 0]);
+            &[byte0, byte1] => {
+                let merged_bytes = u32::from_be_bytes([0, byte0, byte1, 0]);
 
                 let bits0_5   = ((merged_bytes & 0b111111_000000_000000_000000) >> 18) as u8;
                 let bits6_11  = ((merged_bytes & 0b000000_111111_000000_000000) >> 12) as u8;
