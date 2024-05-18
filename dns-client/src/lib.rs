@@ -9,8 +9,6 @@ use tokio::sync::{RwLock, broadcast::Sender};
 
 use crate::query::recursive_query::recursive_query;
 
-mod udp_handler;
-mod tcp_manager;
 mod query;
 
 // Note: These should eventually be config options.
