@@ -1,12 +1,10 @@
 use std::{collections::HashMap, io::ErrorKind, net::SocketAddr, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, time::Duration};
 
+use async_lib::awake_token::AwakeToken;
 use async_recursion::async_recursion;
 use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task, time};
-
-use crate::cancel::Cancel;
-
 
 const MAX_MESSAGE_SIZE: usize = 4096;
 
@@ -19,14 +17,14 @@ pub enum QueryOptions {
 struct InFlight { send_response: broadcast::Sender<Message> }
 
 enum TcpState {
-    Managed(Arc<Mutex<OwnedWriteHalf>>, Arc<Cancel>),
-    Establishing(broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<Cancel>)>),
+    Managed(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>),
+    Establishing(broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>),
     None,
     Blocked,
 }
 
 enum UdpState {
-    Managed(Arc<UdpSocket>, Arc<Cancel>),
+    Managed(Arc<UdpSocket>, Arc<AwakeToken>),
     None,
     Blocked,
 }
@@ -163,7 +161,7 @@ impl MixedSocket {
                 w_udp.state = UdpState::None;
                 drop(w_udp);
 
-                udp_kill.cancel();
+                udp_kill.awake();
             },
             UdpState::None => (),
             UdpState::Blocked => (),
@@ -218,7 +216,7 @@ impl MixedSocket {
                 w_tcp.state = TcpState::None;
                 drop(w_tcp);
 
-                tcp_kill.cancel();
+                tcp_kill.awake();
             },
             TcpState::Establishing(_) => panic!("TCP listener exists but TcpState is TcpState::Establishing"),
             TcpState::None => (),
@@ -268,7 +266,7 @@ impl MixedSocket {
             SockRef::from(udp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
 
             // Note: this task is not responsible for actual cleanup. Once the listener closes, it
-            // will cancel any active queries and change the UdpState.
+            // will kill any active queries and change the UdpState.
         }
         Ok(())
     }
@@ -286,7 +284,7 @@ impl MixedSocket {
             drop(w_tcp_socket);
 
             // Note: this task is not responsible for actual cleanup. Once the listener closes, it
-            // will cancel any active queries and change the TcpState.
+            // will kill any active queries and change the TcpState.
         }
         Ok(())
     }
@@ -314,13 +312,13 @@ impl MixedSocket {
         match &w_udp.state {
             UdpState::Managed(udp_socket, udp_kill) => {
                 // Since we are removing the reference the udp_kill by setting state to Blocked, we
-                // need to cancel them now since the listener won't be able to cancel them.
+                // need to kill them now since the listener won't be able to kill them.
                 let udp_kill = udp_kill.clone();
                 let udp_socket = udp_socket.clone();
                 w_udp.state = UdpState::Blocked;
                 drop(w_udp);
 
-                udp_kill.cancel();
+                udp_kill.awake();
 
                 println!("Shutting down UDP socket {}", self.upstream_socket);
                 SockRef::from(udp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
@@ -348,13 +346,13 @@ impl MixedSocket {
         match &w_tcp.state {
             TcpState::Managed(tcp_socket, tcp_kill) => {
                 // Since we are removing the reference the tcp_kill by setting state to Blocked, we
-                // need to cancel them now since the listener won't be able to cancel them.
+                // need to kill them now since the listener won't be able to kill them.
                 let tcp_kill = tcp_kill.clone();
                 let tcp_socket = tcp_socket.clone();
                 w_tcp.state = TcpState::Blocked;
                 drop(w_tcp);
 
-                tcp_kill.cancel();
+                tcp_kill.awake();
 
                 println!("Shutting down TCP socket {}", self.upstream_socket);
                 let w_tcp_socket = tcp_socket.lock().await;
@@ -444,7 +442,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn init_udp(self: Arc<Self>) -> io::Result<(Arc<UdpSocket>, Arc<Cancel>)> {
+    async fn init_udp(self: Arc<Self>) -> io::Result<(Arc<UdpSocket>, Arc<AwakeToken>)> {
         // Initially, verify if the connection has already been established.
         let r_udp = self.udp_shared.read().await;
         match &r_udp.state {
@@ -461,7 +459,7 @@ impl MixedSocket {
         udp_socket.connect(self.upstream_socket).await?;
         let udp_reader = udp_socket.clone();
         let udp_writer = udp_socket;
-        let udp_kill = Arc::new(Cancel::new());
+        let udp_kill = Arc::new(AwakeToken::new());
 
         let listener = task::spawn(self.clone().listen_udp(udp_reader));
 
@@ -489,7 +487,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn init_tcp(self: Arc<Self>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<Cancel>)> {
+    async fn init_tcp(self: Arc<Self>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)> {
         // Initially, verify if the connection has already been established.
         let r_tcp = self.tcp_shared.read().await;
         match &r_tcp.state {
@@ -576,7 +574,7 @@ impl MixedSocket {
         };
         let (tcp_reader, tcp_writer) = tcp_socket.into_split();
         let tcp_writer = Arc::new(Mutex::new(tcp_writer));
-        let tcp_kill = Arc::new(Cancel::new());
+        let tcp_kill = Arc::new(AwakeToken::new());
 
         task::spawn(self.clone().listen_tcp(tcp_reader));
 
@@ -599,12 +597,12 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn manage_udp_query(self: Arc<Self>, udp_socket: Arc<UdpSocket>, udp_kill: Arc<Cancel>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
+    async fn manage_udp_query(self: Arc<Self>, udp_socket: Arc<UdpSocket>, udp_kill: Arc<AwakeToken>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
         let mut in_flight_receiver = in_flight_sender.subscribe();
         drop(in_flight_sender);
         let query_id = query.id;
 
-        pin!{let udp_canceled = udp_kill.clone().canceled();}
+        pin!{let udp_canceled = udp_kill.clone().awoken();}
 
         // Timeout Case 1: resend with UDP
         select! {
@@ -656,8 +654,8 @@ impl MixedSocket {
                     Err(error) => {
                         eprintln!("UDP Timeout: Unable to retransmit via TCP; {error}");
                         // If we cannot re-transmit with TCP, then we are still waiting on UDP. So,
-                        // we are still actually interested in the UDP cancellation token since
-                        // that's the socket that is going to give us our answer.
+                        // we are still actually interested in the UDP kill token since that's the
+                        // socket that is going to give us our answer.
                         udp_kill
                     },
                 }
@@ -676,10 +674,10 @@ impl MixedSocket {
                     Err(broadcast::error::RecvError::Lagged(skipped_messages)) => println!("UDP Cleanup: Channel lagged for query with ID {}, skipping {skipped_messages} messages", query_id),
                 }
             },
-            _ = tcp_kill.canceled() => println!("UDP Cleanup: TCP canceled while waiting to receive message with ID {}", query_id),
+            _ = tcp_kill.awoken() => println!("UDP Cleanup: TCP canceled while waiting to receive message with ID {}", query_id),
             _ = time::sleep(self.tcp_timeout) => println!("UDP Timeout: TCP query with ID {} took too long to respond", query_id),
-            // Note: we don't want to await UDP canceled anymore. As far as we are concerned, we
-            //       have transitioned into a TCP manager.
+            // Note: we don't want to await UDP kill anymore. As far as we are concerned, we have
+            // transitioned into a TCP manager.
         }
         self.cleanup_query(query_id).await;
     }
@@ -729,7 +727,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn query_udp(self: Arc<Self>, udp_socket: Arc<UdpSocket>, udp_kill: Arc<Cancel>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
+    async fn query_udp(self: Arc<Self>, udp_socket: Arc<UdpSocket>, udp_kill: Arc<AwakeToken>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
         // Step 1: Register the query as an in-flight message.
         let (sender, receiver) = broadcast::channel(1);
 
@@ -861,7 +859,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn manage_tcp_query(self: Arc<Self>, tcp_kill: Arc<Cancel>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
+    async fn manage_tcp_query(self: Arc<Self>, tcp_kill: Arc<AwakeToken>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
         let mut in_flight_receiver = in_flight_sender.subscribe();
         drop(in_flight_sender);
 
@@ -876,7 +874,7 @@ impl MixedSocket {
                     Err(broadcast::error::RecvError::Lagged(skipped_messages)) => println!("TCP Cleanup: Channel lagged for query with ID {}, skipping {skipped_messages} messages", query.id),
                 }
             },
-            _ = tcp_kill.canceled() => println!("TCP Cleanup: TCP canceled while waiting to receive message with ID {}", query.id),
+            _ = tcp_kill.awoken() => println!("TCP Cleanup: TCP canceled while waiting to receive message with ID {}", query.id),
             _ = time::sleep(self.tcp_timeout) => println!("TCP Timeout: TCP query with ID {} took too long to respond", query.id),
         }
         self.cleanup_query(query.id).await;
@@ -937,7 +935,7 @@ impl MixedSocket {
     // }
 
     #[inline]
-    async fn query_tcp(self: Arc<Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, tcp_kill: Arc<Cancel>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
+    async fn query_tcp(self: Arc<Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, tcp_kill: Arc<AwakeToken>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
         // Step 1: Register the query as an in-flight message.
         let (sender, receiver) = broadcast::channel(1);
 

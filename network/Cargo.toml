@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-lib = { path = "../async-lib" }
 dns-lib = { path = "../dns-lib" }
 
 async-recursion = "1.1"
