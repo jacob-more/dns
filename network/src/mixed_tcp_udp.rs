@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::ErrorKind, net::SocketAddr, sync::{atomic::{AtomicU8, Ordering}, Arc}, time::Duration};
+use std::{collections::HashMap, io::ErrorKind, net::SocketAddr, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, time::Duration};
 
 use async_recursion::async_recursion;
 use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
@@ -47,6 +47,10 @@ pub struct MixedSocket {
 
     upstream_socket: SocketAddr,
     in_flight: RwLock<HashMap<u16, InFlight>>,
+
+    // Counters used to determine when the socket should be closed.
+    recent_messages_sent: AtomicBool,
+    recent_messages_received: AtomicBool,
 }
 
 impl MixedSocket {
@@ -62,7 +66,52 @@ impl MixedSocket {
 
             upstream_socket: upstream_socket,
             in_flight: RwLock::new(HashMap::new()),
+
+            recent_messages_sent: AtomicBool::new(false),
+            recent_messages_received: AtomicBool::new(false),
         })
+    }
+
+    #[inline]
+    pub fn recent_messages_sent_or_received(&self) -> bool {
+        self.recent_messages_sent.load(Ordering::SeqCst)
+        || self.recent_messages_received.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn recent_messages_sent_and_received(&self) -> (bool, bool) {
+        (
+            self.recent_messages_sent.load(Ordering::SeqCst),
+            self.recent_messages_received.load(Ordering::SeqCst)
+        )
+    }
+
+    #[inline]
+    pub fn recent_messages_sent(&self) -> bool {
+        self.recent_messages_sent.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn recent_messages_received(&self) -> bool {
+        self.recent_messages_received.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn reset_recent_messages_sent_and_received(&self) -> (bool, bool) {
+        (
+            self.recent_messages_sent.swap(false, Ordering::SeqCst),
+            self.recent_messages_received.swap(false, Ordering::SeqCst)
+        )
+    }
+
+    #[inline]
+    pub fn reset_recent_messages_sent(&self) -> bool {
+        self.recent_messages_sent.swap(false, Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn reset_recent_messages_received(&self) -> bool {
+        self.recent_messages_received.swap(false, Ordering::SeqCst)
     }
 
     #[inline]
@@ -71,6 +120,7 @@ impl MixedSocket {
             match read_udp_message(udp_reader.clone()).await {
                 Ok(response) => {
                     // Note: if truncation flag is set, that will be dealt with by the caller.
+                    self.recent_messages_received.store(true, Ordering::SeqCst);
                     let response_id = response.id;
                     let r_in_flight = self.in_flight.read().await;
                     if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
@@ -125,6 +175,7 @@ impl MixedSocket {
         loop {
             match read_tcp_message(&mut tcp_reader).await {
                 Ok(response) => {
+                    self.recent_messages_received.store(true, Ordering::SeqCst);
                     let response_id = response.id;
                     let r_in_flight = self.in_flight.read().await;
                     if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
@@ -572,7 +623,7 @@ impl MixedSocket {
             },
             _ = time::sleep(self.udp_retransmit) => {
                 println!("UDP Timeout: Retransmitting message with ID {} via UDP", query_id);
-                Self::retransmit_query_udp(udp_socket, &query).await.expect("Failed to retransmit message via UDP");
+                self.clone().retransmit_query_udp(udp_socket, &query).await.expect("Failed to retransmit message via UDP");
                 // Also start the process of setting up a TCP connection. This
                 // way, by the time we timeout a second time (if we do, at
                 // least), there is a TCP connection ready to go.
@@ -599,7 +650,7 @@ impl MixedSocket {
                 match self.clone().init_tcp().await {
                     Ok((tcp_writer, tcp_kill)) => {
                         println!("UDP Timeout: Retransmitting message with ID {} via TCP", query_id);
-                        Self::retransmit_query_tcp(tcp_writer, query).await.expect("Failed to retransmit message via TCP");
+                        self.clone().retransmit_query_tcp(tcp_writer, query).await.expect("Failed to retransmit message via TCP");
                         tcp_kill
                     },
                     Err(error) => {
@@ -716,6 +767,7 @@ impl MixedSocket {
         task::spawn(self.clone().manage_udp_query(udp_socket.clone(), udp_kill, sender, query.clone()));
 
         // Step 4: Send the message via UDP.
+        self.recent_messages_sent.store(true, Ordering::SeqCst);
         println!("Sending on UDP socket {} :: {:?}", self.upstream_socket, query);
         let bytes_written = udp_socket.send(raw_message.current_state()).await?;
         drop(udp_socket);
@@ -734,7 +786,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn retransmit_query_udp(udp_socket: Arc<UdpSocket>, query: &Message) -> io::Result<()> {
+    async fn retransmit_query_udp(self: Arc<Self>, udp_socket: Arc<UdpSocket>, query: &Message) -> io::Result<()> {
         // Step 1: Skip. We are resending, in_flight was setup for initial transmission.
 
         // Step 2: Serialize Data
@@ -749,7 +801,8 @@ impl MixedSocket {
         //  TODO: No configuration options have been defined yet.
 
         // Step 4: Send the message via UDP.
-        println!("Sending on UDP socket {} :: {:?}", udp_socket.peer_addr().unwrap(), query);
+        self.recent_messages_sent.store(true, Ordering::SeqCst);
+        println!("Sending on UDP socket {} :: {:?}", self.upstream_socket, query);
         let bytes_written = udp_socket.send(raw_message.current_state()).await?;
         // Verify that the correct number of bytes were sent.
         if bytes_written != wire_length {
@@ -763,7 +816,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn retransmit_query_tcp(tcp_socket: Arc<Mutex<OwnedWriteHalf>>, query: Message) -> io::Result<()> {
+    async fn retransmit_query_tcp(self: Arc<Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, query: Message) -> io::Result<()> {
         // Step 1: Skip. We are resending, in_flight was setup for initial transmission.
 
         // Step 2: Serialize Data
@@ -791,6 +844,7 @@ impl MixedSocket {
         //  TODO: No configuration options have been defined yet.
 
         // Step 4: Send the message via TCP.
+        self.recent_messages_sent.store(true, Ordering::SeqCst);
         let mut w_tcp_stream = tcp_socket.lock().await;
         println!("Sending on TCP socket {} :: {:?}", w_tcp_stream.peer_addr().unwrap(), query);
         let bytes_written = w_tcp_stream.write(raw_message.current_state()).await?;
@@ -939,6 +993,7 @@ impl MixedSocket {
         task::spawn(self.clone().manage_tcp_query(tcp_kill, sender, query.clone()));
 
         // Step 4: Send the message via TCP.
+        self.recent_messages_sent.store(true, Ordering::SeqCst);
         let mut w_tcp_stream = tcp_socket.lock().await;
         println!("Sending on TCP socket {} :: {:?}", self.upstream_socket, query);
         let bytes_written = w_tcp_stream.write(raw_message.current_state()).await?;
