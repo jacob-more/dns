@@ -62,7 +62,7 @@ impl MixedSocket {
             tcp_timeout: Duration::from_millis(500),
             tcp_shared: RwLock::new(SharedTcp { state: TcpState::None }),
 
-            upstream_socket: upstream_socket,
+            upstream_socket,
             in_flight: RwLock::new(HashMap::new()),
 
             recent_messages_sent: AtomicBool::new(false),
@@ -113,37 +113,47 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn listen_udp(self: Arc<Self>, udp_reader: Arc<UdpSocket>) {
+    async fn listen_udp(self: Arc<Self>, udp_reader: Arc<UdpSocket>, udp_kill: Arc<AwakeToken>) {
+        pin!(let udp_kill_awoken = udp_kill.awoken(););
         loop {
-            match read_udp_message(udp_reader.clone()).await {
-                Ok(response) => {
-                    // Note: if truncation flag is set, that will be dealt with by the caller.
-                    self.recent_messages_received.store(true, Ordering::SeqCst);
-                    let response_id = response.id;
-                    let r_in_flight = self.in_flight.read().await;
-                    if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
-                        match sender.send(response) {
-                            Ok(_) => (),
-                            Err(_) => println!("No processes are waiting for message {}", response_id),
-                        };
-                    };
-                    drop(r_in_flight);
-                    // Cleanup is handled by the management processes. This
-                    // process is free to move on.
+            select! {
+                biased;
+                response = read_udp_message(udp_reader.clone()) => {
+                    match response {
+                        Ok(response) => {
+                            // Note: if truncation flag is set, that will be dealt with by the caller.
+                            self.recent_messages_received.store(true, Ordering::SeqCst);
+                            let response_id = response.id;
+                            let r_in_flight = self.in_flight.read().await;
+                            if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
+                                match sender.send(response) {
+                                    Ok(_) => (),
+                                    Err(_) => println!("No processes are waiting for message {}", response_id),
+                                };
+                            };
+                            drop(r_in_flight);
+                            // Cleanup is handled by the management processes. This
+                            // process is free to move on.
+                        },
+                        Err(error) => match error.kind() {
+                            io::ErrorKind::ConnectionRefused => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Refused: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::ConnectionReset => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Reset: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::ConnectionAborted => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Aborted: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::NotConnected => {println!("UDP Listener for {} unable to read from stream (fatal). Not Connected: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::AddrInUse => {println!("UDP Listener for {} unable to read from stream (fatal). Address In Use: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::AddrNotAvailable => {println!("UDP Listener for {} unable to read from stream (fatal). Address Not Available: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::TimedOut => {println!("UDP Listener for {} unable to read from stream (fatal). Timed Out: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::Unsupported => {println!("UDP Listener for {} unable to read from stream (fatal). Unsupported: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::BrokenPipe => {println!("UDP Listener for {} unable to read from stream (fatal). Broken Pipe: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::UnexpectedEof => (),   //< This error usually occurs a bunch of times and fills up the logs. Don't want to print it.
+                            _ => println!("UDP Listener for {} unable to read from stream (non-fatal). {error}", self.upstream_socket),
+                        },
+                    }
                 },
-                Err(error) => match error.kind() {
-                    io::ErrorKind::ConnectionRefused => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Refused: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::ConnectionReset => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Reset: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::ConnectionAborted => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Aborted: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::NotConnected => {println!("UDP Listener for {} unable to read from stream (fatal). Not Connected: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::AddrInUse => {println!("UDP Listener for {} unable to read from stream (fatal). Address In Use: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::AddrNotAvailable => {println!("UDP Listener for {} unable to read from stream (fatal). Address Not Available: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::TimedOut => {println!("UDP Listener for {} unable to read from stream (fatal). Timed Out: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::Unsupported => {println!("UDP Listener for {} unable to read from stream (fatal). Unsupported: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::BrokenPipe => {println!("UDP Listener for {} unable to read from stream (fatal). Broken Pipe: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::UnexpectedEof => (),   //< This error usually occurs a bunch of times and fills up the logs. Don't want to print it.
-                    _ => println!("UDP Listener for {} unable to read from stream (non-fatal). {error}", self.upstream_socket),
-                },
+                _ = &mut udp_kill_awoken => {
+                    println!("UDP Socket {} Canceled. Shutting down UDP Listener.", self.upstream_socket);
+                    break;
+                }
             }
         }
 
@@ -169,36 +179,46 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn listen_tcp(self: Arc<Self>, mut tcp_reader: OwnedReadHalf) {
+    async fn listen_tcp(self: Arc<Self>, mut tcp_reader: OwnedReadHalf, tcp_kill: Arc<AwakeToken>) {
+        pin!(let tcp_kill_awoken = tcp_kill.awoken(););
         loop {
-            match read_tcp_message(&mut tcp_reader).await {
-                Ok(response) => {
-                    self.recent_messages_received.store(true, Ordering::SeqCst);
-                    let response_id = response.id;
-                    let r_in_flight = self.in_flight.read().await;
-                    if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
-                        match sender.send(response) {
-                            Ok(_) => (),
-                            Err(_) => println!("No processes are waiting for message {}", response_id),
-                        };
-                    };
-                    drop(r_in_flight);
-                    // Cleanup is handled by the management processes. This
-                    // process is free to move on.
+            select! {
+                biased;
+                response = read_tcp_message(&mut tcp_reader) => {
+                    match response {
+                        Ok(response) => {
+                            self.recent_messages_received.store(true, Ordering::SeqCst);
+                            let response_id = response.id;
+                            let r_in_flight = self.in_flight.read().await;
+                            if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
+                                match sender.send(response) {
+                                    Ok(_) => (),
+                                    Err(_) => println!("No processes are waiting for message {}", response_id),
+                                };
+                            };
+                            drop(r_in_flight);
+                            // Cleanup is handled by the management processes. This
+                            // process is free to move on.
+                        },
+                        Err(error) => match error.kind() {
+                            io::ErrorKind::ConnectionRefused => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Refused: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::ConnectionReset => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Reset: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::ConnectionAborted => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Aborted: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::NotConnected => {println!("TCP Listener for {} unable to read from stream (fatal). Not Connected: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::AddrInUse => {println!("TCP Listener for {} unable to read from stream (fatal). Address In Use: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::AddrNotAvailable => {println!("TCP Listener for {} unable to read from stream (fatal). Address Not Available: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::TimedOut => {println!("TCP Listener for {} unable to read from stream (fatal). Timed Out: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::Unsupported => {println!("TCP Listener for {} unable to read from stream (fatal). Unsupported: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::BrokenPipe => {println!("TCP Listener for {} unable to read from stream (fatal). Broken Pipe: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::UnexpectedEof => (),   //< This error usually occurs a bunch of times and fills up the logs. Don't want to print it.
+                            _ => println!("TCP Listener for {} unable to read from stream (non-fatal). {error}", self.upstream_socket),
+                        },
+                    }
                 },
-                Err(error) => match error.kind() {
-                    io::ErrorKind::ConnectionRefused => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Refused: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::ConnectionReset => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Reset: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::ConnectionAborted => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Aborted: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::NotConnected => {println!("TCP Listener for {} unable to read from stream (fatal). Not Connected: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::AddrInUse => {println!("TCP Listener for {} unable to read from stream (fatal). Address In Use: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::AddrNotAvailable => {println!("TCP Listener for {} unable to read from stream (fatal). Address Not Available: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::TimedOut => {println!("TCP Listener for {} unable to read from stream (fatal). Timed Out: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::Unsupported => {println!("TCP Listener for {} unable to read from stream (fatal). Unsupported: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::BrokenPipe => {println!("TCP Listener for {} unable to read from stream (fatal). Broken Pipe: {error}", self.upstream_socket); break;},
-                    io::ErrorKind::UnexpectedEof => (),   //< This error usually occurs a bunch of times and fills up the logs. Don't want to print it.
-                    _ => println!("TCP Listener for {} unable to read from stream (non-fatal). {error}", self.upstream_socket),
-                },
+                _ = &mut tcp_kill_awoken => {
+                    println!("TCP Socket {} Canceled. Shutting down TCP Listener.", self.upstream_socket);
+                    break;
+                }
             }
         }
 
@@ -258,12 +278,15 @@ impl MixedSocket {
     #[inline]
     pub async fn shutdown_udp(self: Arc<Self>) -> io::Result<()> {
         let r_udp = self.udp_shared.read().await;
-        if let UdpState::Managed(udp_socket, _) = &r_udp.state {
+        if let UdpState::Managed(udp_socket, udp_kill) = &r_udp.state {
             let udp_socket = udp_socket.clone();
+            let udp_kill = udp_kill.clone();
             drop(r_udp);
             
             println!("Shutting down UDP socket {}", self.upstream_socket);
             SockRef::from(udp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
+
+            udp_kill.awake();
 
             // Note: this task is not responsible for actual cleanup. Once the listener closes, it
             // will kill any active queries and change the UdpState.
@@ -274,14 +297,17 @@ impl MixedSocket {
     #[inline]
     pub async fn shutdown_tcp(self: Arc<Self>) -> io::Result<()> {
         let r_tcp = self.tcp_shared.read().await;
-        if let TcpState::Managed(tcp_socket, _) = &r_tcp.state {
+        if let TcpState::Managed(tcp_socket, tcp_kill) = &r_tcp.state {
             let tcp_socket = tcp_socket.clone();
+            let tcp_kill = tcp_kill.clone();
             drop(r_tcp);
             
             println!("Shutting down TCP socket {}", self.upstream_socket);
             let w_tcp_socket = tcp_socket.lock().await;
             SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
             drop(w_tcp_socket);
+
+            tcp_kill.awake();
 
             // Note: this task is not responsible for actual cleanup. Once the listener closes, it
             // will kill any active queries and change the TcpState.
@@ -318,10 +344,10 @@ impl MixedSocket {
                 w_udp.state = UdpState::Blocked;
                 drop(w_udp);
 
-                udp_kill.awake();
-
                 println!("Shutting down UDP socket {}", self.upstream_socket);
                 SockRef::from(udp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
+
+                udp_kill.awake();
 
                 Ok(())
             },
@@ -352,12 +378,12 @@ impl MixedSocket {
                 w_tcp.state = TcpState::Blocked;
                 drop(w_tcp);
 
-                tcp_kill.awake();
-
                 println!("Shutting down TCP socket {}", self.upstream_socket);
                 let w_tcp_socket = tcp_socket.lock().await;
                 SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
                 drop(w_tcp_socket);
+
+                tcp_kill.awake();
 
                 Ok(())
             },
@@ -461,7 +487,7 @@ impl MixedSocket {
         let udp_writer = udp_socket;
         let udp_kill = Arc::new(AwakeToken::new());
 
-        let listener = task::spawn(self.clone().listen_udp(udp_reader));
+        let listener = task::spawn(self.clone().listen_udp(udp_reader, udp_kill.clone()));
 
         // Since there is no intermediate state while the UDP socket is being
         // set up and the lock is dropped, it is possible that another process
@@ -576,7 +602,7 @@ impl MixedSocket {
         let tcp_writer = Arc::new(Mutex::new(tcp_writer));
         let tcp_kill = Arc::new(AwakeToken::new());
 
-        task::spawn(self.clone().listen_tcp(tcp_reader));
+        task::spawn(self.clone().listen_tcp(tcp_reader, tcp_kill.clone()));
 
         let mut w_tcp = self.tcp_shared.write().await;
         w_tcp.state = TcpState::Managed(tcp_writer.clone(), tcp_kill.clone());
