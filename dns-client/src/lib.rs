@@ -25,10 +25,10 @@ pub struct DNSAsyncClient {
 
 impl DNSAsyncClient {
     #[inline]
-    pub fn new(cache: Arc<AsyncMainTreeCache>) -> Self {
+    pub async fn new(cache: Arc<AsyncMainTreeCache>) -> Self {
         Self {
             cache,
-            socket_manager: Arc::new(SocketManager::new()),
+            socket_manager: Arc::new(SocketManager::new().await),
             active_query_manager: RwLock::new(HashMap::new())
         }
     }
