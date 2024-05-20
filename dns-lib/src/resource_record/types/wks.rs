@@ -13,6 +13,68 @@ pub struct WKS {
     bit_map: Vec<u8>,
 }
 
+impl WKS {
+    #[inline]
+    pub fn new(address: Ipv4Addr, protocol: Protocol, bit_map: Vec<u8>) -> Self {
+        let mut new = Self { address, protocol, bit_map };
+        new.trim_bit_map();
+        new
+    }
+
+    #[inline]
+    pub fn address(&self) -> &Ipv4Addr {
+        &self.address
+    }
+
+    #[inline]
+    pub fn protocol(&self) -> &Protocol {
+        &self.protocol
+    }
+
+    #[inline]
+    pub fn bit_map(&self) -> &Vec<u8> {
+        &self.bit_map
+    }
+
+    #[inline]
+    pub fn add_port(&mut self, port: &u16) {
+        add_port_to_bitmap(&mut self.bit_map, port)
+    }
+
+    #[inline]
+    pub fn remove_port(&mut self, port: &u16) {
+        let bitmap_index = (port / 8) as usize;
+        let bit_offset = 7 - (port % 8);
+
+        if let Some(byte) = self.bit_map.get_mut(bitmap_index) {
+            let mask = match bit_offset {
+                0 => 0b11111110,
+                1 => 0b11111101,
+                2 => 0b11111011,
+                3 => 0b11110111,
+                4 => 0b11101111,
+                5 => 0b11011111,
+                6 => 0b10111111,
+                7 => 0b01111111,
+                _ => panic!("Bug in WKS bitmap. Anything mod 8 must be less than 8")
+            };
+            *byte &= mask;
+
+            // Now, verify that the bit map doesn't end in a zero. If it does, remove elements until
+            // it doesn't.
+            self.trim_bit_map();
+            // This check is only required if changes are made to the bit map.
+        } // Else: if that index does not exist, then there is nothing to do.
+    }
+
+    #[inline]
+    fn trim_bit_map(&mut self) {
+        while let Some(0) = self.bit_map.last() {
+            self.bit_map.pop();
+        }
+    }
+}
+
 impl FromTokenizedRData for WKS {
     #[inline]
     fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {

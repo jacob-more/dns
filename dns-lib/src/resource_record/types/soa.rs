@@ -29,6 +29,31 @@ impl SOA {
     pub fn responsible_mailbox_domain_name(&self) -> &CDomainName {
         &self.rname
     }
+
+    #[inline]
+    pub fn serial(&self) -> &u32 {
+        &self.serial
+    }
+
+    #[inline]
+    pub fn refresh(&self) -> &Time {
+        &self.refresh
+    }
+
+    #[inline]
+    pub fn retry(&self) -> &Time {
+        &self.retry
+    }
+
+    #[inline]
+    pub fn expire(&self) -> &Time {
+        &self.expire
+    }
+
+    #[inline]
+    pub fn minimum(&self) -> &u32 {
+        &self.minimum
+    }
 }
 
 #[cfg(test)]
