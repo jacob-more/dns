@@ -609,6 +609,11 @@ impl AsciiString {
     }
 
     #[inline]
+    pub fn as_owned_vec(self) -> Vec<AsciiChar> {
+        self.string
+    }
+
+    #[inline]
     pub fn as_lower(&self) -> Self {
         Self {
             string: self.string.iter()

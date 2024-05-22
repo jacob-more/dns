@@ -8,7 +8,7 @@ pub mod apl;
 // pub mod ATMA;
 // pub mod AVC;
 pub mod axfr;
-// pub mod CAA;
+pub mod caa;
 // pub mod CDNSKEY;
 // pub mod CDS;
 // pub mod CERT;

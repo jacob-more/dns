@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation, from_tokenized_rdata::FromTokenizedRData}}};
 
-use super::{rclass::RClass, types::{a::A, aaaa::AAAA, any::ANY, axfr::AXFR, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, soa::SOA, txt::TXT, a6::A6, ptr::PTR, wks::WKS, afsdb::AFSDB, amtrelay::AMTRELAY, apl::APL}, rtype::RType, time::Time};
+use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, ptr::PTR, soa::SOA, txt::TXT, wks::WKS}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
@@ -64,7 +64,7 @@ pub enum ResourceRecord {
     // ATMA(RRHeader, ATMA),
     // AVC(RRHeader, AVC),
     AXFR(RRHeader, AXFR),
-    // CAA(RRHeader, CAA),
+    CAA(RRHeader, CAA),
     // CDNSKEY(RRHeader, CDNSKEY),
     // CDS(RRHeader, CDS),
     // CERT(RRHeader, CERT),
@@ -167,7 +167,7 @@ impl ResourceRecord {
             // Self::ATMA(header, _) => (header, RType::ATMA),
             // Self::AVC(header, _) => (header, RType::AVC),
             Self::AXFR(header, _) => (header, RType::AXFR),
-            // Self::CAA(header, _) => (header, RType::CAA),
+            Self::CAA(header, _) => (header, RType::CAA),
             // Self::CDNSKEY(header, _) => (header, RType::CDNSKEY),
             // Self::CDS(header, _) => (header, RType::CDS),
             // Self::CERT(header, _) => (header, RType::CERT),
@@ -263,7 +263,7 @@ impl ResourceRecord {
             // Self::ATMA(header, _) => (header, RType::ATMA),
             // Self::AVC(header, _) => (header, RType::AVC),
             Self::AXFR(header, _) => (header, RType::AXFR),
-            // Self::CAA(header, _) => (header, RType::CAA),
+            Self::CAA(header, _) => (header, RType::CAA),
             // Self::CDNSKEY(header, _) => (header, RType::CDNSKEY),
             // Self::CDS(header, _) => (header, RType::CDS),
             // Self::CERT(header, _) => (header, RType::CERT),
@@ -384,7 +384,7 @@ impl ResourceRecord {
             // Self::ATMA(_, rdata) => rdata.serial_length(),
             // Self::AVC(_, rdata) => rdata.serial_length(),
             Self::AXFR(_, rdata) => rdata.serial_length(),
-            // Self::CAA(_, rdata) => rdata.serial_length(),
+            Self::CAA(_, rdata) => rdata.serial_length(),
             // Self::CDNSKEY(_, rdata) => rdata.serial_length(),
             // Self::CDS(_, rdata) => rdata.serial_length(),
             // Self::CERT(_, rdata) => rdata.serial_length(),
@@ -491,7 +491,7 @@ impl ResourceRecord {
             // (Self::ATMA(self_header, self_rdata), Self::ATMA(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::AVC(self_header, self_rdata), Self::AVC(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             (Self::AXFR(self_header, self_rdata), Self::AXFR(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
-            // (Self::CAA(self_header, self_rdata), Self::CAA(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
+            (Self::CAA(self_header, self_rdata), Self::CAA(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::CDNSKEY(self_header, self_rdata), Self::CDNSKEY(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::CDS(self_header, self_rdata), Self::CDS(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::CERT(self_header, self_rdata), Self::CERT(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
@@ -602,7 +602,7 @@ impl ToWire for ResourceRecord {
             // Self::ATMA(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::AVC(_, rdata) => rdata.to_wire_format(wire, compression)?,
             Self::AXFR(_, rdata) => rdata.to_wire_format(wire, compression)?,
-            // Self::CAA(_, rdata) => rdata.to_wire_format(wire, compression)?,
+            Self::CAA(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::CDNSKEY(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::CDS(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::CERT(_, rdata) => rdata.to_wire_format(wire, compression)?,
@@ -1201,10 +1201,9 @@ impl FromWire for ResourceRecord {
                 // (Self::URI(header, rdata), rd_length)
             },
             RType::CAA => {
-                return Err(ReadWireError::UnsupportedRType(rtype));
-                // let rdata = CAA::from_wire_format(&mut rdata_wire)?;
-                // let rd_length = rdata.serial_length();
-                // (Self::CAA(header, rdata), rd_length)
+                let rdata = CAA::from_wire_format(&mut rdata_wire)?;
+                let rd_length = rdata.serial_length();
+                (Self::CAA(header, rdata), rd_length)
             },
             RType::AVC => {
                 return Err(ReadWireError::UnsupportedRType(rtype));
@@ -1264,6 +1263,7 @@ impl ResourceRecord {
             RType::AFSDB => Self::AFSDB(rr_header, AFSDB::from_tokenized_rdata(&record.rdata)?),
             RType::AMTRELAY => Self::AMTRELAY(rr_header, AMTRELAY::from_tokenized_rdata(&record.rdata)?),
             RType::APL => Self::APL(rr_header, APL::from_tokenized_rdata(&record.rdata)?),
+            RType::CAA => Self::CAA(rr_header, CAA::from_tokenized_rdata(&record.rdata)?),
             RType::CNAME => Self::CNAME(rr_header, CNAME::from_tokenized_rdata(&record.rdata)?),
             RType::DNAME => Self::DNAME(rr_header, DNAME::from_tokenized_rdata(&record.rdata)?),
             RType::HINFO => Self::HINFO(rr_header, HINFO::from_tokenized_rdata(&record.rdata)?),
@@ -1309,6 +1309,7 @@ impl ToPresentation for ResourceRecord {
             Self::APL(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::ANY(_, _) => panic!("Cannot convert {rtype} to presentation"),
             Self::AXFR(_, _) => panic!("Cannot convert {rtype} to presentation"),
+            Self::CAA(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::CNAME(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::DNAME(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::HINFO(_, rdata) => rdata.to_presentation_format(out_buffer),

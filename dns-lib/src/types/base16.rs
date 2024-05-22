@@ -193,7 +193,7 @@ impl Base16 {
         }
 
         // Verify that the format does not contain padding characters where they are not allowed.
-        let remainder = string.as_vec().chunks_exact(2).remainder();
+        let remainder = string.as_slice().chunks_exact(2).remainder();
         if remainder.len() != 0 {
             return Err(Base16Error::Overflow);
         }
