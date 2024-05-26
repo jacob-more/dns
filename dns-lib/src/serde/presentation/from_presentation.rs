@@ -766,8 +766,8 @@ mod test_mac_address {
 
     use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
 
-    const GOOD_MAC: &str = "a:9:8:7:6:5";
-    const BAD_MAC: &str = "a:9:8:7:6:5:4:3";
+    const GOOD_MAC: &str = "0a:09:08:07:06:05";
+    const BAD_MAC: &str = "0a:09:08:07:06:05:04:03";
     const EMPTY_STR: &str = "";
 
     gen_ok_token_test!(test_mac_address_ok, MacAddress, MacAddress::new([10, 9, 8, 7, 6, 5]), GOOD_MAC);
