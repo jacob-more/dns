@@ -97,7 +97,7 @@ impl FromTokenizedRData for WKS {
                     &u16::from_token_format(service)?
                 );
             } else {
-                let ports = match port_from_service(service, &protocol) {
+                let ports = match port_from_service(service.to_string(), protocol.clone()) {
                     Ok(ports) => ports,
                     Err(error) => Err(TokenError::PortError(error))?,
                 };
