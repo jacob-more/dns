@@ -11,7 +11,7 @@ pub mod axfr;
 pub mod caa;
 // pub mod CDNSKEY;
 // pub mod CDS;
-// pub mod CERT;
+pub mod cert;
 pub mod cname;
 // pub mod CSYNC;
 // pub mod DHCID;
