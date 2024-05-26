@@ -893,7 +893,7 @@ impl MixedSocket {
         // Step 4: Send the message via TCP.
         self.recent_messages_sent.store(true, Ordering::SeqCst);
         let mut w_tcp_stream = tcp_socket.lock().await;
-        println!("Sending on TCP socket {} :: {:?}", w_tcp_stream.peer_addr().unwrap(), query);
+        println!("Sending on TCP socket {} :: {:?}", self.upstream_socket, query);
         let bytes_written = w_tcp_stream.write(raw_message.current_state()).await?;
         drop(w_tcp_stream);
         // Verify that the correct number of bytes were written.
