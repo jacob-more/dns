@@ -55,7 +55,7 @@ impl MixedSocket {
     #[inline]
     pub fn new(upstream_socket: SocketAddr) -> Arc<Self> {
         Arc::new(MixedSocket {
-            udp_retransmit: Duration::from_millis(100),
+            udp_retransmit: Duration::from_millis(125),
             udp_timeout_count: AtomicU8::new(0),
             udp_shared: RwLock::new(SharedUdp { state: UdpState::None }),
 
@@ -647,7 +647,7 @@ impl MixedSocket {
             },
             _ = time::sleep(self.udp_retransmit) => {
                 println!("UDP Timeout: Retransmitting message with ID {} via UDP", query_id);
-                self.clone().retransmit_query_udp(udp_socket, &query).await.expect("Failed to retransmit message via UDP");
+                task::spawn(self.clone().retransmit_query_udp(udp_socket, query.clone()));
                 // Also start the process of setting up a TCP connection. This
                 // way, by the time we timeout a second time (if we do, at
                 // least), there is a TCP connection ready to go.
@@ -670,21 +670,44 @@ impl MixedSocket {
                 println!("UDP Cleanup: UDP canceled while waiting to receive message with ID {}", query_id);
                 return self.cleanup_query(query_id).await;
             },
-            _ = time::sleep(self.udp_retransmit) => {
-                match self.clone().init_tcp().await {
-                    Ok((tcp_writer, tcp_kill)) => {
-                        println!("UDP Timeout: Retransmitting message with ID {} via TCP", query_id);
-                        self.clone().retransmit_query_tcp(tcp_writer, query).await.expect("Failed to retransmit message via TCP");
-                        tcp_kill
-                    },
-                    Err(error) => {
-                        eprintln!("UDP Timeout: Unable to retransmit via TCP; {error}");
-                        // If we cannot re-transmit with TCP, then we are still waiting on UDP. So,
-                        // we are still actually interested in the UDP kill token since that's the
-                        // socket that is going to give us our answer.
-                        udp_kill
-                    },
-                }
+            // Although it looks gross, the nested select statement here helps prevent responses
+            // from being missed. Unlike the other cases where we can offload the heavy work to
+            // other tasks, we need the result here so this seems to be the best way to do it.
+            // Note that we do still offload the tcp initialization to another task so that it is
+            // cancel-safe, but we then await the join handle.
+            _ = time::sleep(self.udp_retransmit) => select! {
+                biased;
+                response = in_flight_receiver.recv() => {
+                    match response {
+                        Ok(_) => println!("UDP Cleanup: Response received with ID {}", query_id),
+                        Err(broadcast::error::RecvError::Closed) => println!("UDP Cleanup: Channel closed for query with ID {}", query_id),
+                        Err(broadcast::error::RecvError::Lagged(skipped_messages)) => println!("UDP Cleanup: Channel lagged for query with ID {}, skipping {skipped_messages} messages", query_id),
+                    }
+                    return self.cleanup_query(query_id).await;
+                },
+                result = task::spawn(self.clone().init_tcp()) => {
+                    match result {
+                        Ok(Ok((tcp_writer, tcp_kill))) => {
+                            println!("UDP Timeout: Retransmitting message with ID {} via TCP", query_id);
+                            task::spawn(self.clone().retransmit_query_tcp(tcp_writer, query));
+                            tcp_kill
+                        },
+                        Ok(Err(error)) => {
+                            eprintln!("UDP Timeout: Unable to retransmit via TCP; {error}");
+                            // If we cannot re-transmit with TCP, then we are still waiting on UDP. So,
+                            // we are still actually interested in the UDP kill token since that's the
+                            // socket that is going to give us our answer.
+                            udp_kill
+                        },
+                        Err(join_error) => {
+                            eprintln!("UDP Timeout: Unable to retransmit via TCP; {join_error}");
+                            // If we cannot re-transmit with TCP, then we are still waiting on UDP. So,
+                            // we are still actually interested in the UDP kill token since that's the
+                            // socket that is going to give us our answer.
+                            udp_kill
+                        }
+                    }
+                },
             },
         };
 
@@ -810,7 +833,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn retransmit_query_udp(self: Arc<Self>, udp_socket: Arc<UdpSocket>, query: &Message) -> io::Result<()> {
+    async fn retransmit_query_udp(self: Arc<Self>, udp_socket: Arc<UdpSocket>, query: Message) -> io::Result<()> {
         // Step 1: Skip. We are resending, in_flight was setup for initial transmission.
 
         // Step 2: Serialize Data
