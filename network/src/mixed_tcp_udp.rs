@@ -995,6 +995,7 @@ impl MixedSocket {
         let raw_message = &mut [0_u8; MAX_MESSAGE_SIZE];
         let mut raw_message = WriteWire::from_bytes(raw_message);
         if let Err(wire_error) = query.to_wire_format_with_two_octet_length(&mut raw_message, &mut Some(CompressionMap::new())) {
+            drop(sender);
             self.cleanup_query(query.id).await;
             return Err(io::Error::new(io::ErrorKind::InvalidData, wire_error));
         };
