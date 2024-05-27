@@ -869,23 +869,10 @@ impl MixedSocket {
         // Step 2: Serialize Data
         let raw_message = &mut [0_u8; MAX_MESSAGE_SIZE];
         let mut raw_message = WriteWire::from_bytes(raw_message);
-        // Push two bytes onto the wire. These will be replaced with the u16 that indicates
-        // the wire length.
-        if let Err(error) = raw_message.write_bytes(&[0, 0]) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, error));
-        };
-
-        if let Err(wire_error) = query.to_wire_format(&mut raw_message, &mut Some(CompressionMap::new())) {
+        if let Err(wire_error) = query.to_wire_format_with_two_octet_length(&mut raw_message, &mut Some(CompressionMap::new())) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, wire_error));
         };
-
-        // Now, replace those two bytes from earlier with the wire length.
         let wire_length = raw_message.len();
-        let message_wire_length = (wire_length - 2) as u16;
-        let bytes = message_wire_length.to_be_bytes();
-        if let Err(error) = raw_message.write_bytes_at(&bytes, 0) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, error));
-        };
 
         // Step 3: Bounds check against the configurations.
         //  TODO: No configuration options have been defined yet.
@@ -1007,29 +994,11 @@ impl MixedSocket {
         // Step 2: Serialize Data
         let raw_message = &mut [0_u8; MAX_MESSAGE_SIZE];
         let mut raw_message = WriteWire::from_bytes(raw_message);
-        // Push two bytes onto the wire. These will be replaced with the u16 that indicates
-        // the wire length.
-        if let Err(error) = raw_message.write_bytes(&[0, 0]) {
-            drop(sender);
-            self.cleanup_query(query.id).await;
-            return Err(io::Error::new(io::ErrorKind::InvalidData, error));
-        };
-
-        if let Err(wire_error) = query.to_wire_format(&mut raw_message, &mut Some(CompressionMap::new())) {
-            drop(sender);
+        if let Err(wire_error) = query.to_wire_format_with_two_octet_length(&mut raw_message, &mut Some(CompressionMap::new())) {
             self.cleanup_query(query.id).await;
             return Err(io::Error::new(io::ErrorKind::InvalidData, wire_error));
         };
-
-        // Now, replace those two bytes from earlier with the wire length.
         let wire_length = raw_message.len();
-        let message_wire_length: u16 = (wire_length - 2) as u16;
-        let bytes = message_wire_length.to_be_bytes();
-        if let Err(error) = raw_message.write_bytes_at(&bytes, 0) {
-            drop(sender);
-            self.cleanup_query(query.id).await;
-            return Err(io::Error::new(io::ErrorKind::InvalidData, error));
-        };
 
         // Step 3: Bounds check against the configurations.
         //  TODO: No configuration options have been defined yet.

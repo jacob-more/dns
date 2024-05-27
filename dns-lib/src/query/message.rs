@@ -132,6 +132,26 @@ fn u1_to_bool(integer: u1) -> bool {
     }
 }
 
+impl Message {
+    #[inline]
+    pub fn to_wire_format_with_two_octet_length<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+        // Push two bytes onto the wire. These will be replaced with the u16 that indicates the wire
+        // length.
+        let two_octet_length_offset = wire.len();
+        wire.write_bytes(&[0, 0])?;
+
+        let wire_start_offset = wire.len();
+        self.to_wire_format(wire, compression)?;
+        let wire_end_offset = wire.len();
+
+        let wire_length = wire_end_offset - wire_start_offset;
+        if wire_length > u16::MAX as usize {
+            return Err(WriteWireError::OverflowError(format!("Tried to write {} bytes but the length octet can be at most {}", wire_length, u16::MAX)));
+        }
+        wire.write_bytes_at(&(wire_length as u16).to_be_bytes(), two_octet_length_offset)
+    }
+}
+
 impl ToWire for Message {
     #[inline]
     fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
