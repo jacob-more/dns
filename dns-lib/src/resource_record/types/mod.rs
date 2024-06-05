@@ -77,7 +77,7 @@ pub mod soa;
 // pub mod TA;
 // pub mod TALINK;
 // pub mod TKEY;
-// pub mod TLSA;
+pub mod tlsa;
 pub mod tsig;
 pub mod txt;
 // pub mod UID;
