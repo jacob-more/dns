@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation, from_tokenized_rdata::FromTokenizedRData}}};
 
-use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, ptr::PTR, soa::SOA, txt::TXT, wks::WKS}};
+use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, ptr::PTR, soa::SOA, tsig::TSIG, txt::TXT, wks::WKS}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
@@ -134,7 +134,7 @@ pub enum ResourceRecord {
     // TALINK(RRHeader, TALINK),
     // TKEY(RRHeader, TKEY),
     // TLSA(RRHeader, TLSA),
-    // TSIG(RRHeader, TSIG),
+    TSIG(RRHeader, TSIG),
     TXT(RRHeader, TXT),
     // UID(RRHeader, UID),
     // UINFO(RRHeader, UINFO),
@@ -238,7 +238,7 @@ impl ResourceRecord {
             // Self::TALINK(header, _) => (header, RType::TALINK),
             // Self::TKEY(header, _) => (header, RType::TKEY),
             // Self::TLSA(header, _) => (header, RType::TLSA),
-            // Self::TSIG(header, _) => (header, RType::TSIG),
+            Self::TSIG(header, _) => (header, RType::TSIG),
             Self::TXT(header, _) => (header, RType::TXT),
             // Self::UID(header, _) => (header, RType::UID),
             // Self::UINFO(header, _) => (header, RType::UINFO),
@@ -334,7 +334,7 @@ impl ResourceRecord {
             // Self::TALINK(header, _) => (header, RType::TALINK),
             // Self::TKEY(header, _) => (header, RType::TKEY),
             // Self::TLSA(header, _) => (header, RType::TLSA),
-            // Self::TSIG(header, _) => (header, RType::TSIG),
+            Self::TSIG(header, _) => (header, RType::TSIG),
             Self::TXT(header, _) => (header, RType::TXT),
             // Self::UID(header, _) => (header, RType::UID),
             // Self::UINFO(header, _) => (header, RType::UINFO),
@@ -455,7 +455,7 @@ impl ResourceRecord {
             // Self::TALINK(_, rdata) => rdata.serial_length(),
             // Self::TKEY(_, rdata) => rdata.serial_length(),
             // Self::TLSA(_, rdata) => rdata.serial_length(),
-            // Self::TSIG(_, rdata) => rdata.serial_length(),
+            Self::TSIG(_, rdata) => rdata.serial_length(),
             Self::TXT(_, rdata) => rdata.serial_length(),
             // Self::UID(_, rdata) => rdata.serial_length(),
             // Self::UINFO(_, rdata) => rdata.serial_length(),
@@ -562,7 +562,7 @@ impl ResourceRecord {
             // (Self::TALINK(self_header, self_rdata), Self::TALINK(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::TKEY(self_header, self_rdata), Self::TKEY(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::TLSA(self_header, self_rdata), Self::TLSA(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
-            // (Self::TSIG(self_header, self_rdata), Self::TSIG(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
+            (Self::TSIG(self_header, self_rdata), Self::TSIG(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             (Self::TXT(self_header, self_rdata), Self::TXT(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::UID(self_header, self_rdata), Self::UID(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::UINFO(self_header, self_rdata), Self::UINFO(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
@@ -673,7 +673,7 @@ impl ToWire for ResourceRecord {
             // Self::TALINK(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::TKEY(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::TLSA(_, rdata) => rdata.to_wire_format(wire, compression)?,
-            // Self::TSIG(_, rdata) => rdata.to_wire_format(wire, compression)?,
+            Self::TSIG(_, rdata) => rdata.to_wire_format(wire, compression)?,
             Self::TXT(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::UID(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::UINFO(_, rdata) => rdata.to_wire_format(wire, compression)?,
@@ -1162,10 +1162,9 @@ impl FromWire for ResourceRecord {
                 // (Self::TKEY(header, rdata), rd_length)
             },
             RType::TSIG => {
-                return Err(ReadWireError::UnsupportedRType(rtype));
-                // let rdata = TSIG::from_wire_format(&mut rdata_wire)?;
-                // let rd_length = rdata.serial_length();
-                // (Self::TSIG(header, rdata), rd_length)
+                let rdata = TSIG::from_wire_format(&mut rdata_wire)?;
+                let rd_length = rdata.serial_length();
+                (Self::TSIG(header, rdata), rd_length)
             },
             RType::IXFR => {
                 return Err(ReadWireError::UnsupportedRType(rtype));
@@ -1285,6 +1284,7 @@ impl ResourceRecord {
             RType::MAILA => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
             RType::MAILB => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
             RType::NULL => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
+            RType::TSIG => return Err(TokenizedRecordError::RTypeNotAllowed(rtype)),
 
             _ => return Err(TokenizedRecordError::UnsupportedRType(rtype)),
         };
@@ -1326,6 +1326,7 @@ impl ToPresentation for ResourceRecord {
             Self::NS(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::NULL(_, _) => panic!("Cannot convert {rtype} to presentation"),
             Self::SOA(_, rdata) => rdata.to_presentation_format(out_buffer),
+            Self::TSIG(_, _) => panic!("Cannot convert {rtype} to presentation"),
             Self::TXT(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::PTR(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::WKS(_, rdata) => rdata.to_presentation_format(out_buffer),
