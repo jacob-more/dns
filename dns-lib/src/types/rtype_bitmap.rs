@@ -1,4 +1,4 @@
-use crate::{resource_record::rtype::RType, serde::wire::{from_wire::FromWire, read_wire::ReadWireError, to_wire::ToWire}};
+use crate::{resource_record::rtype::RType, serde::{presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::ReadWireError, to_wire::ToWire}}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct WindowBlock {
@@ -77,7 +77,7 @@ pub struct RTypeBitmap {
 
 impl RTypeBitmap {
     #[inline]
-    pub fn from_rtypes(type_codes: impl Iterator<Item = RType>) -> Self {
+    pub fn from_rtypes<'a>(type_codes: impl Iterator<Item = &'a RType>) -> Self {
         // There are 256 possible 32-byte windows.
         // Each window is represented as a tuple: (32-byte array, 1-byte bitmap_length).
         let mut all_windows = [([0_u8; 32], 0_u8); 256];
@@ -158,6 +158,24 @@ impl FromWire for RTypeBitmap {
     }
 }
 
+impl ToPresentation for RTypeBitmap {
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        for rtype in self.to_rtypes() {
+            rtype.to_presentation_format(out_buffer);
+        }
+    }
+}
+
+impl FromPresentation for RTypeBitmap {
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        let mut rtypes = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            rtypes.push(RType::from_token_format(&[token])?.0);
+        }
+        Ok((RTypeBitmap::from_rtypes(rtypes.iter()), &[]))
+    }
+}
+
 #[cfg(test)]
 mod circular_sanity_tests {
     use crate::{resource_record::rtype::RType, serde::wire::{circular_test::gen_test_circular_serde_sanity_test, to_wire::ToWire, write_wire::WriteWire}};
@@ -169,7 +187,7 @@ mod circular_sanity_tests {
             fn $test_encoding() {
                 let init_rtypes = $input;
                 let non_init_rtypes = (0..=u16::MAX).into_iter().map(|code| RType::from_code(code)).filter(|code| !init_rtypes.contains(code));
-                let bitmap = RTypeBitmap::from_rtypes(init_rtypes.clone().into_iter());
+                let bitmap = RTypeBitmap::from_rtypes(init_rtypes.clone().iter());
 
                 // Check that the bitmap claims to contain the correct RTypes
                 for rtype in init_rtypes.clone().into_iter() {
@@ -195,7 +213,7 @@ mod circular_sanity_tests {
                 }
             }
 
-            gen_test_circular_serde_sanity_test!($test_wire, RTypeBitmap::from_rtypes($input.into_iter()));
+            gen_test_circular_serde_sanity_test!($test_wire, RTypeBitmap::from_rtypes($input.iter()));
         }
     }
 
@@ -218,7 +236,7 @@ mod circular_sanity_tests {
     #[test]
     fn rfc3845_example_test() {
         let init_rtypes = vec![RType::A, RType::MX, RType::RRSIG, RType::NSEC, RType::Unknown(1234)];
-        let bitmap = RTypeBitmap::from_rtypes(init_rtypes.clone().into_iter());
+        let bitmap = RTypeBitmap::from_rtypes(init_rtypes.clone().iter());
         let expected_wire_format: Vec<u8> = vec![
             0x00, 0x06, 0x40, 0x01, 0x00, 0x00, 0x00, 0x03,
             0x04, 0x1b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
