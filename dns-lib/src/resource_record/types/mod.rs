@@ -64,7 +64,7 @@ pub mod ptr;
 // pub mod PX;
 // pub mod RKEY;
 // pub mod RP;
-// pub mod RRSIG;
+pub mod rrsig;
 // pub mod RT;
 // pub mod SIG;
 // pub mod SINK;
