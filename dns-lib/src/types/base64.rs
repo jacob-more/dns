@@ -217,22 +217,8 @@ impl Base64 {
     }
 
     #[inline]
-    pub fn from_case_insensitive_ascii(string: &AsciiString) -> Result<Self, Base64Error> {
-        Self::from_ascii(
-            &string.as_upper()
-        )
-    }
-
-    #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, Base64Error> {
         Self::from_ascii(
-            &AsciiString::from_utf8(string)?
-        )
-    }
-
-    #[inline]
-    pub fn from_case_insensitive_utf8(string: &str) -> Result<Self, Base64Error> {
-        Self::from_case_insensitive_ascii(
             &AsciiString::from_utf8(string)?
         )
     }
