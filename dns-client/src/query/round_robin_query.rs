@@ -15,6 +15,7 @@ struct NSAddressMap<'b, 'c> {
 }
 
 impl<'b, 'c> NSAddressMap<'b, 'c> {
+    #[inline]
     fn new(ns_domain: &'b CDomainName, addresses: &'c [IpAddr]) -> Self {
         Self {
             ns_domain,
@@ -23,6 +24,7 @@ impl<'b, 'c> NSAddressMap<'b, 'c> {
         }
     }
 
+    #[inline]
     fn next(&self) -> Option<&'c IpAddr> {
         self.addresses.get(self.index.fetch_add(1, Ordering::SeqCst))
     }
@@ -35,6 +37,7 @@ struct RoundRobinIter<'a, 'b, 'c> {
 }
 
 impl<'a, 'b, 'c> RoundRobinIter<'a, 'b, 'c> {
+    #[inline]
     fn new(ns_address_maps: &'a [NSAddressMap<'b, 'c>]) -> Self {
         Self {
             index: 0,
@@ -43,6 +46,7 @@ impl<'a, 'b, 'c> RoundRobinIter<'a, 'b, 'c> {
         }
     }
 
+    #[inline]
     fn next(&mut self) -> Option<(&'b CDomainName, &'c IpAddr)> {
         let mut mappings_iter = self.mappings.iter().enumerate().skip(self.index);
         while let Some((index, ns_address_map)) = mappings_iter.next() {
@@ -70,6 +74,7 @@ impl<'a, 'b, 'c> RoundRobinIter<'a, 'b, 'c> {
     }
 }
 
+#[inline]
 fn query_response(answer: Message) -> QueryResponse<ResourceRecord> {
     match answer {
         Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer, authority, additional: _ } if answer.is_empty() && authority.is_empty() => QueryResponse::NoRecords,
@@ -82,6 +87,7 @@ fn query_response(answer: Message) -> QueryResponse<ResourceRecord> {
     }
 }
 
+#[inline]
 async fn get_cached_name_server_addresses<CCache>(_client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, question: &Question, name_server: &CDomainName) -> Option<Vec<ResourceRecord>> where CCache: AsyncCache + Send + Sync {
     let a_question = question.with_new_qname_qtype(name_server.clone(), RType::A);
     let aaaa_question = question.with_new_qname_qtype(name_server.clone(), RType::AAAA);
@@ -100,6 +106,7 @@ async fn get_cached_name_server_addresses<CCache>(_client: &Arc<DNSAsyncClient>,
     }
 }
 
+#[inline]
 async fn get_name_server_addresses<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, question: &Question, name_server: &CDomainName) -> Option<Vec<ResourceRecord>> where CCache: AsyncCache + Send + Sync {
     let a_question = question.with_new_qname_qtype(name_server.clone(), RType::A);
     let aaaa_question = question.with_new_qname_qtype(name_server.clone(), RType::AAAA);
@@ -118,6 +125,7 @@ async fn get_name_server_addresses<CCache>(client: &Arc<DNSAsyncClient>, joined_
     }
 }
 
+#[inline]
 fn rr_to_ip_address(record: &ResourceRecord) -> Option<IpAddr> {
     match &record {
         ResourceRecord::A(_, a_record) => Some(IpAddr::V4(*a_record.ipv4_addr())),
@@ -126,6 +134,7 @@ fn rr_to_ip_address(record: &ResourceRecord) -> Option<IpAddr> {
     }
 }
 
+#[inline]
 pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, question: &Question, name_servers: &[CDomainName]) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync {
     // Active Query Check: Check to see if a query has already been made for the record.
     let read_locked_active_queries = client.active_query_manager.read().await;
@@ -246,6 +255,7 @@ pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cac
     return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await;
 }
 
+#[inline]
 // Note: Returns the result so that this function can be called as the return statement.
 async fn sender_return<CCache>(client: &Arc<DNSAsyncClient>, result: QueryResponse<ResourceRecord>, question: &Question) -> QueryResponse<ResourceRecord> where CCache: AsyncCache {
     // Cleanup.
