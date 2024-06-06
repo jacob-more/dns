@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation, from_tokenized_rdata::FromTokenizedRData}}};
 
-use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, dnskey::DNSKEY, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
+use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, dnskey::DNSKEY, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
@@ -109,7 +109,7 @@ pub enum ResourceRecord {
     NS(RRHeader, NS),
     // NSAP_PTR(RRHeader, NSAP_PTR),
     // NSAP(RRHeader, NSAP),
-    // NSEC(RRHeader, NSEC),
+    NSEC(RRHeader, NSEC),
     // NSEC3(RRHeader, NSEC3),
     // NSEC3PARAM(RRHeader, NSEC3PARAM),
     NULL(RRHeader, NULL),
@@ -212,7 +212,7 @@ impl ResourceRecord {
             Self::NS(header, _) => (header, RType::NS),
             // Self::NSAP_PTR(header, _) => (header, RType::NSAP_PTR),
             // Self::NSAP(header, _) => (header, RType::NSAP),
-            // Self::NSEC(header, _) => (header, RType::NSEC),
+            Self::NSEC(header, _) => (header, RType::NSEC),
             // Self::NSEC3(header, _) => (header, RType::NSEC3),
             // Self::NSEC3PARAM(header, _) => (header, RType::NSEC3PARAM),
             Self::NULL(header, _) => (header, RType::NULL),
@@ -308,7 +308,7 @@ impl ResourceRecord {
             Self::NS(header, _) => (header, RType::NS),
             // Self::NSAP_PTR(header, _) => (header, RType::NSAP_PTR),
             // Self::NSAP(header, _) => (header, RType::NSAP),
-            // Self::NSEC(header, _) => (header, RType::NSEC),
+            Self::NSEC(header, _) => (header, RType::NSEC),
             // Self::NSEC3(header, _) => (header, RType::NSEC3),
             // Self::NSEC3PARAM(header, _) => (header, RType::NSEC3PARAM),
             Self::NULL(header, _) => (header, RType::NULL),
@@ -429,7 +429,7 @@ impl ResourceRecord {
             Self::NS(_, rdata) => rdata.serial_length(),
             // Self::NSAP_PTR(_, rdata) => rdata.serial_length(),
             // Self::NSAP(_, rdata) => rdata.serial_length(),
-            // Self::NSEC(_, rdata) => rdata.serial_length(),
+            Self::NSEC(_, rdata) => rdata.serial_length(),
             // Self::NSEC3(_, rdata) => rdata.serial_length(),
             // Self::NSEC3PARAM(_, rdata) => rdata.serial_length(),
             Self::NULL(_, rdata) => rdata.serial_length(),
@@ -536,7 +536,7 @@ impl ResourceRecord {
             (Self::NS(self_header, self_rdata), Self::NS(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::NSAP_PTR(self_header, self_rdata), Self::NSAP_PTR(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::NSAP(self_header, self_rdata), Self::NSAP(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
-            // (Self::NSEC(self_header, self_rdata), Self::NSEC(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
+            (Self::NSEC(self_header, self_rdata), Self::NSEC(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::NSEC3(self_header, self_rdata), Self::NSEC3(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::NSEC3PARAM(self_header, self_rdata), Self::NSEC3PARAM(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             (Self::NULL(self_header, self_rdata), Self::NULL(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
@@ -647,7 +647,7 @@ impl ToWire for ResourceRecord {
             Self::NS(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::NSAP_PTR(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::NSAP(_, rdata) => rdata.to_wire_format(wire, compression)?,
-            // Self::NSEC(_, rdata) => rdata.to_wire_format(wire, compression)?,
+            Self::NSEC(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::NSEC3(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::NSEC3PARAM(_, rdata) => rdata.to_wire_format(wire, compression)?,
             Self::NULL(_, rdata) => rdata.to_wire_format(wire, compression)?,
@@ -981,10 +981,9 @@ impl FromWire for ResourceRecord {
                 (Self::RRSIG(header, rdata), rd_length)
             },
             RType::NSEC => {
-                return Err(ReadWireError::UnsupportedRType(rtype));
-                // let rdata = NSEC::from_wire_format(&mut rdata_wire)?;
-                // let rd_length = rdata.serial_length();
-                // (Self::NSEC(header, rdata), rd_length)
+                let rdata = NSEC::from_wire_format(&mut rdata_wire)?;
+                let rd_length = rdata.serial_length();
+                (Self::NSEC(header, rdata), rd_length)
             },
             RType::DNSKEY => {
                 let rdata = DNSKEY::from_wire_format(&mut rdata_wire)?;
@@ -1272,6 +1271,7 @@ impl ResourceRecord {
             RType::MR => Self::MR(rr_header, MR::from_tokenized_rdata(&record.rdata)?),
             RType::MX => Self::MX(rr_header, MX::from_tokenized_rdata(&record.rdata)?),
             RType::NS => Self::NS(rr_header, NS::from_tokenized_rdata(&record.rdata)?),
+            RType::NSEC => Self::NSEC(rr_header, NSEC::from_tokenized_rdata(&record.rdata)?),
             RType::RRSIG => Self::RRSIG(rr_header, RRSIG::from_tokenized_rdata(&record.rdata)?),
             RType::SOA => Self::SOA(rr_header, SOA::from_tokenized_rdata(&record.rdata)?),
             RType::TLSA => Self::TLSA(rr_header, TLSA::from_tokenized_rdata(&record.rdata)?),
@@ -1325,6 +1325,7 @@ impl ToPresentation for ResourceRecord {
             Self::MR(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::MX(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::NS(_, rdata) => rdata.to_presentation_format(out_buffer),
+            Self::NSEC(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::NULL(_, _) => panic!("Cannot convert {rtype} to presentation"),
             Self::RRSIG(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::SOA(_, rdata) => rdata.to_presentation_format(out_buffer),

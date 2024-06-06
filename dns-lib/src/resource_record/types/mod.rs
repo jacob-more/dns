@@ -53,7 +53,7 @@ pub mod mx;
 pub mod ns;
 // pub mod NSAP_PTR;
 // pub mod NSAP;
-// pub mod NSEC;
+pub mod nsec;
 // pub mod NSEC3;
 // pub mod NSEC3PARAM;
 pub mod null;
