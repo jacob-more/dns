@@ -17,7 +17,7 @@ pub mod cname;
 // pub mod DHCID;
 // pub mod DLV;
 pub mod dname;
-// pub mod DNSKEY;
+pub mod dnskey;
 // pub mod DOA;
 // pub mod DS;
 // pub mod EID;

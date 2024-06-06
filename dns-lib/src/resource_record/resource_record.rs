@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation, from_tokenized_rdata::FromTokenizedRData}}};
 
-use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, ptr::PTR, soa::SOA, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
+use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, dnskey::DNSKEY, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, null::NULL, ptr::PTR, soa::SOA, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
@@ -73,7 +73,7 @@ pub enum ResourceRecord {
     // DHCID(RRHeader, DHCID),
     // DLV(RRHeader, DLV),
     DNAME(RRHeader, DNAME),
-    // DNSKEY(RRHeader, DNSKEY),
+    DNSKEY(RRHeader, DNSKEY),
     // DOA(RRHeader, DOA),
     // DS(RRHeader, DS),
     // EID(RRHeader, EID),
@@ -176,7 +176,7 @@ impl ResourceRecord {
             // Self::DHCID(header, _) => (header, RType::DHCID),
             // Self::DLV(header, _) => (header, RType::DLV),
             Self::DNAME(header, _) => (header, RType::DNAME),
-            // Self::DNSKEY(header, _) => (header, RType::DNSKEY),
+            Self::DNSKEY(header, _) => (header, RType::DNSKEY),
             // Self::DOA(header, _) => (header, RType::DOA),
             // Self::DS(header, _) => (header, RType::DS),
             // Self::EID(header, _) => (header, RType::EID),
@@ -272,7 +272,7 @@ impl ResourceRecord {
             // Self::DHCID(header, _) => (header, RType::DHCID),
             // Self::DLV(header, _) => (header, RType::DLV),
             Self::DNAME(header, _) => (header, RType::DNAME),
-            // Self::DNSKEY(header, _) => (header, RType::DNSKEY),
+            Self::DNSKEY(header, _) => (header, RType::DNSKEY),
             // Self::DOA(header, _) => (header, RType::DOA),
             // Self::DS(header, _) => (header, RType::DS),
             // Self::EID(header, _) => (header, RType::EID),
@@ -393,7 +393,7 @@ impl ResourceRecord {
             // Self::DHCID(_, rdata) => rdata.serial_length(),
             // Self::DLV(_, rdata) => rdata.serial_length(),
             Self::DNAME(_, rdata) => rdata.serial_length(),
-            // Self::DNSKEY(_, rdata) => rdata.serial_length(),
+            Self::DNSKEY(_, rdata) => rdata.serial_length(),
             // Self::DOA(_, rdata) => rdata.serial_length(),
             // Self::DS(_, rdata) => rdata.serial_length(),
             // Self::EID(_, rdata) => rdata.serial_length(),
@@ -500,7 +500,7 @@ impl ResourceRecord {
             // (Self::DHCID(self_header, self_rdata), Self::DHCID(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::DLV(self_header, self_rdata), Self::DLV(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             (Self::DNAME(self_header, self_rdata), Self::DNAME(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
-            // (Self::DNSKEY(self_header, self_rdata), Self::DNSKEY(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
+            (Self::DNSKEY(self_header, self_rdata), Self::DNSKEY(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::DOA(self_header, self_rdata), Self::DOA(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::DS(self_header, self_rdata), Self::DS(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
             // (Self::EID(self_header, self_rdata), Self::EID(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),
@@ -611,7 +611,7 @@ impl ToWire for ResourceRecord {
             // Self::DHCID(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::DLV(_, rdata) => rdata.to_wire_format(wire, compression)?,
             Self::DNAME(_, rdata) => rdata.to_wire_format(wire, compression)?,
-            // Self::DNSKEY(_, rdata) => rdata.to_wire_format(wire, compression)?,
+            Self::DNSKEY(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::DOA(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::DS(_, rdata) => rdata.to_wire_format(wire, compression)?,
             // Self::EID(_, rdata) => rdata.to_wire_format(wire, compression)?,
@@ -988,10 +988,9 @@ impl FromWire for ResourceRecord {
                 // (Self::NSEC(header, rdata), rd_length)
             },
             RType::DNSKEY => {
-                return Err(ReadWireError::UnsupportedRType(rtype));
-                // let rdata = DNSKEY::from_wire_format(&mut rdata_wire)?;
-                // let rd_length = rdata.serial_length();
-                // (Self::DNSKEY(header, rdata), rd_length)
+                let rdata = DNSKEY::from_wire_format(&mut rdata_wire)?;
+                let rd_length = rdata.serial_length();
+                (Self::DNSKEY(header, rdata), rd_length)
             },
             RType::DHCID => {
                 return Err(ReadWireError::UnsupportedRType(rtype));
@@ -1264,6 +1263,7 @@ impl ResourceRecord {
             RType::CNAME => Self::CNAME(rr_header, CNAME::from_tokenized_rdata(&record.rdata)?),
             RType::CERT => Self::CERT(rr_header, CERT::from_tokenized_rdata(&record.rdata)?),
             RType::DNAME => Self::DNAME(rr_header, DNAME::from_tokenized_rdata(&record.rdata)?),
+            RType::DNSKEY => Self::DNSKEY(rr_header, DNSKEY::from_tokenized_rdata(&record.rdata)?),
             RType::HINFO => Self::HINFO(rr_header, HINFO::from_tokenized_rdata(&record.rdata)?),
             RType::MB => Self::MB(rr_header, MB::from_tokenized_rdata(&record.rdata)?),
             RType::MD => Self::MD(rr_header, MD::from_tokenized_rdata(&record.rdata)?),
@@ -1313,6 +1313,7 @@ impl ToPresentation for ResourceRecord {
             Self::CERT(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::CNAME(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::DNAME(_, rdata) => rdata.to_presentation_format(out_buffer),
+            Self::DNSKEY(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::HINFO(_, rdata) => rdata.to_presentation_format(out_buffer),
             Self::MAILA(_, _) => panic!("Cannot convert {rtype} to presentation"),
             Self::MAILB(_, _) => panic!("Cannot convert {rtype} to presentation"),
