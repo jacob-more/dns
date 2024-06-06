@@ -288,7 +288,7 @@ impl APItem {
                 token = &token[address_family_match.end()..];
 
                 AddressFamily::from_code(
-                    u16::from_token_format(address_family_str)?
+                    u16::from_token_format(&[address_family_str])?.0
                 )
             },
             None => return Err(TokenizedRecordError::ValueError(
@@ -303,7 +303,7 @@ impl APItem {
                 let prefix_str = &token[(prefix_match.start()+1)..];
                 token = &token[..prefix_match.start()];
 
-                u8::from_token_format(prefix_str)?
+                u8::from_token_format(&[prefix_str])?.0
             },
             None => return Err(TokenizedRecordError::ValueError(
                 format!("Prefix unspecified; the address must be followed by a slash and digits indicating the prefix length")
@@ -317,7 +317,7 @@ impl APItem {
                         format!("an Ipv4 address cannot have more than {IPV4_MAX_BITS} bits")
                     ))
                 }
-                let afd_part = Ipv4Addr::from_token_format(token)?;
+                let afd_part = Ipv4Addr::from_token_format(&[token])?.0;
                 let afd_length = match afd_part.octets() {
                     [0, 0, 0, 0] => u7::new(0),
                     [_, 0, 0, 0] => u7::new(1),
@@ -333,7 +333,7 @@ impl APItem {
                         format!("an Ipv6 address cannot have more than {IPV6_MAX_BITS} bits")
                     ))
                 }
-                let afd_part = Ipv6Addr::from_token_format(token)?;
+                let afd_part = Ipv6Addr::from_token_format(&[token])?.0;
                 let afd_length = match afd_part.octets() {
                     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(0),
                     [_, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] => u7::new(1),

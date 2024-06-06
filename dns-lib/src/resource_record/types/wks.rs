@@ -86,15 +86,15 @@ impl FromTokenizedRData for WKS {
             return Err(TokenizedRecordError::TooFewRDataTokensError{expected: 3, received: rdata.len()});
         }
         
-        let address = Ipv4Addr::from_token_format(rdata[0])?;
-        let protocol = Protocol::from_token_format(rdata[1])?;
+        let (address, rdata) = Ipv4Addr::from_token_format(rdata)?;
+        let (protocol, rdata) = Protocol::from_token_format(rdata)?;
         let mut port_bitmap: Vec<u8> = Vec::new();
 
-        for service in &rdata[2..] {
+        for service in rdata {
             if REGEX_UNSIGNED_INT.is_match_at(service, 0) {
                 add_port_to_bitmap(
                     &mut port_bitmap,
-                    &u16::from_token_format(service)?
+                    &u16::from_token_format(&[service])?.0
                 );
             } else {
                 let ports = match port_from_service(service.to_string(), protocol.clone()) {

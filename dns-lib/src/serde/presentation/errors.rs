@@ -45,6 +45,7 @@ impl<'a> From<TokenError<'a>> for TokenizedRecordError<'a> {
 
 #[derive(Debug)]
 pub enum TokenError<'a> {
+    OutOfTokens,
     ParseIntError(ParseIntError),
     TryFromIntError(TryFromIntError),
     UxTryFromIntError,
@@ -70,6 +71,7 @@ impl<'a> Error for TokenError<'a> {}
 impl<'a> Display for TokenError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::OutOfTokens => write!(f, "Token Error: no tokens to parse. At least 1 was expected"),
             Self::ParseIntError(error) => write!(f, "{error}"),
             Self::TryFromIntError(error) => write!(f, "{error}"),
             Self::UxTryFromIntError => write!(f, "out of range integral type conversion attempted"),

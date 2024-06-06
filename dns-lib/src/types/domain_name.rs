@@ -2,7 +2,7 @@ use std::{fmt::Display, ops::Add, error::Error};
 
 use dns_macros::ToPresentation;
 
-use crate::{types::{c_domain_name::{CDomainNameError, CDomainName, Label}, ascii::AsciiString}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::from_presentation::FromPresentation}};
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, Label}}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
@@ -174,8 +174,9 @@ impl FromWire for DomainName {
 
 impl FromPresentation for DomainName {
     #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self { domain_name: CDomainName::from_token_format(token)? })
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        let (cdomain_name, tokens) = CDomainName::from_token_format(tokens)?;
+        Ok((Self { domain_name: cdomain_name }, tokens))
     }
 }
 

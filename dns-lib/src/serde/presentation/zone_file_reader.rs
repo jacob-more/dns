@@ -43,8 +43,8 @@ impl<'a> Iterator for ZoneFileReader<'a> {
             },
             Token::Include { file_name, domain_name } => {
                 let domain_name = match domain_name {
-                    Some(domain_name_str) => match CDomainName::from_token_format(domain_name_str) {
-                        Ok(domain_name) => Some(domain_name),
+                    Some(domain_name_str) => match CDomainName::from_token_format(&[domain_name_str]) {
+                        Ok((domain_name, _)) => Some(domain_name),
                         Err(error) => return Some(Err(TokenizedRecordError::TokenError(error))),
                     },
                     None => None,

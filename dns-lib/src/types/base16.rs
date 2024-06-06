@@ -2,7 +2,7 @@ use std::{error::Error, fmt::{Display, Debug}};
 
 use ux::u4;
 
-use crate::{types::{ascii::{AsciiChar, AsciiError, constants::*, AsciiString}, base_conversions::BaseConversions}, serde::presentation::from_presentation::FromPresentation};
+use crate::{serde::presentation::{errors::TokenError, from_presentation::FromPresentation}, types::{ascii::{constants::*, AsciiChar, AsciiError, AsciiString}, base_conversions::BaseConversions}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Base16Error {
@@ -229,10 +229,9 @@ impl BaseConversions for Base16 {
 
 impl FromPresentation for Base16 {
     #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::encode(
-            &AsciiString::from_token_format(token)?
-        )?)
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        let (encoded, tokens) = AsciiString::from_token_format(tokens)?;
+        Ok((Self::encode(&encoded)?, tokens))
     }
 }
 

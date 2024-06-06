@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::serde::{presentation::{to_presentation::ToPresentation, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
+use crate::serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
 
 /// https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml#address-family-numbers-2
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -208,10 +208,9 @@ impl FromWire for AddressFamily {
 }
 
 impl FromPresentation for AddressFamily {
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::from_code(
-            u16::from_token_format(token)?
-        ))
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        let (code, tokens) = u16::from_token_format(tokens)?;
+        Ok((Self::from_code(code), tokens))
     }
 }
 

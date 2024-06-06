@@ -31,7 +31,7 @@ fn impl_from_tokenized_rdata_struct_macro(data: &DataStruct, ast: &DeriveInput) 
         });
 
         from_token_calls.extend(quote! {
-            let #field_name = <#field_type as crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(#field_name)?;
+            let (#field_name, _) = <#field_type as crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(&[#field_name])?;
         });
 
         struct_declaration_builder.extend(quote!(

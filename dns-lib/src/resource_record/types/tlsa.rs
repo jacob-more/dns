@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
 
-use crate::{serde::{presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::base16::Base16};
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::base16::Base16};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc6698#section-2
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc8749#name-moving-dlv-to-historic-stat
@@ -105,10 +105,9 @@ impl FromWire for CertificateUsage {
 }
 
 impl FromPresentation for CertificateUsage {
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::from_code(
-            u8::from_token_format(token)?
-        ))
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        let (code, tokens) = u8::from_token_format(tokens)?;
+        Ok((Self::from_code(code), tokens))
     }
 }
 
@@ -199,10 +198,9 @@ impl FromWire for Selector {
 }
 
 impl FromPresentation for Selector {
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::from_code(
-            u8::from_token_format(token)?
-        ))
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        let (code, tokens) = u8::from_token_format(tokens)?;
+        Ok((Self::from_code(code), tokens))
     }
 }
 
@@ -297,10 +295,9 @@ impl FromWire for MatchingType {
 }
 
 impl FromPresentation for MatchingType {
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::from_code(
-            u8::from_token_format(token)?
-        ))
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        let (code, tokens) = u8::from_token_format(tokens)?;
+        Ok((Self::from_code(code), tokens))
     }
 }
 

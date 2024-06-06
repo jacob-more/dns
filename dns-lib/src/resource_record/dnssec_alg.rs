@@ -3,7 +3,7 @@ use std::{fmt::Display, error::Error};
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}};
+use crate::serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
 
 #[derive(Debug)]
 pub enum DnsSecAlgorithmError<'a> {
@@ -222,17 +222,20 @@ impl FromWire for DnsSecAlgorithm {
 
 impl FromPresentation for DnsSecAlgorithm {
     #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
         lazy_static!{
             static ref REGEX_UNSIGNED_INT: Regex = Regex::new(r"\A((\d)+)\z").unwrap();
         }
 
-        if REGEX_UNSIGNED_INT.is_match(token) {
-            Ok(Self::from_code(
-                u8::from_str_radix(token, 10)?
-            ))
-        } else {
-            Ok(Self::from_str(token)?)
+        match tokens {
+            &[] => Err(TokenError::OutOfTokens),
+            &[token, ..] => {
+                if REGEX_UNSIGNED_INT.is_match(token) {
+                    Ok((Self::from_code(u8::from_str_radix(token, 10)?), &tokens[1..]))
+                } else {
+                    Ok((Self::from_str(token)?, &tokens[1..]))
+                }
+            }
         }
     }
 }

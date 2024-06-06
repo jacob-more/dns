@@ -1,6 +1,6 @@
 use std::{fmt::Display, error::Error};
 
-use crate::serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}};
+use crate::serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
 
 #[derive(Debug)]
 pub enum RTypeError<'a> {
@@ -670,8 +670,11 @@ impl FromWire for RType {
 
 impl FromPresentation for RType {
     #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::from_str(token)?)
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        match tokens {
+            &[] => Err(TokenError::OutOfTokens),
+            &[token, ..] => Ok((Self::from_str(token)?, &tokens[1..])),
+        }
     }
 }
 

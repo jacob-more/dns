@@ -2,7 +2,7 @@ use std::{time::Duration, ops::{Add, AddAssign, Sub, SubAssign, Mul, MulAssign, 
 
 use dns_macros::{ToWire, FromWire, ToPresentation};
 
-use crate::serde::presentation::from_presentation::FromPresentation;
+use crate::serde::presentation::{errors::TokenError, from_presentation::FromPresentation};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum TimeError {
@@ -319,16 +319,21 @@ const DATE_TIME_DIGITS: usize = 14;
 
 impl FromPresentation for Time {
     #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        let seconds = match token.len() {
-            ..=U32_MAX_DIGITS => TimeInt::from_token_format(token)?,
-            DATE_TIME_DIGITS => datetime_parse(token)?,
-            _ => return Err(TimeError::InvalidTime)?,
-        };
-        if seconds <= TTL_MAX {
-            Ok(Self::new(seconds))
-        } else {
-            Err(TimeError::InvalidTime)?
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        match tokens {
+            &[] => Err(TokenError::OutOfTokens),
+            &[token, ..] => {
+                let (seconds, tokens) = match token.len() {
+                    ..=U32_MAX_DIGITS => TimeInt::from_token_format(tokens)?,
+                    DATE_TIME_DIGITS => (datetime_parse(token)?, &tokens[1..]),
+                    _ => return Err(TimeError::InvalidTime)?,
+                };
+                if seconds <= TTL_MAX {
+                    Ok((Self::new(seconds), tokens))
+                } else {
+                    Err(TimeError::InvalidTime)?
+                }
+            }
         }
     }
 }
@@ -524,21 +529,21 @@ mod tokenizer_tests {
     use crate::{serde::presentation::test_from_presentation::{gen_fail_token_test, gen_ok_token_test}, resource_record::time::{TTL_MIN, TTL_MAX}};
     use super::Time;
 
-    gen_fail_token_test!(test_fail_u32_illegal_chars, Time, "characters");
-    gen_fail_token_test!(test_fail_u32_empty_str, Time, "");
+    gen_fail_token_test!(test_fail_u32_illegal_chars, Time, &["characters"]);
+    gen_fail_token_test!(test_fail_u32_empty_str, Time, &[""]);
 
     // u32 tests
-    gen_ok_token_test!(test_ok_u32_min, Time, Time { ttl: TTL_MIN }, "0");
-    gen_ok_token_test!(test_ok_u32_max, Time, Time { ttl: TTL_MAX }, "2147483647");
+    gen_ok_token_test!(test_ok_u32_min, Time, Time { ttl: TTL_MIN }, &["0"]);
+    gen_ok_token_test!(test_ok_u32_max, Time, Time { ttl: TTL_MAX }, &["2147483647"]);
 
     // datetime tests
-    gen_ok_token_test!(test_ok_date_time_min, Time, Time { ttl: 0 }, "00010101000000");
-    gen_ok_token_test!(test_ok_date_time_one, Time, Time { ttl: 1 }, "00010101000001");
-    gen_fail_token_test!(test_fail_date_time_seconds_overflow, Time, "00010101000060");
-    gen_fail_token_test!(test_fail_date_time_minutes_overflow, Time, "00010101006000");
-    gen_fail_token_test!(test_fail_date_time_hours_overflow, Time, "00010101240000");
-    gen_fail_token_test!(test_fail_date_time_days_overflow, Time, "00010132000000");
-    gen_fail_token_test!(test_fail_date_time_month_overflow, Time, "00011301000000");
-    gen_fail_token_test!(test_fail_date_time_digit_overflow, Time, "100010101000000");
-    gen_fail_token_test!(test_fail_date_time_digit_underflow, Time, "0010101000000");
+    gen_ok_token_test!(test_ok_date_time_min, Time, Time { ttl: 0 }, &["00010101000000"]);
+    gen_ok_token_test!(test_ok_date_time_one, Time, Time { ttl: 1 }, &["00010101000001"]);
+    gen_fail_token_test!(test_fail_date_time_seconds_overflow, Time, &["00010101000060"]);
+    gen_fail_token_test!(test_fail_date_time_minutes_overflow, Time, &["00010101006000"]);
+    gen_fail_token_test!(test_fail_date_time_hours_overflow, Time, &["00010101240000"]);
+    gen_fail_token_test!(test_fail_date_time_days_overflow, Time, &["00010132000000"]);
+    gen_fail_token_test!(test_fail_date_time_month_overflow, Time, &["00011301000000"]);
+    gen_fail_token_test!(test_fail_date_time_digit_overflow, Time, &["100010101000000"]);
+    gen_fail_token_test!(test_fail_date_time_digit_underflow, Time, &["0010101000000"]);
 }

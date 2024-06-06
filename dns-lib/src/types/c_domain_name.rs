@@ -1,6 +1,6 @@
 use std::{fmt::{Display, Debug}, error::Error, ops::Add};
 
-use crate::{types::ascii::{AsciiString, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, ascii_char_as_lower}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation, parse_chars::{escaped_to_escapable::{EscapedToEscapableIter, EscapedCharsEnumerateIter, ParseError}, non_escaped_to_escaped::{self}, char_token::EscapableChar}}}};
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, EscapedToEscapableIter, ParseError}, non_escaped_to_escaped}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{ascii_char_as_lower, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, AsciiString}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
@@ -653,10 +653,9 @@ impl FromWire for CDomainName {
 
 impl FromPresentation for CDomainName {
     #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::new(
-            &AsciiString::from_token_format(token)?
-        )?)
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        let (ascii_domain_name, tokens) = AsciiString::from_token_format(tokens)?;
+        Ok((Self::new(&ascii_domain_name)?, tokens))
     }
 }
 

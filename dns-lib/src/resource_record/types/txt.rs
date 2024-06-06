@@ -27,7 +27,7 @@ impl FromTokenizedRData for TXT {
             &[_, ..] => {
                 let mut strings = Vec::with_capacity(rdata.len());
                 for string_token in rdata {
-                    strings.push(CharacterString::from_token_format(&string_token)?);
+                    strings.push(CharacterString::from_token_format(&[string_token])?.0);
                 }
                 Ok(Self { strings })
             },

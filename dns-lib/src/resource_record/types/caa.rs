@@ -125,9 +125,9 @@ impl FromTokenizedRData for CAA {
         match rdata.as_slice() {
             &[flags, tag, value] => {
                 // Flags must be between 0 and 255. This is enforced by the type, u8.
-                let flags = u8::from_token_format(flags)?;
+                let (flags, _) = u8::from_token_format(&[flags])?;
 
-                let tag = AsciiString::from_token_format(tag)?;
+                let (tag, _) = AsciiString::from_token_format(&[tag])?;
                 match tag.len() {
                     tag_length @ 0 => return Err(TokenizedRecordError::ValueError(format!("Expected CAA tag length to be at least 1. it was {}", tag_length))),
                     tag_length @ 256.. => return Err(TokenizedRecordError::ValueError(format!("Expected CAA tag length to be at most 255. it was {}", tag_length))),
@@ -137,7 +137,7 @@ impl FromTokenizedRData for CAA {
                     return Err(TokenizedRecordError::ValueError("Expected CAA tag to contain only ASCII characters a-z (lowercase only) and 0-9".to_string()));
                 }
 
-                let value = AsciiString::from_token_format(value)?.as_owned_vec();
+                let value = AsciiString::from_token_format(&[value])?.0.as_owned_vec();
 
                 Ok(Self { flags, tag, value })
             },

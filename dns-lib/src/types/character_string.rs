@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, iter::Rev, slice::{Iter, IterMut}};
 
 use lazy_static::lazy_static;
 
-use crate::{types::ascii::{AsciiString, constants::{EMPTY_ASCII_STRING, ASCII_SPACE, ASCII_BACKSLASH, ASCII_OPEN_PARENTHESIS, ASCII_CLOSE_PARENTHESIS, ASCII_SEMICOLON}, AsciiError, AsciiChar}, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}}};
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{constants::{ASCII_BACKSLASH, ASCII_CLOSE_PARENTHESIS, ASCII_OPEN_PARENTHESIS, ASCII_SEMICOLON, ASCII_SPACE, EMPTY_ASCII_STRING}, AsciiChar, AsciiError, AsciiString}};
 
 use super::ascii::constants::ASCII_HORIZONTAL_TAB;
 
@@ -249,8 +249,11 @@ impl FromWire for CharacterString {
 
 impl FromPresentation for CharacterString {
     #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::from_utf8(token)?)
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        match tokens {
+            &[] => Err(TokenError::OutOfTokens),
+            &[token, ..] => Ok((Self::from_utf8(token)?, &tokens[1..])),
+        }
     }
 }
 

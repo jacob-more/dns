@@ -114,7 +114,7 @@ impl FromTokenizedRData for A6 {
     fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
         match rdata.as_slice() {
             &[token1, token2] => {
-                let prefix_length = u8::from_token_format(token1)?;
+                let (prefix_length, _) = u8::from_token_format(&[token1])?;
                 if prefix_length > Self::MAX_PREFIX_LENGTH {
                     return Err(crate::serde::presentation::errors::TokenizedRecordError::OutOfBoundsError(
                         String::from("Prefix length is outside of bounds 0 - 128 (inclusive)")
@@ -123,7 +123,7 @@ impl FromTokenizedRData for A6 {
 
                 match prefix_length {
                     0 => {
-                        let address = Ipv6Addr::from_token_format(token2)?;
+                        let (address, _) = Ipv6Addr::from_token_format(&[token2])?;
                         return Ok(Self {
                             prefix_length,
                             ipv6_address: Some(address),
@@ -131,7 +131,7 @@ impl FromTokenizedRData for A6 {
                         });
                     },
                     128 => {
-                        let domain_name = DomainName::from_token_format(token2)?;
+                        let (domain_name, _) = DomainName::from_token_format(&[token2])?;
                         return Ok(Self {
                             prefix_length,
                             ipv6_address: None,
@@ -144,7 +144,7 @@ impl FromTokenizedRData for A6 {
                 }
             },
             &[token1,  token2, token3] => {
-                let prefix_length = u8::from_token_format(token1)?;
+                let (prefix_length, _) = u8::from_token_format(&[token1])?;
                 if prefix_length > Self::MAX_PREFIX_LENGTH {
                     return Err(crate::serde::presentation::errors::TokenizedRecordError::OutOfBoundsError(
                         String::from("Prefix length is outside of bounds 0 - 128 (inclusive)")
@@ -157,8 +157,8 @@ impl FromTokenizedRData for A6 {
                     ));
                 }
 
-                let address = Ipv6Addr::from_token_format(token2)?;
-                let domain_name = DomainName::from_token_format(token3)?;
+                let (address, _) = Ipv6Addr::from_token_format(&[token2])?;
+                let (domain_name, _) = DomainName::from_token_format(&[token3])?;
 
                 return Ok(Self {
                     prefix_length,

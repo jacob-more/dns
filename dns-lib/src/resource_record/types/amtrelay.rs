@@ -136,12 +136,12 @@ impl FromTokenizedRData for AMTRELAY {
     fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
         match rdata.as_slice() {
             &[precedence, discovery_optional, relay_type, relay] => {
-                let precedence = u8::from_token_format(precedence)?;
-                let discovery_optional = u1::from_token_format(discovery_optional)?;
-                let relay_type = u7::from_token_format(relay_type)?;
+                let (precedence, _) = u8::from_token_format(&[precedence])?;
+                let (discovery_optional, _) = u1::from_token_format(&[discovery_optional])?;
+                let (relay_type, _) = u7::from_token_format(&[relay_type])?;
                 let relay = match u8::from(relay_type) {
                     0 => {
-                        let root_domain = DomainName::from_token_format(relay)?;
+                        let (root_domain, _) = DomainName::from_token_format(&[relay])?;
                         // According to RFC 8777,
                         // "If the relay type field is 0, the relay field MUST be ".""
                         // In other words, the relay type is equivalent to the root domain encoding.
@@ -152,9 +152,9 @@ impl FromTokenizedRData for AMTRELAY {
                         }
                         RelayType::Empty
                     },
-                    1 => RelayType::Ipv4(Ipv4Addr::from_token_format(relay)?),
-                    2 => RelayType::Ipv6(Ipv6Addr::from_token_format(relay)?),
-                    3 => RelayType::DomainName(DomainName::from_token_format(relay)?),
+                    1 => RelayType::Ipv4(Ipv4Addr::from_token_format(&[relay])?.0),
+                    2 => RelayType::Ipv6(Ipv6Addr::from_token_format(&[relay])?.0),
+                    3 => RelayType::DomainName(DomainName::from_token_format(&[relay])?.0),
                     _ => return Err(crate::serde::presentation::errors::TokenizedRecordError::ValueError(
                         format!("The relay type {relay_type} is unrecognized"))
                     ),

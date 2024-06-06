@@ -1245,12 +1245,12 @@ impl FromWire for ResourceRecord {
 impl ResourceRecord {
     pub fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecordToken<'a>) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
         let rr_header = RRHeader {
-            name: CDomainName::from_token_format(record.domain_name)?,
-            rclass: RClass::from_token_format(record.rclass)?,
-            ttl: Time::from_token_format(record.ttl)?,
+            name: CDomainName::from_token_format(&[record.domain_name])?.0,
+            rclass: RClass::from_token_format(&[record.rclass])?.0,
+            ttl: Time::from_token_format(&[record.ttl])?.0,
         };
 
-        let rtype = RType::from_token_format(record.rtype)?;
+        let (rtype, _) = RType::from_token_format(&[record.rtype])?;
         let record = match rtype {
             RType::A => Self::A(rr_header, A::from_tokenized_rdata(&record.rdata)?),
             RType::A6 => Self::A6(rr_header, A6::from_tokenized_rdata(&record.rdata)?),

@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display};
 
 use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
 
-use crate::{resource_record::dnssec_alg::DnsSecAlgorithm, serde::{presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::base64::Base64};
+use crate::{resource_record::dnssec_alg::DnsSecAlgorithm, serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::base64::Base64};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc4398#section-2
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc6944
@@ -165,8 +165,11 @@ impl FromWire for CertificateType {
 
 impl FromPresentation for CertificateType {
     #[inline]
-    fn from_token_format<'a, 'b>(token: &'a str) -> Result<Self, crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b {
-        Ok(Self::from_str(token)?)
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+        match tokens {
+            &[] => Err(TokenError::OutOfTokens),
+            &[token, ..] => Ok((Self::from_str(token)?, &tokens[1..])),
+        }
     }
 }
 
