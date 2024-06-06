@@ -1,8 +1,8 @@
-use std::{sync::Arc, collections::HashMap};
+use std::{collections::HashMap, net::IpAddr, sync::Arc};
 
 use async_trait::async_trait;
 use dns_cache::asynchronous::{async_cache::AsyncTreeCache, async_main_cache::AsyncMainTreeCache};
-use dns_lib::{interface::client::{AsyncClient, Response, Answer}, query::question::Question, resource_record::resource_record::ResourceRecord};
+use dns_lib::{interface::client::{Answer, AsyncClient, Response}, query::question::Question, resource_record::resource_record::ResourceRecord};
 use network::socket_manager::SocketManager;
 use query::recursive_query::QueryResponse;
 use tokio::sync::{RwLock, broadcast::Sender};
@@ -17,7 +17,7 @@ const IPV4_ENABLED: bool = true;
 
 pub struct DNSAsyncClient {
     cache: Arc<AsyncMainTreeCache>,
-    socket_manager: Arc<SocketManager>,
+    socket_manager: SocketManager,
     active_query_manager: RwLock<HashMap<Question, Sender<QueryResponse<ResourceRecord>>>>,
 }
 
@@ -26,7 +26,7 @@ impl DNSAsyncClient {
     pub async fn new(cache: Arc<AsyncMainTreeCache>) -> Self {
         Self {
             cache,
-            socket_manager: Arc::new(SocketManager::new().await),
+            socket_manager: SocketManager::new().await,
             active_query_manager: RwLock::new(HashMap::new())
         }
     }
