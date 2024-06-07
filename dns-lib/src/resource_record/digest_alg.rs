@@ -1,7 +1,7 @@
 use super::gen_enum::enum_encoding;
 
-// https://www.iana.org/assignments/ds-rr-types/ds-rr-types.xhtml#ds-rr-types-1
 enum_encoding!(
+    (doc "https://www.iana.org/assignments/ds-rr-types/ds-rr-types.xhtml#ds-rr-types-1"),
     DigestAlgorithm,
     u8,
     (

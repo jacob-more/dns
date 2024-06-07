@@ -1,7 +1,7 @@
 use super::gen_enum::enum_encoding;
 
-// https://datatracker.ietf.org/doc/html/rfc2535#section-3.1.3
 enum_encoding!(
+    (doc "https://datatracker.ietf.org/doc/html/rfc2535#section-3.1.3"),
     KeyProtocol,
     u8,
     (

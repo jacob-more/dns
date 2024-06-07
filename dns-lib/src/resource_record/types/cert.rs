@@ -28,8 +28,8 @@ impl<'a> Display for CertificateTypeError<'a> {
     }
 }
 
-// https://datatracker.ietf.org/doc/html/rfc4398#section-2.1
 enum_encoding!(
+    (doc "https://datatracker.ietf.org/doc/html/rfc4398#section-2.1"),
     CertificateType,
     u16,
     (

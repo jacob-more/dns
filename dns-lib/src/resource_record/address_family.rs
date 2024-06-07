@@ -1,7 +1,7 @@
 use super::gen_enum::enum_encoding;
 
-// https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml#address-family-numbers-2
 enum_encoding!(
+    (doc "https://www.iana.org/assignments/address-family-numbers/address-family-numbers.xhtml#address-family-numbers-2"),
     AddressFamily,
     u16,
     (

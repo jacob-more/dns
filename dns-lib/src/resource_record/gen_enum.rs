@@ -1,6 +1,6 @@
 macro_rules! enum_encoding {
-    ($enum_name:ident, $int_ty:ty, ($(($item_name:ident, $item_code:literal)),+$(,)?)) => {
-        crate::resource_record::gen_enum::gen_enum!($enum_name, $int_ty, ($(($item_name),)+));
+    ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_code:literal)),+$(,)?)) => {
+        crate::resource_record::gen_enum::gen_enum!($(($($doc_str),+),)? $enum_name, $int_ty, ($(($(($($item_doc_str),+),)? $item_name),)+));
 
         crate::resource_record::gen_enum::impl_enum_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
         crate::resource_record::gen_enum::impl_enum_from_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
@@ -11,8 +11,8 @@ macro_rules! enum_encoding {
         crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, code_to_presentation);
         crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, code_from_presentation);
     };
-    ($enum_name:ident, $int_ty:ty, ($(($item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), $from_presentation:ident, $to_presentation:ident, $display:ident) => {
-        crate::resource_record::gen_enum::gen_enum!($enum_name, $int_ty, ($(($item_name),)+));
+    ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), $from_presentation:ident, $to_presentation:ident, $display:ident) => {
+        crate::resource_record::gen_enum::gen_enum!($(($($doc_str),+),)? $enum_name, $int_ty, ($(($(($($item_doc_str),+),)? $item_name),)+));
 
         crate::resource_record::gen_enum::impl_enum_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
         crate::resource_record::gen_enum::impl_enum_from_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
@@ -24,8 +24,8 @@ macro_rules! enum_encoding {
         crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, $to_presentation);
         crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, $from_presentation);
     };
-    ($enum_name:ident, $int_ty:ty, ($(($item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), from_str, $error_ty:ty, $from_presentation:ident, $to_presentation:ident, $display:ident) => {
-        crate::resource_record::gen_enum::gen_enum!($enum_name, $int_ty, ($(($item_name),)+));
+    ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), from_str, $error_ty:ty, $from_presentation:ident, $to_presentation:ident, $display:ident) => {
+        crate::resource_record::gen_enum::gen_enum!($(($($doc_str),+),)? $enum_name, $int_ty, ($(($(($($item_doc_str),+),)? $item_name),)+));
 
         crate::resource_record::gen_enum::impl_enum_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
         crate::resource_record::gen_enum::impl_enum_from_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
@@ -41,12 +41,16 @@ macro_rules! enum_encoding {
 }
 
 macro_rules! gen_enum {
-    ($enum_name:ident, $int_ty:ty, ($(($item_name:ident)),+$(,)?)) => {
+    ($(($($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($(($($item_doc_str:expr),+),)? $item_name:ident)),+$(,)?)) => {
+        $($(#[doc = $doc_str])*)?
         #[allow(non_camel_case_types)]
         #[derive(Clone, PartialEq, Eq, Hash, Debug)]
         pub enum $enum_name {
             Unknown($int_ty),
-            $($item_name,)+
+            $(
+                $($(#[doc = $item_doc_str])*)?
+                $item_name,
+            )+
         }
     };
 }

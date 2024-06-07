@@ -1,7 +1,7 @@
 use super::gen_enum::enum_encoding;
 
-// https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-6
 enum_encoding!(
+    (doc "https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml#dns-parameters-6"),
     RCode,
     u16,
     (
