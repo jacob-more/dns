@@ -63,7 +63,7 @@ pub enum TokenError<'a> {
     ExtendedBase32Error(ExtendedBase32Error),
     Base64Error(Base64Error),
     TimeError(TimeError),
-    ProtocolError(ProtocolError),
+    ProtocolError(ProtocolError<'a>),
     PortError(PortError),
     CertificateTypeError(CertificateTypeError<'a>),
 }
@@ -175,8 +175,8 @@ impl<'a> From<DateTimeError> for TokenError<'a> {
         Self::TimeError(TimeError::DateTimeError(value))
     }
 }
-impl<'a> From<ProtocolError> for TokenError<'a> {
-    fn from(value: ProtocolError) -> Self {
+impl<'a> From<ProtocolError<'a>> for TokenError<'a> {
+    fn from(value: ProtocolError<'a>) -> Self {
         Self::ProtocolError(value)
     }
 }

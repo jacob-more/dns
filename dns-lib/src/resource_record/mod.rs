@@ -1,5 +1,6 @@
 pub mod resource_record;
 pub mod types;
+mod gen_enum;
 
 pub mod rclass;
 pub mod rtype;

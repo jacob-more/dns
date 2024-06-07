@@ -1,8 +1,6 @@
-use std::fmt::Display;
-
 use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::base16::Base16};
+use crate::{resource_record::gen_enum::enum_encoding, types::base16::Base16};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc6698#section-2
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc8749#name-moving-dlv-to-historic-stat
@@ -17,296 +15,50 @@ pub struct TLSA {
     certificate: Base16,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum CertificateUsage {
-    Unknown(u8),
+enum_encoding!(
+    CertificateUsage,
+    u8,
+    (
+        (PkixTa, "PKIX-TA", 0),
+        (PkixEe, "PKIX-EE", 1),
+        (DaneTa, "DANE-TA", 2),
+        (DaneEe, "DANE-EE", 3),
     
-    PkixTa,
-    PkixEe,
-    DaneTa,
-    DaneEe,
+        (PrivCert, "PrivCert", 255),
+    ),
+    code_from_presentation,
+    code_to_presentation,
+    display_mnemonic
+);
 
-    PrivCert,
-}
-
-impl CertificateUsage {
-    pub const MIN: u8 = u8::MIN;
-    pub const MAX: u8 = u8::MAX;
-
-    #[inline]
-    pub fn code(&self) -> u8 {
-        match self {
-            Self::Unknown(x) => *x,
-
-            Self::PkixTa => 0,
-            Self::PkixEe => 1,
-            Self::DaneTa => 2,
-            Self::DaneEe => 3,
-
-            Self::PrivCert => 255,
-        }
-    }
-
-    #[inline]
-    pub fn mnemonic(&self) -> String {
-        match self {
-            Self::Unknown(value) => value.to_string(),
-
-            Self::PkixTa => "PKIX-TA".to_string(),
-            Self::PkixEe => "PKIX-EE".to_string(),
-            Self::DaneTa => "DANE-TA".to_string(),
-            Self::DaneEe => "DANE-EE".to_string(),
-
-            Self::PrivCert => "PrivCert".to_string(),
-        }
-    }
-
-    #[inline]
-    pub fn from_code(value: u8) -> Self {
-        match value {
-            0 => Self::PkixTa,
-            1 => Self::PkixEe,
-            2 => Self::DaneTa,
-            3 => Self::DaneEe,
-
-            255 => Self::PrivCert,
-
-            _ => Self::Unknown(value),
-        }
-    }
-}
-
-impl Display for CertificateUsage {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.mnemonic())
-    }
-}
-
-impl ToWire for CertificateUsage {
-    #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
-        self.code().to_wire_format(wire, compression)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        self.code().serial_length()
-    }
-}
-
-impl FromWire for CertificateUsage {
-    #[inline]
-    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
-        Ok(Self::from_code(
-            u8::from_wire_format(wire)?
-        ))
-    }
-}
-
-impl FromPresentation for CertificateUsage {
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
-        let (code, tokens) = u8::from_token_format(tokens)?;
-        Ok((Self::from_code(code), tokens))
-    }
-}
-
-impl ToPresentation for CertificateUsage {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        out_buffer.push(self.code().to_string())
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum Selector {
-    Unknown(u8),
+enum_encoding!(
+    Selector,
+    u8,
+    (
+        (Cert, "Cert", 0),
+        (Spki, "SPKI", 1),
     
-    Cert,
-    Spki,
+        (PrivSel, "PrivSel", 255),
+    ),
+    code_from_presentation,
+    code_to_presentation,
+    display_mnemonic
+);
 
-    PrivSel,
-}
-
-impl Selector {
-    pub const MIN: u8 = u8::MIN;
-    pub const MAX: u8 = u8::MAX;
-
-    #[inline]
-    pub fn code(&self) -> u8 {
-        match self {
-            Self::Unknown(x) => *x,
-
-            Self::Cert => 0,
-            Self::Spki => 1,
-
-            Self::PrivSel => 255,
-        }
-    }
-
-    #[inline]
-    pub fn mnemonic(&self) -> String {
-        match self {
-            Self::Unknown(value) => value.to_string(),
-
-            Self::Cert => "Cert".to_string(),
-            Self::Spki => "SPKI".to_string(),
-
-            Self::PrivSel => "PrivSel".to_string(),
-        }
-    }
-
-    #[inline]
-    pub fn from_code(value: u8) -> Self {
-        match value {
-            0 => Self::Cert,
-            1 => Self::Spki,
-
-            255 => Self::PrivSel,
-
-            _ => Self::Unknown(value),
-        }
-    }
-}
-
-impl Display for Selector {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.mnemonic())
-    }
-}
-
-impl ToWire for Selector {
-    #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
-        self.code().to_wire_format(wire, compression)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        self.code().serial_length()
-    }
-}
-
-impl FromWire for Selector {
-    #[inline]
-    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
-        Ok(Self::from_code(
-            u8::from_wire_format(wire)?
-        ))
-    }
-}
-
-impl FromPresentation for Selector {
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
-        let (code, tokens) = u8::from_token_format(tokens)?;
-        Ok((Self::from_code(code), tokens))
-    }
-}
-
-impl ToPresentation for Selector {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        out_buffer.push(self.code().to_string())
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum MatchingType {
-    Unknown(u8),
+enum_encoding!(
+    MatchingType,
+    u8,
+    (
+        (Full,     "Full",     0),
+        (Sha2_256, "SHA2-256", 1),
+        (Sha2_512, "SHA2-512", 2),
     
-    Full,
-    Sha2_256,
-    Sha2_512,
-
-    PrivMatch,
-}
-
-impl MatchingType {
-    pub const MIN: u8 = u8::MIN;
-    pub const MAX: u8 = u8::MAX;
-
-    #[inline]
-    pub fn code(&self) -> u8 {
-        match self {
-            Self::Unknown(x) => *x,
-
-            Self::Full     => 0,
-            Self::Sha2_256 => 1,
-            Self::Sha2_512 => 2,
-
-            Self::PrivMatch => 255,
-        }
-    }
-
-    #[inline]
-    pub fn mnemonic(&self) -> String {
-        match self {
-            Self::Unknown(value) => value.to_string(),
-
-            Self::Full     => "Full".to_string(),
-            Self::Sha2_256 => "SHA2-256".to_string(),
-            Self::Sha2_512 => "SHA2-512".to_string(),
-
-            Self::PrivMatch => "PrivMatch".to_string(),
-        }
-    }
-
-    #[inline]
-    pub fn from_code(value: u8) -> Self {
-        match value {
-            0 => Self::Full,
-            1 => Self::Sha2_256,
-            2 => Self::Sha2_512,
-
-            255 => Self::PrivMatch,
-
-            _ => Self::Unknown(value),
-        }
-    }
-}
-
-impl Display for MatchingType {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.mnemonic())
-    }
-}
-
-impl ToWire for MatchingType {
-    #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
-        self.code().to_wire_format(wire, compression)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        self.code().serial_length()
-    }
-}
-
-impl FromWire for MatchingType {
-    #[inline]
-    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
-        Ok(Self::from_code(
-            u8::from_wire_format(wire)?
-        ))
-    }
-}
-
-impl FromPresentation for MatchingType {
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
-        let (code, tokens) = u8::from_token_format(tokens)?;
-        Ok((Self::from_code(code), tokens))
-    }
-}
-
-impl ToPresentation for MatchingType {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        out_buffer.push(self.code().to_string())
-    }
-}
+        (PrivMatch, "PrivMatch", 255),
+    ),
+    code_from_presentation,
+    code_to_presentation,
+    display_mnemonic
+);
 
 #[cfg(test)]
 mod tlsa_circular_serde_sanity_test {
