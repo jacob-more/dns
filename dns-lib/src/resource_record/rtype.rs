@@ -1,6 +1,6 @@
 use std::{fmt::Display, error::Error};
 
-use super::gen_enum::enum_encoding;
+use crate::gen_enum::enum_encoding;
 
 #[derive(Debug)]
 pub enum RTypeError<'a> {

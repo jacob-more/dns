@@ -1,4 +1,4 @@
-use super::gen_enum::enum_encoding;
+use crate::gen_enum::enum_encoding;
 
 enum_encoding!(
     (doc "https://datatracker.ietf.org/doc/html/rfc2535#section-3.1.3"),

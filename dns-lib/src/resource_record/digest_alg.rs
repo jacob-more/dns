@@ -1,4 +1,4 @@
-use super::gen_enum::enum_encoding;
+use crate::gen_enum::enum_encoding;
 
 enum_encoding!(
     (doc "https://www.iana.org/assignments/ds-rr-types/ds-rr-types.xhtml#ds-rr-types-1"),

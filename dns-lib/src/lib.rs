@@ -1,3 +1,5 @@
+mod gen_enum;
+
 pub mod types;
 pub mod serde;
 

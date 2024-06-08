@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display};
 
 use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
 
-use crate::{resource_record::{dnssec_alg::DnsSecAlgorithm, gen_enum::enum_encoding}, types::base64::Base64};
+use crate::{gen_enum::enum_encoding, resource_record::dnssec_alg::DnsSecAlgorithm, types::base64::Base64};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc4398#section-2
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc6944

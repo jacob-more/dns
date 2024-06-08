@@ -4,7 +4,7 @@ macro_rules! gen_ok_token_test {
         fn $test_name() {
             let expected =  $expected;
             let tokens = $tokens;
-            let result = <$type as crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(tokens);
+            let result = <$type as $crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(tokens);
     
             assert!(result.is_ok());
             let (actual_record, remaining_tokens) = result.unwrap();
@@ -19,7 +19,7 @@ macro_rules! gen_fail_token_test {
         #[test]
         fn $test_name() {
             let tokens = $tokens;
-            let result = <$type as crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(tokens);
+            let result = <$type as $crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(tokens);
     
             assert!(result.is_err());
         }

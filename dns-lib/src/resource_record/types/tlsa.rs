@@ -1,6 +1,6 @@
 use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
 
-use crate::{resource_record::gen_enum::enum_encoding, types::base16::Base16};
+use crate::{gen_enum::enum_encoding, types::base16::Base16};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc6698#section-2
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc8749#name-moving-dlv-to-historic-stat

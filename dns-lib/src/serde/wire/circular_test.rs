@@ -64,7 +64,7 @@ macro_rules! gen_test_circular_serde_sanity_test {
     ($test_name:ident, $test_case:expr) => {
         #[test]
         fn $test_name() {
-            crate::serde::wire::circular_test::circular_serde_sanity_test($test_case)
+            $crate::serde::wire::circular_test::circular_serde_sanity_test($test_case)
         }
     }
 }

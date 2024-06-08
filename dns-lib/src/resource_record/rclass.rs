@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Display};
 
-use super::gen_enum::enum_encoding;
+use crate::gen_enum::enum_encoding;
 
 #[derive(Debug)]
 pub enum RClassError<'a> {
