@@ -19,6 +19,7 @@ enum_encoding!(
     (doc "https://www.iana.org/assignments/dns-sec-alg-numbers/dns-sec-alg-numbers.xhtml#dns-sec-alg-numbers-1"),
     DnsSecAlgorithm,
     u8,
+    DnsSecAlgorithmError,
     (
         (Delete,           "DELETE",             0),
         (RsaMd5,           "RSAMD5",             1),
@@ -42,9 +43,7 @@ enum_encoding!(
         (PrivateDns, "PRIVATEDNS", 253),
         (PrivateOid, "PRIVATEOID", 254),
     ),
-    from_str,
-    DnsSecAlgorithmError,
-    mnemonic_from_presentation,
-    mnemonic_to_presentation,
-    display_mnemonic
+    code_or_mnemonic_from_str,
+    mnemonic_presentation,
+    mnemonic_display
 );

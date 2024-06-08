@@ -18,6 +18,7 @@ impl<'a> Display for ProtocolError<'a> {
 enum_encoding!(
     Protocol,
     u8,
+    ProtocolError,
     (
         (HOPOPT,       "HOPOPT",      0),
         (ICMP,         "ICMP",        1),
@@ -166,9 +167,7 @@ enum_encoding!(
         (AGGFRAG,         "AGGFRAG",         144),
         (NSH,             "NSH",             145),
     ),
-    from_str,
-    ProtocolError,
-    mnemonic_from_presentation,
-    mnemonic_to_presentation,
-    display_mnemonic
+    code_or_mnemonic_from_str,
+    mnemonic_presentation,
+    mnemonic_display
 );

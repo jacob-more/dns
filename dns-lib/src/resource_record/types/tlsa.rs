@@ -26,9 +26,8 @@ enum_encoding!(
     
         (PrivCert, "PrivCert", 255),
     ),
-    code_from_presentation,
-    code_to_presentation,
-    display_mnemonic
+    code_presentation,
+    mnemonic_display
 );
 
 enum_encoding!(
@@ -40,9 +39,8 @@ enum_encoding!(
     
         (PrivSel, "PrivSel", 255),
     ),
-    code_from_presentation,
-    code_to_presentation,
-    display_mnemonic
+    code_presentation,
+    mnemonic_display
 );
 
 enum_encoding!(
@@ -55,9 +53,8 @@ enum_encoding!(
     
         (PrivMatch, "PrivMatch", 255),
     ),
-    code_from_presentation,
-    code_to_presentation,
-    display_mnemonic
+    code_presentation,
+    mnemonic_display
 );
 
 #[cfg(test)]

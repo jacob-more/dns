@@ -13,7 +13,6 @@ enum_encoding!(
     
         (All, "ALL", 255),
     ),
-    code_from_presentation,
-    code_to_presentation,
-    display_mnemonic
+    code_presentation,
+    mnemonic_display
 );

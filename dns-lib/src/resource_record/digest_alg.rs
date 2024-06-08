@@ -10,7 +10,6 @@ enum_encoding!(
         (Gostr341194, "GOST R 34.11-94", 3),
         (Sha384,      "SHA-384",         4),
     ),
-    code_from_presentation,
-    code_to_presentation,
-    display_mnemonic
+    code_presentation,
+    mnemonic_display
 );

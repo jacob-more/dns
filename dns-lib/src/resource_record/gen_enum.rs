@@ -1,17 +1,19 @@
 macro_rules! enum_encoding {
+    // Generates a enum with only Name-Code matchings. No mnemonics. No from_str.
     ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_code:literal)),+$(,)?)) => {
         crate::resource_record::gen_enum::gen_enum!($(($($doc_str),+),)? $enum_name, $int_ty, ($(($(($($item_doc_str),+),)? $item_name),)+));
 
         crate::resource_record::gen_enum::impl_enum_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
         crate::resource_record::gen_enum::impl_enum_from_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
-        crate::resource_record::gen_enum::impl_enum_display!($enum_name, $int_ty, display_code);
+        crate::resource_record::gen_enum::impl_enum_display!($enum_name, $int_ty, code_display);
 
         crate::resource_record::gen_enum::impl_enum_to_wire!($enum_name, $int_ty);
         crate::resource_record::gen_enum::impl_enum_from_wire!($enum_name, $int_ty);
-        crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, code_to_presentation);
-        crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, code_from_presentation);
+        crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, code_presentation);
+        crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, code_presentation);
     };
-    ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), $from_presentation:ident, $to_presentation:ident, $display:ident) => {
+    // Generates a enum with Name-Code & Name-Mnemonic matchings. No from_str.
+    ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), $presentation:ident, $display:ident) => {
         crate::resource_record::gen_enum::gen_enum!($(($($doc_str),+),)? $enum_name, $int_ty, ($(($(($($item_doc_str),+),)? $item_name),)+));
 
         crate::resource_record::gen_enum::impl_enum_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
@@ -21,22 +23,40 @@ macro_rules! enum_encoding {
 
         crate::resource_record::gen_enum::impl_enum_to_wire!($enum_name, $int_ty);
         crate::resource_record::gen_enum::impl_enum_from_wire!($enum_name, $int_ty);
-        crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, $to_presentation);
-        crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, $from_presentation);
+        crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, $presentation);
+        crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, $presentation);
     };
-    ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), from_str, $error_ty:ty, $from_presentation:ident, $to_presentation:ident, $display:ident) => {
+    // Generates a enum with Name-Code & Name-Mnemonic matchings.
+    // The from_str can translate using the rules for just Mnemonic->Name or both Mnemonic->Name and Code->Name.
+    ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), $from_str:ident, $presentation:ident, $display:ident) => {
         crate::resource_record::gen_enum::gen_enum!($(($($doc_str),+),)? $enum_name, $int_ty, ($(($(($($item_doc_str),+),)? $item_name),)+));
 
         crate::resource_record::gen_enum::impl_enum_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
         crate::resource_record::gen_enum::impl_enum_from_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
         crate::resource_record::gen_enum::impl_enum_mnemonic!($enum_name, $int_ty, ($(($item_name, $item_mnemonic),)+));
-        crate::resource_record::gen_enum::impl_enum_from_str!($enum_name, $int_ty, $error_ty, ($(($item_name, $item_mnemonic),)+));
+        crate::resource_record::gen_enum::impl_enum_from_str!($enum_name, $int_ty, $error_ty, ($(($item_name, $item_mnemonic),)+), $from_str);
         crate::resource_record::gen_enum::impl_enum_display!($enum_name, $int_ty, $display);
 
         crate::resource_record::gen_enum::impl_enum_to_wire!($enum_name, $int_ty);
         crate::resource_record::gen_enum::impl_enum_from_wire!($enum_name, $int_ty);
-        crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, $to_presentation);
-        crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, $from_presentation);
+        crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, $presentation);
+        crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, $presentation);
+    };
+    // Generates a enum with Name-Code & Name-Mnemonic matchings.
+    // The from_str can translate {Wildcard}Code->Name or Mnemonic->Name.
+    ($((doc $($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($((doc $($item_doc_str:expr),+),)? $item_name:ident, $item_mnemonic:literal, $item_code:literal)),+$(,)?), (wildcard_or_mnemonic_from_str, $wildcard:literal), $presentation:ident, $display:ident) => {
+        crate::resource_record::gen_enum::gen_enum!($(($($doc_str),+),)? $enum_name, $int_ty, ($(($(($($item_doc_str),+),)? $item_name),)+));
+
+        crate::resource_record::gen_enum::impl_enum_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
+        crate::resource_record::gen_enum::impl_enum_from_code!($enum_name, $int_ty, ($(($item_name, $item_code),)+));
+        crate::resource_record::gen_enum::impl_enum_mnemonic!($enum_name, $int_ty, ($(($item_name, $item_mnemonic),)+), $wildcard);
+        crate::resource_record::gen_enum::impl_enum_from_str!($enum_name, $int_ty, $error_ty, ($(($item_name, $item_mnemonic),)+), (wildcard_or_mnemonic_from_str, $wildcard));
+        crate::resource_record::gen_enum::impl_enum_display!($enum_name, $int_ty, $display);
+
+        crate::resource_record::gen_enum::impl_enum_to_wire!($enum_name, $int_ty);
+        crate::resource_record::gen_enum::impl_enum_from_wire!($enum_name, $int_ty);
+        crate::resource_record::gen_enum::impl_enum_to_presentation!($enum_name, $int_ty, $presentation);
+        crate::resource_record::gen_enum::impl_enum_from_presentation!($enum_name, $int_ty, $presentation);
     };
 }
 
@@ -44,7 +64,7 @@ macro_rules! gen_enum {
     ($(($($doc_str:expr),+),)? $enum_name:ident, $int_ty:ty, ($(($(($($item_doc_str:expr),+),)? $item_name:ident)),+$(,)?)) => {
         $($(#[doc = $doc_str])*)?
         #[allow(non_camel_case_types)]
-        #[derive(Clone, PartialEq, Eq, Hash, Debug)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
         pub enum $enum_name {
             Unknown($int_ty),
             $(
@@ -98,10 +118,21 @@ macro_rules! impl_enum_mnemonic {
             }
         }
     };
+    ($enum_name:ident, $int_ty:ty, ($(($item_name:ident, $item_mnemonic:literal)),+$(,)?), $wildcard:literal) => {
+        impl $enum_name {
+            #[inline]
+            pub fn mnemonic(&self) -> String {
+                match self {
+                    Self::Unknown(code) => format!("{}{code}", $wildcard),
+                    $(Self::$item_name => $item_mnemonic.to_string(),)+
+                }
+            }
+        }
+    };
 }
 
 macro_rules! impl_enum_display {
-    ($enum_name:ident, $int_ty:ty, display_mnemonic) => {
+    ($enum_name:ident, $int_ty:ty, mnemonic_display) => {
         impl std::fmt::Display for $enum_name {
             #[inline]
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -109,7 +140,7 @@ macro_rules! impl_enum_display {
             }
         }
     };
-    ($enum_name:ident, $int_ty:ty, display_code) => {
+    ($enum_name:ident, $int_ty:ty, code_display) => {
         impl std::fmt::Display for $enum_name {
             #[inline]
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -120,7 +151,18 @@ macro_rules! impl_enum_display {
 }
 
 macro_rules! impl_enum_from_str {
-    ($enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($item_name:ident, $item_mnemonic:literal)),+$(,)?)) => {
+    ($enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($item_name:ident, $item_mnemonic:literal)),+$(,)?), mnemonic_from_str) => {
+        impl $enum_name {
+            #[inline]
+            pub fn from_str(string: &str) -> Result<Self, $error_ty> {
+                match string {
+                    $($item_mnemonic => Ok(Self::$item_name),)+
+                    _ => Err(<$error_ty>::UnknownMnemonic(string)),
+                }
+            }
+        }
+    };
+    ($enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($item_name:ident, $item_mnemonic:literal)),+$(,)?), code_or_mnemonic_from_str) => {
         impl $enum_name {
             #[inline]
             pub fn from_str(string: &str) -> Result<Self, $error_ty> {
@@ -134,6 +176,29 @@ macro_rules! impl_enum_from_str {
                         // Note: we don't directly assign it to Unknown since it could be a known
                         //       code that just uses the '(\d)+' syntax.
                         Ok(Self::from_code(protocol))
+                    },
+                }
+            }
+        }
+    };
+    ($enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($item_name:ident, $item_mnemonic:literal)),+$(,)?), (wildcard_or_mnemonic_from_str, $wildcard:literal)) => {
+        impl $enum_name {
+            #[inline]
+            pub fn from_str(string: &str) -> Result<Self, $error_ty> {
+                match string {
+                    $($item_mnemonic => Ok(Self::$item_name),)+
+                    _ => {
+                        const WILDCARD: &str = $wildcard;
+                        if !string.starts_with(WILDCARD) {
+                            return Err(<$error_ty>::UnknownMnemonic(string));
+                        }
+                        let code_str = match u16::from_str_radix(&string[WILDCARD.len()..], 10) {
+                            Ok(code_str) => code_str,
+                            Err(_) => return Err(<$error_ty>::UnknownMnemonic(string)),
+                        };
+                        // Note: we don't directly assign it to Unknown since it could be a known
+                        //       code that just uses the 'WILDCARD(\d)+' syntax.
+                        Ok(Self::from_code(code_str))
                     },
                 }
             }
@@ -171,7 +236,7 @@ macro_rules! impl_enum_from_wire {
 }
 
 macro_rules! impl_enum_to_presentation {
-    ($enum_name:ident, $int_ty:ty, code_to_presentation) => {
+    ($enum_name:ident, $int_ty:ty, code_presentation) => {
         impl crate::serde::presentation::to_presentation::ToPresentation for $enum_name {
             #[inline]
             fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
@@ -179,7 +244,7 @@ macro_rules! impl_enum_to_presentation {
             }
         }
     };
-    ($enum_name:ident, $int_ty:ty, mnemonic_to_presentation) => {
+    ($enum_name:ident, $int_ty:ty, mnemonic_presentation) => {
         impl crate::serde::presentation::to_presentation::ToPresentation for $enum_name {
             #[inline]
             fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
@@ -190,7 +255,7 @@ macro_rules! impl_enum_to_presentation {
 }
 
 macro_rules! impl_enum_from_presentation {
-    ($enum_name:ident, $int_ty:ty, code_from_presentation) => {
+    ($enum_name:ident, $int_ty:ty, code_presentation) => {
         impl crate::serde::presentation::from_presentation::FromPresentation for $enum_name {
             #[inline]
             fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
@@ -199,7 +264,7 @@ macro_rules! impl_enum_from_presentation {
             }
         }
     };
-    ($enum_name:ident, $int_ty:ty, mnemonic_from_presentation) => {
+    ($enum_name:ident, $int_ty:ty, mnemonic_presentation) => {
         impl crate::serde::presentation::from_presentation::FromPresentation for $enum_name {
             #[inline]
             fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {

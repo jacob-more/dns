@@ -32,6 +32,7 @@ enum_encoding!(
     (doc "https://datatracker.ietf.org/doc/html/rfc4398#section-2.1"),
     CertificateType,
     u16,
+    CertificateTypeError,
     (
         (Pkix,    "PKIX",    1),
         (Spki,    "SPKI",    2),
@@ -45,9 +46,7 @@ enum_encoding!(
         (Uri, "URI", 253),
         (Oid, "OID", 254),
     ),
-    from_str,
-    CertificateTypeError,
-    mnemonic_from_presentation,
-    mnemonic_to_presentation,
-    display_mnemonic
+    code_or_mnemonic_from_str,
+    mnemonic_presentation,
+    mnemonic_display
 );
