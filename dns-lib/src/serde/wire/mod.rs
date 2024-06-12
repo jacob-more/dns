@@ -1,3 +1,5 @@
+pub mod bytes;
+
 pub mod read_wire;
 pub mod write_wire;
 
