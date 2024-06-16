@@ -23,7 +23,7 @@ impl InternalBytes {
     }
 
     /// Splits the bytes at the index, returning the two halves. The first `Bytes` will contain
-    /// elements from `[0, at)`. The first second `Bytes` will contain elements from `[0, at)`.
+    /// elements from `[0, at)`. The second `Bytes` will contain elements from `[0, at)`.
     /// 
     /// # Panics
     ///
@@ -37,7 +37,7 @@ impl InternalBytes {
     }
 
     /// Splits the bytes at the index, returning the two halves. The first `Bytes` will contain
-    /// elements from `[0, at)`. The first second `Bytes` will contain elements from `[0, at)`.
+    /// elements from `[0, at)`. The second `Bytes` will contain elements from `[0, at)`.
     /// Returns `None` if `at > len`.
     #[inline]
     fn split_at_checked(&self, at: usize) -> Option<(Self, Self)> {
@@ -80,8 +80,8 @@ impl InternalBytes {
                     Some((Self::Tail { data: data.clone(), start: *start }, Self::Empty))
                 } else if at < len {
                     Some((
-                        Self::Slice { data: data.clone(), start: *start, end: at },
-                        Self::Tail { data: data.clone(), start: at },
+                        Self::Slice { data: data.clone(), start: *start, end: start + at },
+                        Self::Tail { data: data.clone(), start: start + at },
                     ))
                 } else {
                     None
@@ -136,6 +136,8 @@ impl InternalBytes {
         // same as `self`.
         if len == (end - start) {
             return self.clone();
+        } else if 0 == (end - start) {
+            return Self::Empty;
         }
 
         match &self {
@@ -163,7 +165,7 @@ impl InternalBytes {
                     Self::Slice { data: data.clone(), start: tail_start + start, end: tail_start + end }
                 }
             },
-            Self::Slice { data, start: vstart, end: _ } => Self::Slice { data: data.clone(), start: vstart + start, end: start + end },
+            Self::Slice { data, start: vstart, end: _ } => Self::Slice { data: data.clone(), start: vstart + start, end: vstart + end },
         }
     }
 
@@ -195,7 +197,7 @@ impl Bytes {
     pub fn is_empty(&self) -> bool { self.len() == 0 }
 
     /// Splits the bytes at the index, returning the two halves. The first `Bytes` will contain
-    /// elements from `[0, at)`. The first second `Bytes` will contain elements from `[0, at)`.
+    /// elements from `[0, at)`. The second `Bytes` will contain elements from `[0, at)`.
     /// 
     /// # Panics
     ///
@@ -207,7 +209,7 @@ impl Bytes {
     }
 
     /// Splits the bytes at the index, returning the two halves. The first `Bytes` will contain
-    /// elements from `[0, at)`. The first second `Bytes` will contain elements from `[0, at)`.
+    /// elements from `[0, at)`. The second `Bytes` will contain elements from `[0, at)`.
     /// Returns `None` if `at > len`.
     #[inline]
     pub fn split_at_checked(&self, at: usize) -> Option<(Self, Self)> {
@@ -289,6 +291,10 @@ impl Bytes {
     /// Returns `self` as a slice of type `&[u8]`.
     #[inline]
     pub fn as_slice(&self) -> &[u8] { self.bytes.as_slice() }
+
+    /// Returns `self` as a vector of type `Vec<u8>`.
+    #[inline]
+    pub fn to_vec(&self) -> Vec<u8> { self.as_slice().to_vec() }
 }
 
 impl From<Rc<Vec<u8>>> for Bytes {
@@ -379,6 +385,28 @@ impl From<&[&u8]> for Bytes {
     }
 }
 
+impl<const N: usize> From<&[u8; N]> for Bytes {
+    #[inline]
+    fn from(value: &[u8; N]) -> Self {
+        if value.len() == 0 {
+            Self { bytes: InternalBytes::Empty }
+        } else {
+            Self { bytes: InternalBytes::Vec(Rc::new(value.to_vec())) }
+        }
+    }
+}
+
+impl<const N: usize> From<&[&u8; N]> for Bytes {
+    #[inline]
+    fn from(value: &[&u8; N]) -> Self {
+        if value.len() == 0 {
+            Self { bytes: InternalBytes::Empty }
+        } else {
+            Self { bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())) }
+        }
+    }
+}
+
 impl<const N: usize> From<[u8; N]> for Bytes {
     #[inline]
     fn from(value: [u8; N]) -> Self {
@@ -410,5 +438,466 @@ impl FromIterator<u8> for Bytes {
 impl<'a> FromIterator<&'a u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = &'a u8>>(iter: T) -> Self {
         Self::from(iter.into_iter().map(|x| *x).collect::<Vec<u8>>())
+    }
+}
+
+#[cfg(test)]
+mod test_bytes_spits {
+    use std::rc::Rc;
+
+    use super::{Bytes, InternalBytes};
+
+    fn new_rc_vec(data: &[u8]) -> Rc<Vec<u8>> { Rc::new(Vec::from(data)) }
+    fn new_empty() -> Bytes {
+        Bytes { bytes: InternalBytes::Empty }
+    }
+    fn new_vec(data: &[u8]) -> Bytes {
+        Bytes { bytes: InternalBytes::Vec(new_rc_vec(data)) }
+    }
+    fn new_front(data: &[u8], end: usize) -> Bytes {
+        Bytes { bytes: InternalBytes::Front {
+            data: new_rc_vec(data),
+            end
+        } }
+    }
+    fn new_tail(data: &[u8], start: usize) -> Bytes {
+        Bytes { bytes: InternalBytes::Tail {
+            data: new_rc_vec(data),
+            start
+        } }
+    }
+    fn new_slice(data: &[u8], start: usize, end: usize) -> Bytes {
+        Bytes { bytes: InternalBytes::Slice {
+            data: new_rc_vec(data),
+            start,
+            end
+        } }
+    }
+
+    macro_rules! ok_split_test {
+        ($test_name:ident, $init:expr, $split_at:literal, $expected_left:expr, $expected_right:expr) => {
+            #[test]
+            fn $test_name() {
+                let init_data = $init;
+                let expected_left = $expected_left;
+                let expected_right = $expected_right;
+
+                let result = init_data.split_at_checked($split_at);
+                assert!(result.is_some());
+
+                let (left, right) = result.unwrap();
+                assert_eq!(left, expected_left);
+                assert_eq!(right, expected_right);
+
+                // Verify the lengths add up.
+                assert_eq!(left.len() + right.len(), init_data.len());
+
+                // Verify that the indexes all line up.
+                for (index, value) in expected_left.as_slice().iter().chain(expected_right.as_slice().iter()).enumerate() {
+                    let result = init_data.get(index);
+                    assert!(result.is_some());
+                    let result = result.unwrap();
+                    assert_eq!(result, *value);
+                }
+            }
+        }
+    }
+
+    macro_rules! err_split_test {
+        ($test_name:ident, $init:expr, $split_at:literal) => {
+            #[test]
+            fn $test_name() {
+                let init_data = $init;
+
+                let result = init_data.split_at_checked($split_at);
+                assert!(result.is_none());
+            }
+        }
+    }
+
+    ok_split_test!(
+        empty_split_at_0,
+        new_empty(),
+        0,
+        new_empty(),
+        new_empty()
+    );
+    err_split_test!(
+        empty_split_at_1,
+        new_empty(),
+        1
+    );
+
+    ok_split_test!(
+        vec_split_at_0,
+        new_vec(&[0, 1, 2]),
+        0,
+        new_empty(),
+        new_vec(&[0, 1, 2])
+    );
+    ok_split_test!(
+        vec_split_at_1,
+        new_vec(&[0, 1, 2]),
+        1,
+        new_front(&[0, 1, 2], 1),
+        new_tail(&[0, 1, 2], 1)
+    );
+    ok_split_test!(
+        vec_split_at_2,
+        new_vec(&[0, 1, 2]),
+        2,
+        new_front(&[0, 1, 2], 2),
+        new_tail(&[0, 1, 2], 2)
+    );
+    ok_split_test!(
+        vec_split_at_3,
+        new_vec(&[0, 1, 2]),
+        3,
+        new_vec(&[0, 1, 2]),
+        new_empty()
+    );
+    err_split_test!(
+        vec_split_at_4,
+        new_vec(&[0, 1, 2]),
+        4
+    );
+
+    ok_split_test!(
+        front_split_at_0,
+        new_front(&[0, 1, 2], 2),
+        0,
+        new_empty(),
+        new_front(&[0, 1, 2], 2)
+    );
+    ok_split_test!(
+        front_split_at_1,
+        new_front(&[0, 1, 2], 2),
+        1,
+        new_front(&[0, 1, 2], 1),
+        new_slice(&[0, 1, 2], 1, 2)
+    );
+    ok_split_test!(
+        front_split_at_2,
+        new_front(&[0, 1, 2], 2),
+        2,
+        new_front(&[0, 1, 2], 2),
+        new_empty()
+    );
+    err_split_test!(
+        front_split_at_3,
+        new_front(&[0, 1, 2], 2),
+        3
+    );
+
+    ok_split_test!(
+        tail_split_at_0,
+        new_tail(&[0, 1, 2], 1),
+        0,
+        new_empty(),
+        new_tail(&[0, 1, 2], 1)
+    );
+    ok_split_test!(
+        tail_split_at_1,
+        new_tail(&[0, 1, 2], 1),
+        1,
+        new_slice(&[0, 1, 2], 1, 2),
+        new_tail(&[0, 1, 2], 2)
+    );
+    ok_split_test!(
+        tail_split_at_2,
+        new_tail(&[0, 1, 2], 1),
+        2,
+        new_tail(&[0, 1, 2], 1),
+        new_empty()
+    );
+    err_split_test!(
+        tail_split_at_3,
+        new_tail(&[0, 1, 2], 1),
+        3
+    );
+
+    ok_split_test!(
+        slice_split_at_0,
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 4),
+        0,
+        new_empty(),
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 4)
+    );
+    ok_split_test!(
+        slice_split_at_1,
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 4),
+        1,
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 2),
+        new_slice(&[0, 1, 2, 3, 4, 5], 2, 4)
+    );
+    ok_split_test!(
+        slice_split_at_2,
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 4),
+        2,
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 3),
+        new_slice(&[0, 1, 2, 3, 4, 5], 3, 4)
+    );
+    ok_split_test!(
+        slice_split_at_3,
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 4),
+        3,
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 4),
+        new_empty()
+    );
+    err_split_test!(
+        slice_split_at_4,
+        new_slice(&[0, 1, 2, 3, 4, 5], 1, 4),
+        4
+    );
+
+    macro_rules! ok_as_slice_test {
+        ($test_name:ident, $init:expr, $slice:expr) => {
+            #[test]
+            fn $test_name() {
+                let init_data = $init;
+                let expected_slice = $slice;
+
+                let result = init_data.as_slice();
+
+                assert_eq!(result, expected_slice);
+
+                // Verify the lengths are the same.
+                assert_eq!(result.len(), expected_slice.len());
+
+                // Verify that each index is the same (this checks the `get()` function)
+                for (index, value) in expected_slice.iter().enumerate() {
+                    let result = init_data.get(index);
+                    assert!(result.is_some());
+                    let result = result.unwrap();
+                    assert_eq!(result, *value);
+                }
+
+                // Verify that you cannot `get()` after the last index.
+                let len = expected_slice.len();
+                let result = init_data.get(len);
+                assert!(result.is_none());
+            }
+        }
+    }
+
+    ok_as_slice_test! {
+        empty_as_slice,
+        new_empty(),
+        &[]
+    }
+    ok_as_slice_test! {
+        vec_as_slice,
+        new_vec(&[0, 1, 2]),
+        &[0, 1, 2]
+    }
+    ok_as_slice_test! {
+        front_as_slice,
+        new_front(&[0, 1, 2], 2),
+        &[0, 1]
+    }
+    ok_as_slice_test! {
+        tail_as_slice,
+        new_tail(&[0, 1, 2], 1),
+        &[1, 2]
+    }
+    ok_as_slice_test! {
+        slice_as_slice,
+        new_slice(&[0, 1, 2, 3, 4], 1, 4),
+        &[1, 2, 3]
+    }
+
+    macro_rules! ok_slice_test {
+        ($test_name:ident, $init:expr, $range:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let init_data = $init;
+                let expected = $expected;
+
+                let result = init_data.slice($range);
+
+                assert_eq!(result, expected);
+                // Verify that the correct data is being represented.
+                assert_eq!(result.as_slice(), &init_data.as_slice()[$range])
+            }
+        }
+    }
+
+    macro_rules! err_slice_test {
+        ($test_name:ident, $init:expr, $range:expr) => {
+            #[test]
+            #[should_panic]
+            fn $test_name() {
+                let init_data = $init;
+
+                let _ = init_data.slice($range);
+            }
+        }
+    }
+
+    ok_slice_test! {
+        empty_slice_unbounded,
+        new_empty(),
+        ..,
+        new_empty()
+    }
+    ok_slice_test! {
+        empty_slice_0_to_unbounded,
+        new_empty(),
+        0..,
+        new_empty()
+    }
+    ok_slice_test! {
+        empty_slice_unbounded_to_0,
+        new_empty(),
+        ..0,
+        new_empty()
+    }
+    err_slice_test! {
+        empty_slice_1_to_unbounded,
+        new_empty(),
+        1..
+    }
+    err_slice_test! {
+        empty_slice_1_to_0,
+        new_empty(),
+        1..0
+    }
+
+    ok_slice_test! {
+        vec_slice_unbounded,
+        new_vec(&[0, 1, 2, 3, 4]),
+        ..,
+        new_vec(&[0, 1, 2, 3, 4])
+    }
+    ok_slice_test! {
+        vec_slice_0_to_0,
+        new_vec(&[0, 1, 2, 3, 4]),
+        0..0,
+        new_empty()
+    }
+    ok_slice_test! {
+        vec_slice_0_to_2,
+        new_vec(&[0, 1, 2, 3, 4]),
+        0..2,
+        new_front(&[0, 1, 2, 3, 4], 2)
+    }
+    ok_slice_test! {
+        vec_slice_3_to_5,
+        new_vec(&[0, 1, 2, 3, 4]),
+        3..5,
+        new_tail(&[0, 1, 2, 3, 4], 3)
+    }
+    ok_slice_test! {
+        vec_slice_1_to_3,
+        new_vec(&[0, 1, 2, 3, 4]),
+        1..3,
+        new_slice(&[0, 1, 2, 3, 4], 1, 3)
+    }
+    err_slice_test! {
+        vec_slice_4_to_6,
+        new_vec(&[0, 1, 2, 3, 4]),
+        4..6
+    }
+
+    ok_slice_test! {
+        front_slice_unbounded,
+        new_front(&[0, 1, 2, 3, 4], 3),
+        ..,
+        new_front(&[0, 1, 2, 3, 4], 3)
+    }
+    ok_slice_test! {
+        front_slice_0_to_0,
+        new_front(&[0, 1, 2, 3, 4], 3),
+        0..0,
+        new_empty()
+    }
+    ok_slice_test! {
+        front_slice_0_to_2,
+        new_front(&[0, 1, 2, 3, 4], 3),
+        0..2,
+        new_front(&[0, 1, 2, 3, 4], 2)
+    }
+    ok_slice_test! {
+        front_slice_2_to_3,
+        new_front(&[0, 1, 2, 3, 4], 3),
+        2..3,
+        new_slice(&[0, 1, 2, 3, 4], 2, 3)
+    }
+    ok_slice_test! {
+        front_slice_1_to_2,
+        new_front(&[0, 1, 2, 3, 4], 3),
+        1..2,
+        new_slice(&[0, 1, 2, 3, 4], 1, 2)
+    }
+    err_slice_test! {
+        front_slice_2_to_4,
+        new_front(&[0, 1, 2, 3, 4], 3),
+        2..4
+    }
+
+    ok_slice_test! {
+        tail_slice_unbounded,
+        new_tail(&[0, 1, 2, 3, 4], 1),
+        ..,
+        new_tail(&[0, 1, 2, 3, 4], 1)
+    }
+    ok_slice_test! {
+        tail_slice_0_to_0,
+        new_tail(&[0, 1, 2, 3, 4], 1),
+        0..0,
+        new_empty()
+    }
+    ok_slice_test! {
+        tail_slice_0_to_2,
+        new_tail(&[0, 1, 2, 3, 4], 1),
+        0..2,
+        new_slice(&[0, 1, 2, 3, 4], 1, 3)
+    }
+    ok_slice_test! {
+        tail_slice_1_to_2,
+        new_tail(&[0, 1, 2, 3, 4], 1),
+        1..2,
+        new_slice(&[0, 1, 2, 3, 4], 2, 3)
+    }
+    ok_slice_test! {
+        tail_slice_2_to_4,
+        new_tail(&[0, 1, 2, 3, 4], 1),
+        2..4,
+        new_tail(&[0, 1, 2, 3, 4], 3)
+    }
+    err_slice_test! {
+        tail_slice_3_to_5,
+        new_tail(&[0, 1, 2, 3, 4], 1),
+        3..5
+    }
+
+    ok_slice_test! {
+        slice_slice_unbounded,
+        new_slice(&[0, 1, 2, 3, 4], 1, 3),
+        ..,
+        new_slice(&[0, 1, 2, 3, 4], 1, 3)
+    }
+    ok_slice_test! {
+        slice_slice_0_to_0,
+        new_slice(&[0, 1, 2, 3, 4], 1, 3),
+        0..0,
+        new_empty()
+    }
+    ok_slice_test! {
+        slice_slice_0_to_1,
+        new_slice(&[0, 1, 2, 3, 4], 1, 3),
+        0..1,
+        new_slice(&[0, 1, 2, 3, 4], 1, 2)
+    }
+    ok_slice_test! {
+        slice_slice_1_to_2,
+        new_slice(&[0, 1, 2, 3, 4], 1, 3),
+        1..2,
+        new_slice(&[0, 1, 2, 3, 4], 2, 3)
+    }
+    err_slice_test! {
+        slice_slice_1_to_3,
+        new_slice(&[0, 1, 2, 3, 4], 1, 3),
+        1..3
     }
 }
