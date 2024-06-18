@@ -50,16 +50,16 @@ impl FromWire for TSIG {
         let fudge = u16::from_wire_format(wire)?;
 
         let mac_len = u16::from_wire_format(wire)? as usize;
-        let mac = wire.section_from_current_state(Some(0), Some(mac_len))?
-            .current_state()
+        let mac = wire.section_from_current(Some(0), Some(mac_len))?
+            .current()
             .to_vec();
 
         let original_id = u16::from_wire_format(wire)?;
         let error = RCode::from_wire_format(wire)?;
 
         let other_data_len = u16::from_wire_format(wire)? as usize;
-        let other_data = wire.section_from_current_state(Some(0), Some(other_data_len))?
-            .current_state()
+        let other_data = wire.section_from_current(Some(0), Some(other_data_len))?
+            .current()
             .to_vec();
 
         Ok(Self {

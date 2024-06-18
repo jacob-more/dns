@@ -114,8 +114,8 @@ impl FromWire for AMTRELAY {
                 RelayType::DomainName(domain_name)
             },
             4..=U7_MAX => {
-                let mut data = Vec::with_capacity(wire.current_state_len());
-                data.extend(wire.current_state());
+                let mut data = Vec::with_capacity(wire.current_len());
+                data.extend(wire.current());
                 wire.shift(data.len())?;
                 assert!(wire.is_end_reached());
                 RelayType::Unknown(relay_type, data)

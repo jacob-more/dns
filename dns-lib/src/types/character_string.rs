@@ -231,7 +231,7 @@ impl FromWire for CharacterString {
             ));
         }
 
-        if wire.current_state_len() < (length as usize) {
+        if wire.current_len() < (length as usize) {
             return Err(crate::serde::wire::read_wire::ReadWireError::OverflowError(
                 String::from("wire length runs out before the full string is finished reading")
             ));
@@ -239,7 +239,7 @@ impl FromWire for CharacterString {
 
         // Since the AsciiString deserializer will consume the entire buffer,
         // we only feed it the section we want it to read.
-        let mut ascii_wire = wire.section_from_current_state(Some(0), Some(length as usize))?;
+        let mut ascii_wire = wire.section_from_current(Some(0), Some(length as usize))?;
         let string = AsciiString::from_wire_format(&mut ascii_wire)?;
         wire.shift(length as usize)?;
 

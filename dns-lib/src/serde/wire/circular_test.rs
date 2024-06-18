@@ -50,7 +50,7 @@ pub(crate) fn circular_serde_sanity_test<T>(input: T) where T: Debug + ToWire + 
     assert!(
         wire.is_end_reached(),
         "The wire was not fully consumed during deserialization.\nExpected Offset: {}\nActual Offset: {}\n",
-        wire.full_state_len(), wire.current_state_offset(),
+        wire.wire_len(), wire.current_offset(),
     );
     let calculated_serial_length = output.serial_length();
     assert_eq!(

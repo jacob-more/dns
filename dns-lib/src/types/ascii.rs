@@ -693,7 +693,7 @@ impl ToWire for AsciiString {
 impl FromWire for AsciiString {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
-        let string = Self::from(wire.current_state());
+        let string = Self::from(wire.current());
         wire.shift(string.len())?;
         return Ok(string);
     }

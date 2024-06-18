@@ -150,7 +150,7 @@ impl FromWire for Label {
 
         match label_length & 0b1100_0000 {
             0b0000_0000 => {
-                if wire.current_state_len() < (label_length as usize) {
+                if wire.current_len() < (label_length as usize) {
                     return Err(CDomainNameError::Buffer)?;
                 }
         
@@ -160,7 +160,7 @@ impl FromWire for Label {
 
                 // This AsciiString from_wire_format fully consumes the buffer.
                 // Need to make sure that it is only fed what it needs.
-                let mut ascii_wire = wire.section_from_current_state(Some(0), Some(label_length as usize))?;
+                let mut ascii_wire = wire.section_from_current(Some(0), Some(label_length as usize))?;
                 let string = AsciiString::from_wire_format(&mut ascii_wire)?;
                 wire.shift(label_length as usize)?;
         
@@ -584,14 +584,14 @@ impl FromWire for CDomainName {
         let mut root_found = false;
         let mut label: Label;
 
-        let mut final_offset = wire.current_state_offset();
+        let mut final_offset = wire.current_offset();
 
         while !root_found {
             // Here, we read the first byte of each label but we don't want to save it. We are
             // just using it to see what type of label we are reading. The actual deserialization
             // of the length and string will be done by the Label.
             let first_byte = u8::from_wire_format(
-                &mut wire.section_from_current_state(Some(0), Some(1))?,
+                &mut wire.section_from_current(Some(0), Some(1))?,
             )?;
 
             match first_byte & 0b1100_0000 {
@@ -607,7 +607,7 @@ impl FromWire for CDomainName {
                     labels.push(label);
 
                     // If the end of the wire is reached, cannot keep reading labels.
-                    if wire.current_state_len() == 0 {
+                    if wire.current_len() == 0 {
                         break;
                     }
                 },
@@ -624,13 +624,13 @@ impl FromWire for CDomainName {
                     // Once all the redirects have been followed, this is where we want our buffer
                     // to return to.
                     if pointer_count == 1 {
-                        final_offset = wire.current_state_offset();
+                        final_offset = wire.current_offset();
                     }
 
                     let pointer = pointer_bytes & 0b0011_1111_1111_1111;
                     // The pointer must point backwards in the wire. Forward pointers
                     // are forbidden.
-                    if (pointer as usize) > wire.current_state_offset() {
+                    if (pointer as usize) > wire.current_offset() {
                         return Err(CDomainNameError::ForwardPointers)?;
                     }
 

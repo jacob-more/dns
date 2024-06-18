@@ -174,13 +174,13 @@ impl FromWire for APItem {
                 // Don't need to bound check byte_count against IPV4_ADDRESS_LENGTH because
                 // that will be done by the match statement when creating the buffer.
         
-                if wire.full_state_len() < byte_count {
+                if wire.wire_len() < byte_count {
                     return Err(ReadWireError::OverflowError(
                         String::from("there are not enough bytes remaining in the wire to read the ipv4 address")
                     ));
                 }
         
-                let bytes = wire.current_state();
+                let bytes = wire.current();
                 // Create a 32 bit (4 byte) buffer that will be used to create the Ipv4 address.
                 // Is this the best way to do this? Probably not. But it gets the job done.
                 let buffer: [u8; IPV4_ADDRESS_LENGTH] = match byte_count {
@@ -210,13 +210,13 @@ impl FromWire for APItem {
                 // Don't need to bound check byte_count against IPV6_ADDRESS_LENGTH because
                 // that will be done by the match statement when creating the buffer.
                 
-                if wire.full_state_len() < byte_count {
+                if wire.wire_len() < byte_count {
                     return Err(ReadWireError::OverflowError(
                         String::from("there are not enough bytes remaining in the wire to read the ipv6 address")
                     ));
                 }
         
-                let bytes = wire.current_state();
+                let bytes = wire.current();
                 // Create a 128 bit (16 byte) buffer that will be used to create the Ipv6 address.
                 // Is this the best way to do this? Probably not. But it gets the job done.
                 let buffer: [u8; IPV6_ADDRESS_LENGTH] = match byte_count {

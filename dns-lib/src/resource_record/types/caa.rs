@@ -103,7 +103,7 @@ impl FromWire for CAA {
         }
 
         let tag = AsciiString::from(
-            wire.section_from_current_state(None, Some(tag_length as usize))?.current_state()
+            wire.section_from_current(None, Some(tag_length as usize))?.current()
         );
         if !tag.is_alphanumeric() {
             // Note that the characters must only be lowercase if reading from presentation format.
@@ -112,7 +112,7 @@ impl FromWire for CAA {
         wire.shift(tag_length as usize)?;
 
         // the rest of the rdata is the value portion.
-        let value = wire.current_state().to_vec();
+        let value = wire.current().to_vec();
         wire.shift(value.len())?;
 
         Ok(Self { flags, tag, value })

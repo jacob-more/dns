@@ -59,7 +59,7 @@ impl FromWire for WindowBlock {
             ));
         }
         
-        let map = <Vec<u8>>::from_wire_format(&mut wire.section_from_current_state(Some(0), Some(bitmap_length as usize))?)?;
+        let map = <Vec<u8>>::from_wire_format(&mut wire.section_from_current(Some(0), Some(bitmap_length as usize))?)?;
         wire.shift(bitmap_length as usize)?;
 
         return Ok(WindowBlock {

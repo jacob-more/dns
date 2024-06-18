@@ -61,7 +61,7 @@ impl<T: BaseConversions> ToWire for T {
 impl<T: BaseConversions> FromWire for T {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
-        let bytes = wire.current_state();
+        let bytes = wire.current();
         let base = Self::from_bytes(bytes);
         wire.shift(bytes.len())?;
         return Ok(base);

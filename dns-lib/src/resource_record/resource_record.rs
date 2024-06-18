@@ -178,7 +178,7 @@ macro_rules! gen_resource_record {
                 // blocking off the end should not cause any problems when decompressing.
                 // An upper bound is required to prevent any of the deserializers that fully consume
                 // the rdata section from continuing past the end.
-                let mut rdata_wire = wire.section_from_current_state(None, Some(wire_rd_length as usize))?;
+                let mut rdata_wire = wire.section_from_current(None, Some(wire_rd_length as usize))?;
                 let (rr_record, rd_length) = match rtype {
                     $(RType::$record => {
                         let rdata = <$record>::from_wire_format(&mut rdata_wire)?;
@@ -187,7 +187,7 @@ macro_rules! gen_resource_record {
                     },)+
                     _ => return Err(ReadWireError::UnsupportedRType(rtype)),
                 };
-                wire.shift(rdata_wire.current_state_offset() - wire.current_state_offset())?;
+                wire.shift(rdata_wire.current_offset() - wire.current_offset())?;
         
                 if rd_length > u16::MAX {
                     return Err(ReadWireError::OverflowError(
