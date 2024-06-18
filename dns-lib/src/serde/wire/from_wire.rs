@@ -24,13 +24,10 @@ macro_rules! int_from_wire_impl {
         impl FromWire for $int_type {
             #[inline]
             fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
-                if wire.current_len() < ($byte_count as usize) {
-                    return Err(ReadWireError::UnderflowError(format!("could not read {}; wire length less than {} bytes", $int_name, $byte_count)));
-                }
-        
                 // `unwrap()` is safe in this case because it will always have a fixed size.
-                let bytes = wire.current()[0..($byte_count as usize)].try_into().unwrap();
-                wire.shift($byte_count as usize)?;
+                let bytes = wire.take_or_err($byte_count as usize, || format!("could not read {}; wire length less than {} bytes", $int_name, $byte_count))?
+                    .try_into()
+                    .unwrap();
         
                 Ok(Self::from_be_bytes(bytes))
             }
@@ -57,17 +54,13 @@ macro_rules! ux_from_wire_impl {
         impl FromWire for $int_type {
             #[inline]
             fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
-                if wire.current_len() < ($int_byte_count as usize) {
-                    return Err(ReadWireError::UnderflowError(format!("could not read {}; wire length less than {} bytes", $int_name, $int_byte_count)));
-                }
-
+                let bytes = wire.take_or_err($int_byte_count as usize, || format!("could not read {}; wire length less than {} bytes", $int_name, $int_byte_count))?;
                 let bytes: Vec<u8> = [0_u8].iter().cycle().take(($super_byte_count as usize) - ($int_byte_count as usize))
-                    .chain(wire.current()[0..($int_byte_count as usize)].iter())
+                    .chain(bytes.iter())
                     .map(|x| *x)
                     .collect();
                 // `unwrap()` is safe in this case because it will always have a fixed size.
                 let bytes: [u8; $super_byte_count as usize] = bytes.try_into().unwrap();
-                wire.shift($int_byte_count as usize)?;
         
                 Ok(Self::new(<$super_type>::from_be_bytes(bytes)))
             }
@@ -80,23 +73,19 @@ macro_rules! ix_from_wire_impl {
         impl FromWire for $int_type {
             #[inline]
             fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
-                if wire.current_len() < ($int_byte_count as usize) {
-                    return Err(ReadWireError::UnderflowError(format!("could not read {}; wire length less than {} bytes", $int_name, $int_byte_count)));
-                }
-
-                // The match statement is done for sign extension.
-                let fill_remaining = match wire.current()[0] >> 7 {
+                // The match statement is used for sign extension.
+                let fill_remaining = match wire.get_byte()? >> 7 {
                     0 => 0_u8,
                     1 => u8::MAX,
                     _ => unreachable!("When a u8 is shifted to the right 7 times, only 1 bit should remain. However, a case with more than 1 bit has been reached."),
                 };
+                let bytes = wire.take_or_err($int_byte_count as usize, || format!("could not read {}; wire length less than {} bytes", $int_name, $int_byte_count))?;
                 let bytes: Vec<u8> = [fill_remaining].iter().cycle().take(($super_byte_count as usize) - ($int_byte_count as usize))
-                    .chain(wire.current()[0..($int_byte_count as usize)].iter())
+                    .chain(bytes.iter())
                     .map(|x| *x)
                     .collect();
                 // `unwrap()` is safe in this case because it will always have a fixed size.
                 let bytes: [u8; $super_byte_count as usize] = bytes.try_into().unwrap();
-                wire.shift($int_byte_count as usize)?;
         
                 Ok(Self::new(<$super_type>::from_be_bytes(bytes)))
             }
@@ -134,8 +123,8 @@ impl<T: FromWire> FromWire for Option<T> {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
         match wire.current_len() {
-            0 => Ok(None),
-            _ => Ok(Some(T::from_wire_format(wire)?)),
+            0   => Ok(None),
+            1.. => Ok(Some(T::from_wire_format(wire)?)),
         }
     }
 }
@@ -157,13 +146,10 @@ impl<T: FromWire> FromWire for Vec<T> {
 impl FromWire for Ipv4Addr {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
-        if wire.current_len() < (IPV4_BYTE_COUNT as usize) {
-            return Err(ReadWireError::UnderflowError(format!("IPv4 Addresses must be {} bytes in length", IPV4_BYTE_COUNT)));
-        }
-
         // `unwrap()` is safe in this case because it will always have a fixed size.
-        let bytes: [u8; IPV4_BYTE_COUNT as usize] = wire.current()[0..(IPV4_BYTE_COUNT as usize)].try_into().unwrap();
-        wire.shift(IPV4_BYTE_COUNT as usize)?;
+        let bytes: [u8; IPV4_BYTE_COUNT as usize] = wire.take_or_err(IPV4_BYTE_COUNT as usize, || format!("IPv4 Addresses must be {IPV4_BYTE_COUNT} bytes in length"))?
+            .try_into()
+            .unwrap();
 
         Ok(Ipv4Addr::from(bytes))
     }
@@ -172,13 +158,10 @@ impl FromWire for Ipv4Addr {
 impl FromWire for Ipv6Addr {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
-        if wire.current_len() < (IPV6_BYTE_COUNT as usize) {
-            return Err(ReadWireError::UnderflowError(format!("IPv6 Addresses must be {} bytes in length", IPV6_BYTE_COUNT)));
-        }
-
         // `unwrap()` is safe in this case because it will always have a fixed size.
-        let bytes: [u8; IPV6_BYTE_COUNT as usize] = wire.current()[0..(IPV6_BYTE_COUNT as usize)].try_into().unwrap();
-        wire.shift(IPV6_BYTE_COUNT as usize)?;
+        let bytes: [u8; IPV6_BYTE_COUNT as usize] = wire.take_or_err(IPV6_BYTE_COUNT as usize, || format!("IPv6 Addresses must be {IPV6_BYTE_COUNT} bytes in length"))?
+            .try_into()
+            .unwrap();
 
         Ok(Ipv6Addr::from(bytes))
     }
@@ -187,13 +170,10 @@ impl FromWire for Ipv6Addr {
 impl FromWire for MacAddress {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
-        if wire.current_len() < (MAC_ADDRESS_BYTE_COUNT as usize) {
-            return Err(ReadWireError::UnderflowError(format!("Mac Addresses must be {} bytes in length", MAC_ADDRESS_BYTE_COUNT)));
-        }
-        
         // `unwrap()` is safe in this case because it will always have a fixed size.
-        let bytes: [u8; MAC_ADDRESS_BYTE_COUNT as usize] = wire.current()[0..(MAC_ADDRESS_BYTE_COUNT as usize)].try_into().unwrap();
-        wire.shift(MAC_ADDRESS_BYTE_COUNT as usize)?;
+        let bytes: [u8; MAC_ADDRESS_BYTE_COUNT as usize] = wire.take_or_err(MAC_ADDRESS_BYTE_COUNT as usize, || format!("Mac Addresses must be {MAC_ADDRESS_BYTE_COUNT} bytes in length"))?
+            .try_into()
+            .unwrap();
 
         Ok(MacAddress::from(bytes))
     }

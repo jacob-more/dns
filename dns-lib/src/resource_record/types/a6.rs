@@ -76,20 +76,14 @@ impl FromWire for A6 {
         }
 
         // Read IP Address
-        // Shift past prefix length.
-        if wire.wire_len() < byte_count as usize {
-            return Err(ReadWireError::OutOfBoundsError(String::from("ipv6 length is greater than the remaining bytes in the stream")));
-        }
         let ipv6_address = match prefix_length {
             Self::MAX_PREFIX_LENGTH => None,
             _ => {
-                let mut ipv6_address_buffer: [u8; IPV6_ADDRESS_LENGTH] = [0; IPV6_ADDRESS_LENGTH];
+                let ipv6_wire_bytes = wire.take_or_err(byte_count as usize, || format!("IPv6 length is greater than the number of bytes left on the wire"))?;
+                let mut ipv6_address_buffer = [0; IPV6_ADDRESS_LENGTH];
                 let index_offset: usize = IPV6_ADDRESS_LENGTH - byte_count as usize;
-                for (index, byte) in wire.current()[..(byte_count as usize)].iter().enumerate() {
-                    ipv6_address_buffer[index + index_offset] = *byte;
-                }
-                let ipv6_address = Ipv6Addr::from_wire_format(&mut ReadWire::from_bytes(ipv6_address_buffer.as_mut_slice()))?;
-                wire.shift(byte_count as usize)?;
+                ipv6_address_buffer[index_offset..].copy_from_slice(&ipv6_wire_bytes);
+                let ipv6_address = Ipv6Addr::from_wire_format(&mut ReadWire::from_bytes(&mut ipv6_address_buffer))?;
                 Some(ipv6_address)
             }
         };

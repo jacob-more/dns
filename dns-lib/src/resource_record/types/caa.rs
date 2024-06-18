@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display};
 
 use dns_macros::RTypeCode;
 
-use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::{ReadWireError, SliceWireVisibility}, to_wire::ToWire}}, types::ascii::{AsciiChar, AsciiString}};
+use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::ReadWireError, to_wire::ToWire}}, types::ascii::{AsciiChar, AsciiString}};
 
 #[derive(Debug)]
 pub enum CAAError {
@@ -103,13 +103,12 @@ impl FromWire for CAA {
         }
 
         let tag = AsciiString::from_wire_format(
-            &mut wire.slice_from_current(..(tag_length as usize), SliceWireVisibility::Slice)?
+            &mut wire.take_as_read_wire(tag_length as usize)?
         )?;
         if !tag.is_alphanumeric() {
             // Note that the characters must only be lowercase if reading from presentation format.
             return Err(ReadWireError::ValueError("Expected CAA tag to contain only ASCII characters a-z, A-Z, and 0-9".to_string()));
         }
-        wire.shift(tag_length as usize)?;
 
         // the rest of the rdata is the value portion.
         let value = wire.current().to_vec();

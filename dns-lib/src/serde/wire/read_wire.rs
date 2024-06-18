@@ -6,7 +6,6 @@ use crate::{types::{c_domain_name::CDomainNameError, ascii::AsciiError, base16::
 pub enum ReadWireError {
     FormatError(String),
     OverflowError(String),
-    UnderflowError(String),
     OutOfBoundsError(String),
     UnsupportedRType(RType),
     ValueError(String),
@@ -25,7 +24,6 @@ impl Display for ReadWireError {
         match self {
             Self::FormatError(error) => write!(f, "Read Wire Format Error: {error}"),
             Self::OverflowError(error) => write!(f, "Read Wire Overflow Error: {error}"),
-            Self::UnderflowError(error) => write!(f, "Read Wire Underflow Error: {error}"),
             Self::OutOfBoundsError(error) => write!(f, "Read Wire Out Of Bounds Error: {error}"),
             Self::UnsupportedRType(rtype) => write!(f, "Resource Record Type {rtype} is not supported"),
             Self::ValueError(error) => write!(f, "Read Wire Value Error: {error}"),
@@ -183,6 +181,22 @@ impl<'a> ReadWire<'a> {
     }
 
     #[inline]
+    pub fn get_as_read_wire_or_err(&self, count: usize, err_msg: impl FnOnce() -> String) -> Result<Self, ReadWireError> {
+        Ok(Self {
+            wire: self.get_or_err(count, err_msg)?,
+            offset: 0
+        })
+    }
+
+    #[inline]
+    pub fn get_as_read_wire(&self, count: usize) -> Result<Self, ReadWireError> {
+        Ok(Self {
+            wire: self.get(count)?,
+            offset: 0
+        })
+    }
+
+    #[inline]
     pub fn take_or_err(&mut self, count: usize, err_msg: impl FnOnce() -> String) -> Result<&'a [u8], ReadWireError> {
         if self.current_len() >= count {
             let offset = self.offset;
@@ -203,6 +217,30 @@ impl<'a> ReadWire<'a> {
         let offset = self.offset;
         self.offset = self.wire_len();
         &self.wire[offset..]
+    }
+
+    #[inline]
+    pub fn take_as_read_wire_or_err(&mut self, count: usize, err_msg: impl FnOnce() -> String) -> Result<Self, ReadWireError> {
+        Ok(Self {
+            wire: self.take_or_err(count, err_msg)?,
+            offset: 0
+        })
+    }
+
+    #[inline]
+    pub fn take_as_read_wire(&mut self, count: usize) -> Result<Self, ReadWireError> {
+        Ok(Self {
+            wire: self.take(count)?,
+            offset: 0
+        })
+    }
+
+    #[inline]
+    pub fn take_all_as_read_wire(&mut self) -> Self {
+        Self {
+            wire: self.take_all(),
+            offset: 0
+        }
     }
 
     #[inline]

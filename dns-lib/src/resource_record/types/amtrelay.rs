@@ -69,7 +69,6 @@ impl ToWire for AMTRELAY {
             RelayType::Ipv4(address) => address.to_wire_format(wire, compression),
             RelayType::Ipv6(address) => address.to_wire_format(wire, compression),
             RelayType::DomainName(dn) => dn.to_wire_format(wire, compression),
-
             RelayType::Unknown(_, data) => {
                 wire.write_bytes(&data)?;
                 Ok(())
@@ -86,7 +85,6 @@ impl ToWire for AMTRELAY {
             RelayType::Ipv4(address) => address.serial_length(),
             RelayType::Ipv6(address) => address.serial_length(),
             RelayType::DomainName(dn) => dn.serial_length(),
-
             RelayType::Unknown(_, data) => data.len() as u16,
         }
     }
@@ -101,33 +99,14 @@ impl FromWire for AMTRELAY {
         let (discovery_optional, relay_type) = <(u1, u7)>::from_wire_format(wire)?;
         let relay = match u8::from(relay_type) {
             0 => RelayType::Empty,
-            1 => {
-                let address = Ipv4Addr::from_wire_format(wire)?;
-                RelayType::Ipv4(address)
-            },
-            2 => {
-                let address = Ipv6Addr::from_wire_format(wire)?;
-                RelayType::Ipv6(address)
-            },
-            3 => {
-                let domain_name = DomainName::from_wire_format(wire)?;
-                RelayType::DomainName(domain_name)
-            },
-            4..=U7_MAX => {
-                let mut data = Vec::with_capacity(wire.current_len());
-                data.extend(wire.current());
-                wire.shift(data.len())?;
-                assert!(wire.is_end_reached());
-                RelayType::Unknown(relay_type, data)
-            },
+            1 => RelayType::Ipv4(Ipv4Addr::from_wire_format(wire)?),
+            2 => RelayType::Ipv6(Ipv6Addr::from_wire_format(wire)?),
+            3 => RelayType::DomainName(DomainName::from_wire_format(wire)?),
+            4..=U7_MAX => RelayType::Unknown(relay_type, wire.take_all().to_vec()),
             _ => unreachable!("All numbers, 0-127, are represented by the u7 type. No value outside that range should be possible"),
         };
         
-        Ok(Self {
-            precedence,
-            discovery_optional,
-            relay,
-        })
+        Ok(Self { precedence, discovery_optional, relay })
     }
 }
 
@@ -160,11 +139,7 @@ impl FromTokenizedRData for AMTRELAY {
                     ),
                 };
 
-                Ok(Self {
-                    precedence,
-                    discovery_optional,
-                    relay,
-                })
+                Ok(Self {precedence, discovery_optional, relay })
             },
             &[_, _, _, _, ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: 4, received: rdata.len()}),
             _ => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: 4, received: rdata.len()}),

@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, iter::Rev, slice::{Iter, IterMut}};
 
 use lazy_static::lazy_static;
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::SliceWireVisibility, to_wire::ToWire}}, types::ascii::{constants::{ASCII_BACKSLASH, ASCII_CLOSE_PARENTHESIS, ASCII_OPEN_PARENTHESIS, ASCII_SEMICOLON, ASCII_SPACE, EMPTY_ASCII_STRING}, AsciiChar, AsciiError, AsciiString}};
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{constants::{ASCII_BACKSLASH, ASCII_CLOSE_PARENTHESIS, ASCII_OPEN_PARENTHESIS, ASCII_SEMICOLON, ASCII_SPACE, EMPTY_ASCII_STRING}, AsciiChar, AsciiError, AsciiString}};
 
 use super::ascii::constants::ASCII_HORIZONTAL_TAB;
 
@@ -231,17 +231,11 @@ impl FromWire for CharacterString {
             ));
         }
 
-        if wire.current_len() < (length as usize) {
-            return Err(crate::serde::wire::read_wire::ReadWireError::OverflowError(
-                String::from("wire length runs out before the full string is finished reading")
-            ));
-        }
-
         // Since the AsciiString deserializer will consume the entire buffer,
         // we only feed it the section we want it to read.
-        let mut ascii_wire = wire.slice_from_current(..(length as usize), SliceWireVisibility::Slice)?;
-        let string = AsciiString::from_wire_format(&mut ascii_wire)?;
-        wire.shift(length as usize)?;
+        let string = AsciiString::from_wire_format(
+            &mut wire.take_as_read_wire(length as usize)?
+        )?;
 
         Ok(Self { ascii: string })
     }

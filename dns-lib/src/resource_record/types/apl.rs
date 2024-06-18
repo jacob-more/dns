@@ -170,35 +170,19 @@ impl FromWire for APItem {
                         format!("an Ipv4 address cannot have more than {IPV4_MAX_BITS} bits")
                     ));
                 }
-        
-                // Don't need to bound check byte_count against IPV4_ADDRESS_LENGTH because
-                // that will be done by the match statement when creating the buffer.
-        
-                if wire.wire_len() < byte_count {
-                    return Err(ReadWireError::OverflowError(
-                        String::from("there are not enough bytes remaining in the wire to read the ipv4 address")
+
+                if byte_count > IPV4_ADDRESS_LENGTH {
+                    return Err(ReadWireError::OutOfBoundsError(
+                        format!("an Ipv4 address cannot have more than {IPV4_ADDRESS_LENGTH} bytes")
                     ));
                 }
-        
-                let bytes = wire.current();
-                // Create a 32 bit (4 byte) buffer that will be used to create the Ipv4 address.
-                // Is this the best way to do this? Probably not. But it gets the job done.
-                let buffer: [u8; IPV4_ADDRESS_LENGTH] = match byte_count {
-                    0 => [0,        0,        0,        0       ],
-                    1 => [bytes[0], 0,        0,        0       ],
-                    2 => [bytes[0], bytes[1], 0,        0       ],
-                    3 => [bytes[0], bytes[1], bytes[2], 0       ],
-                    4 => [bytes[0], bytes[1], bytes[2], bytes[3]],
 
-                    _ => return Err(ReadWireError::OutOfBoundsError(
-                        format!("an Ipv4 address cannot have more than {IPV4_ADDRESS_LENGTH} bytes")
-                    )),
-                };
-                let address = AFDPart::Ipv4(
-                    Ipv4Addr::from_wire_format(&mut ReadWire::from_bytes(&buffer))?
-                );
-                wire.shift(byte_count)?;
-                address
+                let ipv4_wire_bytes = wire.take_or_err(byte_count, || format!("there are not enough bytes remaining in the wire to read the ipv4 address"))?;
+                let mut ipv4_buffer = [0_u8; 16];
+                ipv4_buffer[..byte_count].copy_from_slice(&ipv4_wire_bytes);
+                AFDPart::Ipv4(
+                    Ipv4Addr::from_wire_format(&mut ReadWire::from_bytes(&ipv4_buffer))?
+                )
             },
             AddressFamily::Ipv6 => {
                 if (prefix as usize) > IPV6_MAX_BITS {
@@ -206,48 +190,19 @@ impl FromWire for APItem {
                         format!("an Ipv6 address cannot have more than {IPV6_MAX_BITS} bits")
                     ));
                 }
-        
-                // Don't need to bound check byte_count against IPV6_ADDRESS_LENGTH because
-                // that will be done by the match statement when creating the buffer.
-                
-                if wire.wire_len() < byte_count {
-                    return Err(ReadWireError::OverflowError(
-                        String::from("there are not enough bytes remaining in the wire to read the ipv6 address")
+
+                if byte_count > IPV6_ADDRESS_LENGTH {
+                    return Err(ReadWireError::OutOfBoundsError(
+                        format!("an Ipv6 address cannot have more than {IPV6_ADDRESS_LENGTH} bytes")
                     ));
                 }
-        
-                let bytes = wire.current();
-                // Create a 128 bit (16 byte) buffer that will be used to create the Ipv6 address.
-                // Is this the best way to do this? Probably not. But it gets the job done.
-                let buffer: [u8; IPV6_ADDRESS_LENGTH] = match byte_count {
-        
-                    0  => [0,        0,        0,        0,        0,        0,        0,        0,        0,        0,        0,         0,         0,         0,         0,         0       ],
-                    1  => [bytes[0], 0,        0,        0,        0,        0,        0,        0,        0,        0,        0,         0,         0,         0,         0,         0       ],
-                    2  => [bytes[0], bytes[1], 0,        0,        0,        0,        0,        0,        0,        0,        0,         0,         0,         0,         0,         0       ],
-                    3  => [bytes[0], bytes[1], bytes[2], 0,        0,        0,        0,        0,        0,        0,        0,         0,         0,         0,         0,         0       ],
-                    4  => [bytes[0], bytes[1], bytes[2], bytes[3], 0,        0,        0,        0,        0,        0,        0,         0,         0,         0,         0,         0       ],
-                    5  => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], 0,        0,        0,        0,        0,        0,         0,         0,         0,         0,         0       ],
-                    6  => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], 0,        0,        0,        0,        0,         0,         0,         0,         0,         0       ],
-                    7  => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], 0,        0,        0,        0,         0,         0,         0,         0,         0       ],
-                    8  => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], 0,        0,        0,         0,         0,         0,         0,         0       ],
-                    9  => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], 0,        0,         0,         0,         0,         0,         0       ],
-                    10 => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], 0,         0,         0,         0,         0,         0       ],
-                    11 => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], 0,         0,         0,         0,         0       ],
-                    12 => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], 0,         0,         0,         0       ],
-                    13 => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], 0,         0,         0       ],
-                    14 => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], 0,         0       ],
-                    15 => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], 0       ],
-                    16 => [bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]],
-        
-                    _ => return Err(ReadWireError::OutOfBoundsError(
-                        format!("an Ipv6 address cannot have more than {IPV6_ADDRESS_LENGTH} bytes")
-                    )),
-                };
-                let address = AFDPart::Ipv6(
-                    Ipv6Addr::from_wire_format(&mut ReadWire::from_bytes(&buffer))?
-                );
-                wire.shift(byte_count)?;
-                address
+
+                let ipv6_wire_bytes = wire.take_or_err(byte_count, || format!("there are not enough bytes remaining in the wire to read the ipv6 address"))?;
+                let mut ipv6_buffer = [0_u8; 16];
+                ipv6_buffer[..byte_count].copy_from_slice(&ipv6_wire_bytes);
+                AFDPart::Ipv6(
+                    Ipv6Addr::from_wire_format(&mut ReadWire::from_bytes(&ipv6_buffer))?
+                )
             },
             _ => return Err(ReadWireError::VersionError(
                 format!("Only families Ipv4 ('1') and Ipv6 ('2') are supported. Found '{address_family}'")
