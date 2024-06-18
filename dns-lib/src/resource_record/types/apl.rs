@@ -127,13 +127,13 @@ impl ToWire for APItem {
                 let buffer = &mut [0_u8; IPV4_ADDRESS_LENGTH];
                 let mut buffer = WriteWire::from_bytes(buffer);
                 Ipv4Addr::to_wire_format(&address, &mut buffer, &mut None)?;
-                wire.write_bytes(&buffer.current_state()[..(byte_count as usize)])?;
+                wire.write_bytes(&buffer.current()[..(byte_count as usize)])?;
             },
             AFDPart::Ipv6(address) => {
                 let buffer = &mut [0_u8; IPV6_ADDRESS_LENGTH];
                 let mut buffer = WriteWire::from_bytes(buffer);
                 Ipv6Addr::to_wire_format(&address, &mut buffer, &mut None)?;
-                wire.write_bytes(&buffer.current_state()[..(byte_count as usize)])?;
+                wire.write_bytes(&buffer.current()[..(byte_count as usize)])?;
             },
         }
 

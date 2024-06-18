@@ -803,7 +803,7 @@ impl MixedSocket {
             self.cleanup_query(query.id).await;
             return Err(io::Error::new(io::ErrorKind::InvalidData, wire_error));
         };
-        let wire_length = raw_message.len();
+        let wire_length = raw_message.current_len();
 
         // Step 3: Bounds check against the configurations.
         //  TODO: No configuration options have been defined yet.
@@ -816,7 +816,7 @@ impl MixedSocket {
         // Step 4: Send the message via UDP.
         self.recent_messages_sent.store(true, Ordering::SeqCst);
         println!("Sending on UDP socket {} :: {:?}", self.upstream_socket, query);
-        let bytes_written = udp_socket.send(raw_message.current_state()).await?;
+        let bytes_written = udp_socket.send(raw_message.current()).await?;
         drop(udp_socket);
         // Verify that the correct number of bytes were sent.
         if bytes_written != wire_length {
@@ -842,7 +842,7 @@ impl MixedSocket {
         if let Err(wire_error) = query.to_wire_format(&mut raw_message, &mut Some(CompressionMap::new())) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, wire_error));
         };
-        let wire_length = raw_message.len();
+        let wire_length = raw_message.current_len();
 
         // Step 3: Bounds check against the configurations.
         //  TODO: No configuration options have been defined yet.
@@ -850,7 +850,7 @@ impl MixedSocket {
         // Step 4: Send the message via UDP.
         self.recent_messages_sent.store(true, Ordering::SeqCst);
         println!("Sending on UDP socket {} :: {:?}", self.upstream_socket, query);
-        let bytes_written = udp_socket.send(raw_message.current_state()).await?;
+        let bytes_written = udp_socket.send(raw_message.current()).await?;
         // Verify that the correct number of bytes were sent.
         if bytes_written != wire_length {
             return Err(io::Error::new(
@@ -872,7 +872,7 @@ impl MixedSocket {
         if let Err(wire_error) = query.to_wire_format_with_two_octet_length(&mut raw_message, &mut Some(CompressionMap::new())) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, wire_error));
         };
-        let wire_length = raw_message.len();
+        let wire_length = raw_message.current_len();
 
         // Step 3: Bounds check against the configurations.
         //  TODO: No configuration options have been defined yet.
@@ -881,7 +881,7 @@ impl MixedSocket {
         self.recent_messages_sent.store(true, Ordering::SeqCst);
         let mut w_tcp_stream = tcp_socket.lock().await;
         println!("Sending on TCP socket {} :: {:?}", self.upstream_socket, query);
-        let bytes_written = w_tcp_stream.write(raw_message.current_state()).await?;
+        let bytes_written = w_tcp_stream.write(raw_message.current()).await?;
         drop(w_tcp_stream);
         // Verify that the correct number of bytes were written.
         if bytes_written != wire_length {
@@ -999,7 +999,7 @@ impl MixedSocket {
             self.cleanup_query(query.id).await;
             return Err(io::Error::new(io::ErrorKind::InvalidData, wire_error));
         };
-        let wire_length = raw_message.len();
+        let wire_length = raw_message.current_len();
 
         // Step 3: Bounds check against the configurations.
         //  TODO: No configuration options have been defined yet.
@@ -1013,7 +1013,7 @@ impl MixedSocket {
         self.recent_messages_sent.store(true, Ordering::SeqCst);
         let mut w_tcp_stream = tcp_socket.lock().await;
         println!("Sending on TCP socket {} :: {:?}", self.upstream_socket, query);
-        let bytes_written = w_tcp_stream.write(raw_message.current_state()).await?;
+        let bytes_written = w_tcp_stream.write(raw_message.current()).await?;
         drop(w_tcp_stream);
         // Verify that the correct number of bytes were written.
         if bytes_written != wire_length {

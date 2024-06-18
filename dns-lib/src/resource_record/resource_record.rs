@@ -133,17 +133,17 @@ macro_rules! gen_resource_record {
                 header.ttl.to_wire_format(wire, compression)?;
         
                 // If any compression is done, we may need to modify the rd_length.
-                let rd_length_offset = wire.len();
+                let rd_length_offset = wire.current_len();
                 0_u16.to_wire_format(wire, compression)?;
         
-                let rdata_offset = wire.len();
+                let rdata_offset = wire.current_len();
                 match self {
                     $(Self::$record(_, rdata) => rdata.to_wire_format(wire, compression)?,)+
                 };
         
                 // Replace the rd_length with the actual number of bytes that got written. This way,
                 // even if it got compressed, it will be accurate.
-                let actual_rd_length = (wire.len() - rdata_offset) as u16;
+                let actual_rd_length = (wire.current_len() - rdata_offset) as u16;
                 wire.write_bytes_at(&actual_rd_length.to_be_bytes(), rd_length_offset)?;
         
                 Ok(())

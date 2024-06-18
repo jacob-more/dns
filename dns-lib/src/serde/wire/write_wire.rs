@@ -87,28 +87,26 @@ pub struct WriteWire<'a> {
 impl<'a> WriteWire<'a> {
     #[inline]
     pub fn from_bytes(wire: &'a mut [u8]) -> Self {
-        Self {
-            wire: wire,
-            offset: 0,
-        }
+        Self { wire, offset: 0 }
     }
 
     #[inline]
-    pub fn len(&self) -> usize {
-        self.offset
+    pub fn current_len(&self) -> usize { self.offset }
+
+    #[inline]
+    pub fn remaining_len(&self) -> usize {
+        self.wire.len() - self.current_len()
     }
 
     #[inline]
     pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), WriteWireError> {
-        if self.offset + bytes.len() > self.wire.len() {
+        if bytes.len() > self.remaining_len() {
             return Err(WriteWireError::OverflowError(
                 "tried to write bytes past the end of the WriteWire buffer".to_string()
             ));
         }
 
-        for i in 0..bytes.len() {
-            self.wire[self.offset + i] = bytes[i];
-        }
+        self.wire[self.offset..(self.offset + bytes.len())].copy_from_slice(bytes);
         self.offset += bytes.len();
 
         return Ok(());
@@ -116,7 +114,7 @@ impl<'a> WriteWire<'a> {
 
     #[inline]
     pub fn write_byte(&mut self, byte: u8) -> Result<(), WriteWireError> {
-        if self.offset + 1 > self.wire.len() {
+        if 1 > self.remaining_len() {
             return Err(WriteWireError::OverflowError(
                 "tried to write a byte past the end of the WriteWire buffer".to_string()
             ));
@@ -137,9 +135,7 @@ impl<'a> WriteWire<'a> {
             ));
         }
 
-        for i in 0..bytes.len() {
-            self.wire[index + i] = bytes[i];
-        }
+        self.wire[index..(index + bytes.len())].copy_from_slice(bytes);
         self.offset = new_len;
 
         return Ok(());
@@ -161,7 +157,7 @@ impl<'a> WriteWire<'a> {
     }
 
     #[inline]
-    pub fn current_state(&self) -> &[u8] {
+    pub fn current(&self) -> &[u8] {
         &self.wire[..self.offset]
     }
 

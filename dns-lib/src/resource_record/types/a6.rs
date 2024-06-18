@@ -38,7 +38,7 @@ impl ToWire for A6 {
                 if remaining_bits != 0 {
                     byte_count += 1;
                 }
-                wire.write_bytes(&ip_bytes.current_state()[(IPV6_ADDRESS_LENGTH - (byte_count as usize))..ip_bytes.len()])?;
+                wire.write_bytes(&ip_bytes.current()[(IPV6_ADDRESS_LENGTH - (byte_count as usize))..ip_bytes.current_len()])?;
             },
             None => (),
         };

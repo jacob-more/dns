@@ -20,7 +20,7 @@ mod built_in_primitives_test {
                             let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                             assert!(output.is_ok());
-                            assert_eq!(expected.as_slice(), write_wire.current_state());
+                            assert_eq!(expected.as_slice(), write_wire.current());
                         }
                     }
                 }
@@ -36,7 +36,7 @@ mod built_in_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
 
                 #[test]
@@ -50,7 +50,7 @@ mod built_in_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
 
                 #[test]
@@ -64,7 +64,7 @@ mod built_in_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
             }
         }
@@ -107,7 +107,7 @@ mod ux_primitives_test {
                             let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                             assert!(output.is_ok());
-                            assert_eq!(expected.as_slice(), write_wire.current_state());
+                            assert_eq!(expected.as_slice(), write_wire.current());
                         }
                     }
                 }
@@ -123,7 +123,7 @@ mod ux_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
 
                 #[test]
@@ -137,7 +137,7 @@ mod ux_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
 
                 #[test]
@@ -151,7 +151,7 @@ mod ux_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
             }
         }
@@ -185,7 +185,7 @@ mod ux_primitives_test {
                             let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                             assert!(output.is_ok());
-                            assert_eq!(expected.as_slice(), write_wire.current_state());
+                            assert_eq!(expected.as_slice(), write_wire.current());
                         }
                     }
                 }
@@ -202,7 +202,7 @@ mod ux_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
 
                 #[test]
@@ -216,7 +216,7 @@ mod ux_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
 
                 #[test]
@@ -231,7 +231,7 @@ mod ux_primitives_test {
                     let output = input.to_wire_format(&mut write_wire, &mut compression_map);
 
                     assert!(output.is_ok());
-                    assert_eq!(expected.as_slice(), write_wire.current_state());
+                    assert_eq!(expected.as_slice(), write_wire.current());
                 }
             }
         }

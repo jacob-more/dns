@@ -388,7 +388,7 @@ impl QuicSocket {
         };
 
         // Now, replace those two bytes from earlier with the wire length.
-        let wire_length = raw_message.len();
+        let wire_length = raw_message.current_len();
         let message_wire_length: u16 = (wire_length - 2) as u16;
         let bytes = message_wire_length.to_be_bytes();
         if let Err(error) = raw_message.write_bytes_at(&bytes, 0) {
@@ -426,7 +426,7 @@ impl QuicSocket {
         self.recent_messages_sent.store(true, Ordering::SeqCst);
         println!("Sending on QUIC connection {} :: {:?}", self.upstream_socket, query);
         let bytes_written = match select! {
-            send_result = send_stream.write(raw_message.current_state()) => send_result,
+            send_result = send_stream.write(raw_message.current()) => send_result,
             _ = &mut quic_kill_awoken => {
                 self.clone().cleanup_query(query.id).await;
                 return Err(io::Error::new(io::ErrorKind::Interrupted, format!("QUIC connection to {} was canceled locally", self.upstream_socket)))

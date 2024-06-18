@@ -552,7 +552,7 @@ impl ToWire for CDomainName {
                         None => {
                             // Note: the length of the wire === a pointer to the index after the end of the wire.
                             //       In this case, we want a pointer to the index we are about to write, so this should work.
-                            compression_map.insert_slice_labels(labels_tail, wire.len() as u16);
+                            compression_map.insert_slice_labels(labels_tail, wire.current_len() as u16);
                             label.to_wire_format(wire, &mut None)?;
                         },
                     }

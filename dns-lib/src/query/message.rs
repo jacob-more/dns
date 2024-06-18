@@ -137,12 +137,12 @@ impl Message {
     pub fn to_wire_format_with_two_octet_length<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         // Push two bytes onto the wire. These will be replaced with the u16 that indicates the wire
         // length.
-        let two_octet_length_offset = wire.len();
+        let two_octet_length_offset = wire.current_len();
         wire.write_bytes(&[0, 0])?;
 
-        let wire_start_offset = wire.len();
+        let wire_start_offset = wire.current_len();
         self.to_wire_format(wire, compression)?;
-        let wire_end_offset = wire.len();
+        let wire_end_offset = wire.current_len();
 
         let wire_length = wire_end_offset - wire_start_offset;
         if wire_length > u16::MAX as usize {

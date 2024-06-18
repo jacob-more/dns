@@ -21,10 +21,10 @@ pub(crate) fn circular_serde_sanity_test<T>(input: T) where T: Debug + ToWire + 
         result.unwrap_err(),
     );
     assert_eq!(
-        expected_serial_length, wire.len() as u16,
+        expected_serial_length, wire.current_len() as u16,
         "The expected serial length did not match the actual serial length.\nExpected Serial Length: {}\nActual Serial Length: {}\n",
         expected_serial_length,
-        wire.len(),
+        wire.current_len(),
     );
     assert!(
         compression_map.is_none(),

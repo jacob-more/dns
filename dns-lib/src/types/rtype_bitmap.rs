@@ -252,7 +252,7 @@ mod circular_sanity_tests {
         let output = bitmap.to_wire_format(write_wire, compression);
 
         assert!(output.is_ok());
-        assert_eq!(expected_wire_format.as_slice(), write_wire.current_state());
+        assert_eq!(expected_wire_format.as_slice(), write_wire.current());
         assert_eq!(init_rtypes.len(), bitmap.rtype_count());
         for rtype in &init_rtypes {
             assert!(bitmap.has_rtype(rtype))
