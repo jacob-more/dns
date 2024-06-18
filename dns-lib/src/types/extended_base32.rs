@@ -449,7 +449,7 @@ impl ExtendedBase32 {
 impl BaseConversions for ExtendedBase32 {
     #[inline]
     fn from_vec(bytes: Vec<u8>) -> Self {
-        Self { bytes: bytes }
+        Self { bytes }
     }
 
     #[inline]

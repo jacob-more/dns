@@ -166,7 +166,7 @@ impl Base16 {
 
     #[inline]
     pub fn decode(&self) -> AsciiString {
-        let mut decoded_bytes: Vec<u8> = Vec::with_capacity((self.bytes.len() * 16) / 8);
+        let mut decoded_bytes: Vec<u8> = Vec::with_capacity(self.string_len());
 
         self.bytes.iter().for_each(|chunk| {
             let merged_bytes = *chunk;
@@ -205,7 +205,7 @@ impl Base16 {
 impl BaseConversions for Base16 {
     #[inline]
     fn from_vec(bytes: Vec<u8>) -> Self {
-        Self { bytes: bytes }
+        Self { bytes }
     }
 
     #[inline]

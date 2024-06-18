@@ -280,7 +280,7 @@ impl Base64 {
 
     #[inline]
     pub fn decode(&self) -> AsciiString {
-        let mut decoded_chars: Vec<u8> = Vec::with_capacity((self.bytes.len() * 8) / 6);
+        let mut decoded_chars: Vec<u8> = Vec::with_capacity(self.string_len());
         let byte_chunks = self.bytes.chunks_exact(3);
         let remainder = byte_chunks.remainder();
 
@@ -379,7 +379,7 @@ impl Base64 {
 impl BaseConversions for Base64 {
     #[inline]
     fn from_vec(bytes: Vec<u8>) -> Self {
-        Self { bytes: bytes }
+        Self { bytes }
     }
 
     #[inline]
