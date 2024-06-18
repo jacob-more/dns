@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{types::c_domain_name::CDomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire, read_wire::ReadWireError}, presentation::{from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation, from_tokenized_rdata::FromTokenizedRData}}};
+use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::{ReadWireError, SliceWireVisibility}, to_wire::ToWire}}, types::c_domain_name::CDomainName};
 
 use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, dnskey::DNSKEY, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
 
@@ -178,7 +178,7 @@ macro_rules! gen_resource_record {
                 // blocking off the end should not cause any problems when decompressing.
                 // An upper bound is required to prevent any of the deserializers that fully consume
                 // the rdata section from continuing past the end.
-                let mut rdata_wire = wire.section_from_current(None, Some(wire_rd_length as usize))?;
+                let mut rdata_wire = wire.slice_from_current(..(wire_rd_length as usize), SliceWireVisibility::Entire)?;
                 let (rr_record, rd_length) = match rtype {
                     $(RType::$record => {
                         let rdata = <$record>::from_wire_format(&mut rdata_wire)?;

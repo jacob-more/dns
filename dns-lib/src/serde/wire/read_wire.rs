@@ -104,7 +104,7 @@ impl<'a> ReadWire<'a> {
     }
 
     #[inline]
-    pub fn current(&'a self) -> &'a [u8] { &self.wire[self.offset..] }
+    pub fn current(&self) -> &'a [u8] { &self.wire[self.offset..] }
 
     #[inline]
     pub fn current_len(&self) -> usize { self.current().len() }
@@ -116,139 +116,123 @@ impl<'a> ReadWire<'a> {
     pub fn is_end_reached(&self) -> bool { self.offset >= self.wire.len() }
 
     #[inline]
-    pub fn with_offset(&'a self, offset: usize, visibility: WireVisibility) -> Result<Self, ReadWireError> {
-        if self.wire.len() < offset {
-            Err(ReadWireError::OverflowError(
-                String::from("offset went past the end of the wire")
-            ))
-        } else {
-            match visibility {
-                WireVisibility::Entire => Ok(Self { wire: self.wire(), offset }),
-                WireVisibility::Current => Ok(Self { wire: self.current(), offset }),
-            }
-        }
-    }
-
-    #[inline]
-    pub fn set_offset(&mut self, offset: usize) -> Result<(), ReadWireError> {
-        if self.wire.len() < offset {
-            return Err(ReadWireError::OverflowError(
-                String::from("offset went past the end of the wire")
-            ));
-        } else {
-            self.offset = offset;
-            return Ok(());
-        }
-    }
-
-    #[inline]
-    pub fn from_offset(&'a self, offset: usize) -> Result<&'a [u8], ReadWireError> {
-        if self.wire.len() < offset {
-            return Err(ReadWireError::OverflowError(
-                String::from("offset went past the end of the wire")
-            ));
-        } else {
-            return Ok(&self.wire[offset..]);
-        }
-    }
-
-    #[inline]
-    pub fn wire(&'a self) -> &'a [u8] { self.wire }
+    pub fn wire(&self) -> &'a [u8] { self.wire }
 
     #[inline]
     pub fn wire_len(&self) -> usize { self.wire.len() }
 
     #[inline]
-    pub fn shift(&mut self, shift: usize) -> Result<(), ReadWireError> {
-        let new_offset = self.offset + shift;
-        if self.wire.len() < new_offset {
-            return Err(ReadWireError::OverflowError(
-                String::from("attempted to shift past the end of the wire")
-            ));
+    pub fn with_offset_or_err(&self, offset: usize, visibility: WireVisibility, err_msg: impl FnOnce() -> String) -> Result<Self, ReadWireError> {
+        if self.wire_len() >= offset {
+            match visibility {
+                WireVisibility::Entire => Ok(Self { wire: self.wire(), offset }),
+                WireVisibility::Current => Ok(Self { wire: self.current(), offset }),
+            }
         } else {
-            self.offset = new_offset;
-            return Ok(());
+            Err(ReadWireError::OverflowError(err_msg()))
         }
     }
 
     #[inline]
-    pub fn get(&'a self, count: usize) -> Result<&'a [u8], ReadWireError> {
+    pub fn with_offset(&self, offset: usize, visibility: WireVisibility) -> Result<Self, ReadWireError> {
+        self.with_offset_or_err(offset, visibility, || format!("setting offset to {offset} would read past the end of the wire"))
+    }
+
+    #[inline]
+    pub fn set_offset_or_err(&mut self, offset: usize, err_msg: impl FnOnce() -> String) -> Result<(), ReadWireError> {
+        if self.wire_len() >= offset {
+            self.offset = offset;
+            Ok(())
+        } else {
+            Err(ReadWireError::OverflowError(err_msg()))
+        }
+    }
+
+    #[inline]
+    pub fn set_offset(&mut self, offset: usize) -> Result<(), ReadWireError> {
+        self.set_offset_or_err(offset, || format!("setting offset to {offset} would read past the end of the wire"))
+    }
+
+    #[inline]
+    pub fn shift_or_err(&mut self, shift: usize, err_msg: impl FnOnce() -> String) -> Result<(), ReadWireError> {
+        if self.current_len() >= shift {
+            self.offset += shift;
+            Ok(())
+        } else {
+            Err(ReadWireError::OverflowError(err_msg()))
+        }
+    }
+
+    #[inline]
+    pub fn shift(&mut self, shift: usize) -> Result<(), ReadWireError> {
+        self.shift_or_err(shift, || format!("shifting {shift} bytes would have gone past the end of the wire"))
+    }
+
+    #[inline]
+    pub fn get_or_err(&self, count: usize, err_msg: impl FnOnce() -> String) -> Result<&'a [u8], ReadWireError> {
         if self.current_len() >= count {
             Ok(&self.wire[self.offset..(self.offset + count)])
         } else {
-            Err(ReadWireError::OverflowError(
-                format!("getting {count} bytes would have read past the end of the wire")
-            ))
+            Err(ReadWireError::OverflowError(err_msg()))
         }
     }
 
     #[inline]
-    pub fn take(&'a mut self, count: usize) -> Result<&'a [u8], ReadWireError> {
+    pub fn get(&self, count: usize) -> Result<&'a [u8], ReadWireError> {
+        self.get_or_err(count, || format!("getting {count} bytes would have read past the end of the wire"))
+    }
+
+    #[inline]
+    pub fn take_or_err(&mut self, count: usize, err_msg: impl FnOnce() -> String) -> Result<&'a [u8], ReadWireError> {
         if self.current_len() >= count {
             let offset = self.offset;
             self.offset += count;
             Ok(&self.wire[offset..(offset + count)])
         } else {
-            Err(ReadWireError::OverflowError(
-                format!("getting {count} bytes would have read past the end of the wire")
-            ))
+            Err(ReadWireError::OverflowError(err_msg()))
         }
     }
 
     #[inline]
-    pub fn take_all(&'a mut self) -> Result<&'a [u8], ReadWireError> {
-        self.take(self.current_len())
+    pub fn take(&mut self, count: usize) -> Result<&'a [u8], ReadWireError> {
+        self.take_or_err(count, || format!("taking {count} bytes would have read past the end of the wire"))
+    }
+
+    #[inline]
+    pub fn take_all(&mut self) -> &'a [u8] {
+        let offset = self.offset;
+        self.offset = self.wire_len();
+        &self.wire[offset..]
+    }
+
+    #[inline]
+    pub fn get_byte_or_err(&self, err_msg: impl FnOnce() -> String) -> Result<u8, ReadWireError> {
+        if self.current_len() >= 1 {
+            Ok(self.wire[self.offset])
+        } else {
+            Err(ReadWireError::OverflowError(err_msg()))
+        }
     }
 
     #[inline]
     pub fn get_byte(&self) -> Result<u8, ReadWireError> {
+        self.get_byte_or_err(|| format!("getting a byte would have read past the end of the wire"))
+    }
+
+    #[inline]
+    pub fn take_byte_or_err(&mut self, err_msg: impl FnOnce() -> String) -> Result<u8, ReadWireError> {
         if self.current_len() >= 1 {
-            Ok(self.wire[self.offset + 1])
+            let offset = self.offset;
+            self.offset += 1;
+            Ok(self.wire[offset])
         } else {
-            Err(ReadWireError::OverflowError(
-                format!("getting a byte would have read past the end of the wire")
-            ))
+            Err(ReadWireError::OverflowError(err_msg()))
         }
     }
 
     #[inline]
     pub fn take_byte(&mut self) -> Result<u8, ReadWireError> {
-        if self.current_len() >= 1 {
-            let offset = self.offset;
-            self.offset += 1;
-            Ok(self.wire[offset + 1])
-        } else {
-            Err(ReadWireError::OverflowError(
-                format!("getting a byte would have read past the end of the wire")
-            ))
-        }
-    }
-
-    #[inline]
-    pub fn section_from_current(&self, lower_bound: Option<usize>, upper_bound: Option<usize>) -> Result<Self, ReadWireError> {
-        let (lower_bound, new_offset) = match lower_bound {
-            None => (0, self.offset),
-            Some(lower_bound) => (lower_bound + self.offset, 0),
-        };
-        let upper_bound = match upper_bound {
-            None => self.wire.len(),
-            Some(upper_bound) => upper_bound + self.offset,
-        };
-
-        if lower_bound > upper_bound {
-            return Err(ReadWireError::ValueError(
-                String::from("lower bound cannot be greater than the upper bound")
-            ));
-        } else if upper_bound > self.wire.len() {
-            return Err(ReadWireError::OverflowError(
-                String::from("upper bound cannot be greater than the end of the wire")
-            ));
-        } else {
-            return Ok(Self {
-                wire: &self.wire[lower_bound..upper_bound],
-                offset: new_offset,
-            });
-        }
+        self.take_byte_or_err(|| format!("getting a byte would have read past the end of the wire"))
     }
 
     /// Gets a slice of `self` for the given range. The amount of wire that is visible to the
@@ -450,132 +434,6 @@ mod test_set_offset {
 }
 
 #[cfg(test)]
-mod test_state_from_offset {
-    use super::ReadWire;
-
-    #[test]
-    fn test_two_bytes_state_from_offset_middle() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire = &[2];
-
-        let actual_read_wire = read_wire.from_offset(1);
-        assert!(actual_read_wire.is_ok());
-        let actual_wire = actual_read_wire.unwrap();
-        assert_eq!(expected_wire, actual_wire);
-
-        // Verify original state is unchanged.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_empty_state_from_offset_end() {
-        let wire = &[];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire: &[u8; 0] = &[];
-
-        let actual_read_wire = read_wire.from_offset(0);
-        assert!(actual_read_wire.is_ok());
-        let actual_wire = actual_read_wire.unwrap();
-        assert_eq!(expected_wire, actual_wire);
-
-        // Verify original state is unchanged.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(0, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_one_byte_state_from_offset_end() {
-        let wire = &[1];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire: &[u8; 0] = &[];
-
-        let actual_read_wire = read_wire.from_offset(1);
-        assert!(actual_read_wire.is_ok());
-        let actual_wire = actual_read_wire.unwrap();
-        assert_eq!(expected_wire, actual_wire);
-
-        // Verify original state is unchanged.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(1, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_state_from_offset_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire: &[u8; 0] = &[];
-
-        let actual_read_wire = read_wire.from_offset(2);
-        assert!(actual_read_wire.is_ok());
-        let actual_wire = actual_read_wire.unwrap();
-        assert_eq!(expected_wire, actual_wire);
-
-        // Verify original state is unchanged.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_empty_state_from_offset_past_end() {
-        let wire = &[];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire = read_wire.from_offset(1);
-        assert!(actual_read_wire.is_err());
-
-        // Verify original state is unchanged.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(0, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_one_byte_state_from_offset_past_end() {
-        let wire = &[1];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire = read_wire.from_offset(2);
-        assert!(actual_read_wire.is_err());
-
-        // Verify original state is unchanged.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(1, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_state_from_offset_past_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire = read_wire.from_offset(3);
-        assert!(actual_read_wire.is_err());
-
-        // Verify original state is unchanged.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-}
-
-#[cfg(test)]
 mod test_shift {
     use super::ReadWire;
 
@@ -763,878 +621,5 @@ mod test_shift {
         assert_eq!(0, read_wire.current_len());
         assert_eq!(2, read_wire.current_offset());
         assert!(read_wire.is_end_reached());
-    }
-}
-
-#[cfg(test)]
-mod test_section_from_current_state {
-    use super::ReadWire;
-
-    #[test]
-    fn test_empty_get_none_to_none() {
-        let wire = &[];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire: &[u8; 0] = &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(0, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_one_byte_get_none_to_none() {
-        let wire = &[1];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[1];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(1, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_none_to_none() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[1, 2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_start_to_none() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[1, 2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_middle_to_none() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_end_to_none() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(2), None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_none_to_start() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, Some(0));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_none_to_middle() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[1];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, Some(1));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_none_to_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[1, 2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, Some(2));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_start_to_start() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), Some(0));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_start_to_middle() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[1];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), Some(1));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_start_to_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[1, 2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), Some(2));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_start_to_past_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), Some(3));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_middle_to_start() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(0));
-        assert!(actual_read_wire_result.is_err());
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_middle_to_middle() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(1));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_middle_to_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(2));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_middle_to_past_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(3));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_end_to_start() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(0));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_end_to_middle() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(2), Some(1));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_end_to_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(2), Some(2));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_end_to_past_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(2), Some(3));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_past_end_to_start() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(3), Some(0));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_past_end_to_middle() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(3), Some(1));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_past_end_to_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(3), Some(2));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_get_past_end_to_past_end() {
-        let wire = &[1, 2];
-        let read_wire = ReadWire::from_bytes(wire);
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(3), Some(3));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(wire, read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(0, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_one_byte_with_offset_1_get_none_to_none() {
-        let wire = &[0];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire = &[0];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(0, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_two_bytes_with_offset_1_get_none_to_none() {
-        let wire = &[0, 1];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[0, 1];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(1, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_none_to_none() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[0, 1, 2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_start_to_none() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[1, 2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_middle_to_none() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_end_to_none() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(2), None);
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_past_end_to_none() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(3), None);
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_none_to_start() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[0];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, Some(0));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_none_to_middle() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[0, 1];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, Some(1));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_none_to_end() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[0, 1, 2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, Some(2));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_none_to_past_end() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(None, Some(3));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_start_to_start() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), Some(0));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_start_to_middle() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[1];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), Some(1));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_start_to_end() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[1, 2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), Some(2));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_start_to_past_end() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(0), Some(3));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_middle_to_start() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(0));
-        assert!(actual_read_wire_result.is_err());
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_middle_to_middle() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(1));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_middle_to_end() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[2];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(2));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_middle_to_past_end() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(3));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_end_to_start() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(1), Some(0));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_end_to_middle() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(2), Some(1));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_end_to_end() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let expected_wire= &[];
-        let expected_read_wire = ReadWire { wire: expected_wire, offset: 0 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(2), Some(2));
-        assert!(actual_read_wire_result.is_ok());
-        let actual_read_wire = actual_read_wire_result.unwrap();
-        assert_eq!(expected_read_wire, actual_read_wire);
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
-    }
-
-    #[test]
-    fn test_three_bytes_with_offset_1_get_end_to_past_end() {
-        let wire = &[0, 1, 2];
-        let read_wire = ReadWire { wire, offset: 1 };
-
-        let actual_read_wire_result = read_wire.section_from_current(Some(2), Some(3));
-        assert!(actual_read_wire_result.is_err());
-
-        // Verify original wire's state.
-        assert_eq!(&wire[1..], read_wire.current());
-        assert_eq!(2, read_wire.current_len());
-        assert_eq!(1, read_wire.current_offset());
-        assert!(!read_wire.is_end_reached());
     }
 }

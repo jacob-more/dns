@@ -1,6 +1,6 @@
 use std::{fmt::{Display, Debug}, error::Error, ops::Add};
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, EscapedToEscapableIter, ParseError}, non_escaped_to_escaped}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{ascii_char_as_lower, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, AsciiString}};
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, EscapedToEscapableIter, ParseError}, non_escaped_to_escaped}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::SliceWireVisibility, to_wire::ToWire}}, types::ascii::{ascii_char_as_lower, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, AsciiString}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
@@ -160,7 +160,7 @@ impl FromWire for Label {
 
                 // This AsciiString from_wire_format fully consumes the buffer.
                 // Need to make sure that it is only fed what it needs.
-                let mut ascii_wire = wire.section_from_current(Some(0), Some(label_length as usize))?;
+                let mut ascii_wire = wire.slice_from_current(..(label_length as usize), SliceWireVisibility::Slice)?;
                 let string = AsciiString::from_wire_format(&mut ascii_wire)?;
                 wire.shift(label_length as usize)?;
         
@@ -591,7 +591,7 @@ impl FromWire for CDomainName {
             // just using it to see what type of label we are reading. The actual deserialization
             // of the length and string will be done by the Label.
             let first_byte = u8::from_wire_format(
-                &mut wire.section_from_current(Some(0), Some(1))?,
+                &mut wire.slice_from_current(..1, SliceWireVisibility::Slice)?
             )?;
 
             match first_byte & 0b1100_0000 {

@@ -1,4 +1,4 @@
-use crate::{resource_record::rtype::RType, serde::{presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::ReadWireError, to_wire::ToWire}}};
+use crate::{resource_record::rtype::RType, serde::{presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::{ReadWireError, SliceWireVisibility}, to_wire::ToWire}}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct WindowBlock {
@@ -59,7 +59,9 @@ impl FromWire for WindowBlock {
             ));
         }
         
-        let map = <Vec<u8>>::from_wire_format(&mut wire.section_from_current(Some(0), Some(bitmap_length as usize))?)?;
+        let map = <Vec<u8>>::from_wire_format(
+            &mut wire.slice_from_current(..(bitmap_length as usize), SliceWireVisibility::Slice)?
+        )?;
         wire.shift(bitmap_length as usize)?;
 
         return Ok(WindowBlock {

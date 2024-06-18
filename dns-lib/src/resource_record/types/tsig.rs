@@ -1,7 +1,7 @@
 use dns_macros::RTypeCode;
 use ux::u48;
 
-use crate::{resource_record::rcode::RCode, serde::wire::{from_wire::FromWire, to_wire::ToWire}, types::domain_name::DomainName};
+use crate::{resource_record::rcode::RCode, serde::wire::{from_wire::FromWire, read_wire::SliceWireVisibility, to_wire::ToWire}, types::domain_name::DomainName};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8945#name-tsig-rr-format
 #[derive(Clone, PartialEq, Eq, Hash, Debug, RTypeCode)]
@@ -50,7 +50,7 @@ impl FromWire for TSIG {
         let fudge = u16::from_wire_format(wire)?;
 
         let mac_len = u16::from_wire_format(wire)? as usize;
-        let mac = wire.section_from_current(Some(0), Some(mac_len))?
+        let mac = wire.slice_from_current(..mac_len, SliceWireVisibility::Slice)?
             .current()
             .to_vec();
 
@@ -58,7 +58,7 @@ impl FromWire for TSIG {
         let error = RCode::from_wire_format(wire)?;
 
         let other_data_len = u16::from_wire_format(wire)? as usize;
-        let other_data = wire.section_from_current(Some(0), Some(other_data_len))?
+        let other_data = wire.slice_from_current(..other_data_len, SliceWireVisibility::Slice)?
             .current()
             .to_vec();
 
