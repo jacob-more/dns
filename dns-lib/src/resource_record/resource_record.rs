@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::{ReadWireError, SliceWireVisibility}, to_wire::ToWire}}, types::c_domain_name::CDomainName};
 
-use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, dnskey::DNSKEY, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
+use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, dname::DNAME, dnskey::DNSKEY, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, srv::SRV, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RRHeader {
@@ -317,7 +317,7 @@ gen_resource_record!(
     // SMIMEA(RRHeader, SMIMEA),
     (SOA, presentation_allowed),
     // SPF(RRHeader, SPF),
-    // SRV(RRHeader, SRV),
+    (SRV, presentation_allowed),
     // SSHFP(RRHeader, SSHFP),
     // SVCB(RRHeader, SVCB),
     // TA(RRHeader, TA),

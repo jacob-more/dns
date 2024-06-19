@@ -71,7 +71,7 @@ pub mod rrsig;
 // pub mod SMIMEA;
 pub mod soa;
 // pub mod SPF;
-// pub mod SRV;
+pub mod srv;
 // pub mod SSHFP;
 // pub mod SVCB;
 // pub mod TA;
