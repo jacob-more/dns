@@ -547,6 +547,7 @@ impl ToWire for CDomainName {
                                 label.to_wire_format(wire, &mut None)?;
                             } else {
                                 (pointer | 0b1100_0000_0000_0000).to_wire_format(wire, &mut None)?;
+                                break;
                             }
                         },
                         None => {
