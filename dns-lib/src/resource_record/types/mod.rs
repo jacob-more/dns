@@ -13,7 +13,7 @@ pub mod caa;
 // pub mod CDS;
 pub mod cert;
 pub mod cname;
-// pub mod CSYNC;
+pub mod csync;
 // pub mod DHCID;
 // pub mod DLV;
 pub mod dname;
