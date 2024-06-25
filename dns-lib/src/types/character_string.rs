@@ -194,8 +194,43 @@ impl CharacterString {
     }
 
     #[inline]
+    pub fn is_numeric_or_empty(&self) -> bool {
+        self.ascii.is_numeric_or_empty()
+    }
+
+    #[inline]
+    pub fn is_alphanumeric_or_empty(&self) -> bool {
+        self.ascii.is_alphanumeric_or_empty()
+    }
+
+    #[inline]
+    pub fn is_lower_alphanumeric_or_empty(&self) -> bool {
+        self.ascii.is_lower_alphanumeric_or_empty()
+    }
+
+    #[inline]
+    pub fn is_upper_alphanumeric_or_empty(&self) -> bool {
+        self.ascii.is_upper_alphanumeric_or_empty()
+    }
+
+    #[inline]
     pub fn is_numeric(&self) -> bool {
         self.ascii.is_numeric()
+    }
+
+    #[inline]
+    pub fn is_alphanumeric(&self) -> bool {
+        self.ascii.is_alphanumeric()
+    }
+
+    #[inline]
+    pub fn is_lower_alphanumeric(&self) -> bool {
+        self.ascii.is_lower_alphanumeric()
+    }
+
+    #[inline]
+    pub fn is_upper_alphanumeric(&self) -> bool {
+        self.ascii.is_upper_alphanumeric()
     }
 }
 

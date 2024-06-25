@@ -646,23 +646,43 @@ impl AsciiString {
     }
 
     #[inline]
+    pub fn is_numeric_or_empty(&self) -> bool {
+        self.string.iter().all(|character| is_numeric(*character))
+    }
+
+    #[inline]
+    pub fn is_alphanumeric_or_empty(&self) -> bool {
+        self.string.iter().all(|character| is_alphanumeric(*character))
+    }
+
+    #[inline]
+    pub fn is_lower_alphanumeric_or_empty(&self) -> bool {
+        self.string.iter().all(|character| is_lower_alphanumeric(*character))
+    }
+
+    #[inline]
+    pub fn is_upper_alphanumeric_or_empty(&self) -> bool {
+        self.string.iter().all(|character| is_upper_alphanumeric(*character))
+    }
+
+    #[inline]
     pub fn is_numeric(&self) -> bool {
-        (!self.string.is_empty()) && self.string.iter().all(|character| is_numeric(*character))
+        (!self.string.is_empty()) && self.is_numeric_or_empty()
     }
 
     #[inline]
     pub fn is_alphanumeric(&self) -> bool {
-        (!self.string.is_empty()) && self.string.iter().all(|character| is_alphanumeric(*character))
+        (!self.string.is_empty()) && self.is_alphanumeric_or_empty()
     }
 
     #[inline]
     pub fn is_lower_alphanumeric(&self) -> bool {
-        (!self.string.is_empty()) && self.string.iter().all(|character| is_lower_alphanumeric(*character))
+        (!self.string.is_empty()) && self.is_lower_alphanumeric_or_empty()
     }
 
     #[inline]
     pub fn is_upper_alphanumeric(&self) -> bool {
-        (!self.string.is_empty()) && self.string.iter().all(|character| is_upper_alphanumeric(*character))
+        (!self.string.is_empty()) && self.is_upper_alphanumeric_or_empty()
     }
 }
 

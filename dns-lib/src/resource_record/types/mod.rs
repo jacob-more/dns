@@ -46,7 +46,7 @@ pub mod mg;
 pub mod minfo;
 pub mod mr;
 pub mod mx;
-// pub mod NAPTR;
+pub mod naptr;
 // pub mod NID;
 // pub mod NIMLOC;
 // pub mod NINFO;
