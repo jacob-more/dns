@@ -11,7 +11,7 @@ const DEFAULT_CLASS: Option<&str> = Some("IN");
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Token<'a> {
     ResourceRecord(ResourceRecordToken<'a>),
-    Include{ file_name: &'a str, domain_name: Option<&'a str> }
+    Include { file_name: &'a str, domain_name: Option<&'a str> }
 }
 
 impl<'a> Display for Token<'a> {

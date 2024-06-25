@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use super::{errors::TokenizerError, raw_entries::{RawLiteralEntriesIter, EntryRawLiteral}, regex::{REGEX_RCLASS, REGEX_RTYPE, REGEX_TTL}};
+use super::{errors::TokenizerError, raw_entries::{RawEntryIter, RawItem}, regex::{REGEX_RCLASS, REGEX_RTYPE, REGEX_TTL}};
 
 /// An entry, representing a single entry in a zone file.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -8,21 +8,21 @@ pub enum Entry<'a> {
     /// Using the "$ORIGIN" string, sets the origin that will be used from this point forwards while
     /// parsing (unless changed by another Origin entry). The `origin` value should be a fully
     /// qualified domain name.
-    Origin{origin: StringLiteral<'a>},
+    Origin { origin: StringLiteral<'a> },
     /// Using the "$TTL" string, sets the ttl that will be used from this point forwards while
     /// parsing (unless changed by another TTL entry).
-    TTL{ttl: &'a str},
+    TTL { ttl: &'a str },
     /// Using the "$RCLASS" string, sets the rclass that will be used from this point forwards while
     /// parsing (unless changed by another RCLASS entry).
-    RClass{rclass: &'a str},
+    RClass { rclass: &'a str },
     /// Indicates that another file should be read in at this point. The optional `domain_name` sets
     /// the initial origin when reading that file but does not affect the current origin in this
     /// file.
-    Include{file_name: &'a str, domain_name: Option<StringLiteral<'a>>},
+    Include { file_name: &'a str, domain_name: Option<StringLiteral<'a>> },
     /// An entry that represents the tokens that make up a resource record. The literals that make
     /// up the record are still raw strings but some meaning has been determined based on what the
     /// strings contain in order to determine which values each literal represents.
-    ResourceRecord{domain_name: Option<StringLiteral<'a>>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: Vec<StringLiteral<'a>>},
+    ResourceRecord { domain_name: Option<StringLiteral<'a>>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: Vec<StringLiteral<'a>> },
 }
 
 impl<'a> Display for Entry<'a> {
@@ -91,13 +91,13 @@ impl<'a> Display for StringLiteral<'a> {
 /// determine what types of values that entry contains. However, it does not validate for
 /// correctness of most of those values. They are still stored as raw strings at this point.
 pub struct EntryIter<'a> {
-    token_iter: RawLiteralEntriesIter<'a>
+    token_iter: RawEntryIter<'a>
 }
 
 impl<'a> EntryIter<'a> {
     #[inline]
     pub fn new(feed: &'a str) -> Self {
-        EntryIter { token_iter: RawLiteralEntriesIter::new(feed) }
+        EntryIter { token_iter: RawEntryIter::new(feed) }
     }
 }
 
@@ -113,51 +113,51 @@ impl<'a> Iterator for EntryIter<'a> {
                 None => return None,
             };
 
-            match entry_tokens.entry_raw_literals.as_slice() {
+            match entry_tokens.as_slice() {
                 // <blank>[<comment>]
                 &[] => continue,    //< Skip entries that are empty
     
                 // $ORIGIN <domain-name> [<comment>]
-                &[EntryRawLiteral::Text("$ORIGIN"), EntryRawLiteral::Text("@")] => return Some(Ok(
+                &[RawItem::Text("$ORIGIN"), RawItem::Text("@")] => return Some(Ok(
                     Entry::Origin{ origin: StringLiteral::Origin }
                 )),
-                &[EntryRawLiteral::Text("$ORIGIN"), EntryRawLiteral::Text(domain_name)] => return Some(Ok(
+                &[RawItem::Text("$ORIGIN"), RawItem::Text(domain_name)] => return Some(Ok(
                     Entry::Origin{ origin: StringLiteral::Raw(domain_name) }
                 )),
-                &[EntryRawLiteral::Text("$ORIGIN"), EntryRawLiteral::QuotedText(domain_name)] => return Some(Ok(
+                &[RawItem::Text("$ORIGIN"), RawItem::QuotedText(domain_name)] => return Some(Ok(
                     Entry::Origin{ origin: StringLiteral::Quoted(domain_name) }
                 )),
 
                 // $TTL <ttl> [<comment>]
-                &[EntryRawLiteral::Text("$TTL"), EntryRawLiteral::Text(ttl_str) | EntryRawLiteral::QuotedText(ttl_str)] => return Some(Ok(
+                &[RawItem::Text("$TTL"), RawItem::Text(ttl_str) | RawItem::QuotedText(ttl_str)] => return Some(Ok(
                     Entry::TTL { ttl: ttl_str }
                 )),
 
                 // $RCLASS <rclass> [<comment>]
-                &[EntryRawLiteral::Text("$RCLASS"), EntryRawLiteral::Text(rclass_str) | EntryRawLiteral::QuotedText(rclass_str)] => return Some(Ok(
+                &[RawItem::Text("$RCLASS"), RawItem::Text(rclass_str) | RawItem::QuotedText(rclass_str)] => return Some(Ok(
                     Entry::RClass { rclass: rclass_str }
                 )),
     
                 // $INCLUDE <file-name> [<domain-name>] [<comment>]
-                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name)] => return Some(Ok(
+                &[RawItem::Text("$INCLUDE"), RawItem::Text(file_name)] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: None }
                 )),
-                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name) | EntryRawLiteral::QuotedText(file_name), EntryRawLiteral::Text("@")] => return Some(Ok(
+                &[RawItem::Text("$INCLUDE"), RawItem::Text(file_name) | RawItem::QuotedText(file_name), RawItem::Text("@")] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: Some(StringLiteral::Origin) }
                 )),
-                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name) | EntryRawLiteral::QuotedText(file_name), EntryRawLiteral::Text(domain_name)] => return Some(Ok(
+                &[RawItem::Text("$INCLUDE"), RawItem::Text(file_name) | RawItem::QuotedText(file_name), RawItem::Text(domain_name)] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: Some(StringLiteral::Raw(domain_name)) }
                 )),
-                &[EntryRawLiteral::Text("$INCLUDE"), EntryRawLiteral::Text(file_name) | EntryRawLiteral::QuotedText(file_name), EntryRawLiteral::QuotedText(domain_name)] => return Some(Ok(
+                &[RawItem::Text("$INCLUDE"), RawItem::Text(file_name) | RawItem::QuotedText(file_name), RawItem::QuotedText(domain_name)] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: Some(StringLiteral::Quoted(domain_name)) }
                 )),
 
                 // <domain-name> [<TTL>] [<class>] <type> <RDATA> [<comment>]
-                &[EntryRawLiteral::Text("@"), ..] => return Some(Self::parse_rr(Some(StringLiteral::Origin), &entry_tokens.entry_raw_literals[1..])),
-                &[EntryRawLiteral::Text(domain_name), ..] => return Some(Self::parse_rr(Some(StringLiteral::Raw(domain_name)), &entry_tokens.entry_raw_literals[1..])),
-                &[EntryRawLiteral::QuotedText(domain_name), ..] => return Some(Self::parse_rr(Some(StringLiteral::Quoted(domain_name)), &entry_tokens.entry_raw_literals[1..])),
+                &[RawItem::Text("@"), ..] => return Some(Self::parse_rr(Some(StringLiteral::Origin), &entry_tokens.as_slice()[1..])),
+                &[RawItem::Text(domain_name), ..] => return Some(Self::parse_rr(Some(StringLiteral::Raw(domain_name)), &entry_tokens.as_slice()[1..])),
+                &[RawItem::QuotedText(domain_name), ..] => return Some(Self::parse_rr(Some(StringLiteral::Quoted(domain_name)), &entry_tokens.as_slice()[1..])),
                 // <blank> [<TTL>] [<class>] <type> <RDATA> [<comment>]
-                &[EntryRawLiteral::Separator(_), ..] => return Some(Self::parse_rr(None, &entry_tokens.entry_raw_literals[1..])),
+                &[RawItem::Separator(_), ..] => return Some(Self::parse_rr(None, &entry_tokens.as_slice()[1..])),
             }
         }
     }
@@ -165,25 +165,25 @@ impl<'a> Iterator for EntryIter<'a> {
 
 impl<'a> EntryIter<'a> {
     #[inline]
-    fn new_rr<'b>(domain_name: Option<StringLiteral<'a>>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: impl Iterator<Item = &'b EntryRawLiteral<'a>>) -> Entry<'a> where 'a: 'b {
+    fn new_rr<'b>(domain_name: Option<StringLiteral<'a>>, ttl: Option<&'a str>, rclass: Option<&'a str>, rtype: &'a str, rdata: impl Iterator<Item = &'b RawItem<'a>>) -> Entry<'a> where 'a: 'b {
         Entry::ResourceRecord{
             domain_name,
             ttl,
             rclass,
             rtype,
             rdata: rdata.map(|token| match token {
-                EntryRawLiteral::Text("@") => StringLiteral::Origin,
-                EntryRawLiteral::Text(string) => StringLiteral::Raw(string),
-                EntryRawLiteral::QuotedText(string) => StringLiteral::Quoted(string),
-                EntryRawLiteral::Separator(string) => StringLiteral::Raw(string),
+                RawItem::Text("@") => StringLiteral::Origin,
+                RawItem::Text(string) => StringLiteral::Raw(string),
+                RawItem::QuotedText(string) => StringLiteral::Quoted(string),
+                RawItem::Separator(string) => StringLiteral::Raw(string),
             }).collect(),
         }
     }
 
     #[inline]
-    fn parse_rr(domain_name: Option<StringLiteral<'a>>, other_tokens: &[EntryRawLiteral<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr(domain_name: Option<StringLiteral<'a>>, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         match other_tokens {
-            &[EntryRawLiteral::Text(token_1), EntryRawLiteral::Text(token_2), ..] => {
+            &[RawItem::Text(token_1), RawItem::Text(token_2), ..] => {
                 // If the first token is an rtype, then the rest is the rdata and we should not read it
                 if (!REGEX_RCLASS.is_match(token_1)) && REGEX_RTYPE.is_match(token_1) {
                     return Self::parse_rr_rtype_first(domain_name, token_1, &other_tokens[1..]);
@@ -211,7 +211,7 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr_rtype_first(domain_name: Option<StringLiteral<'a>>, rtype: &'a str, other_tokens: &[EntryRawLiteral<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_first(domain_name: Option<StringLiteral<'a>>, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         Ok(Self::new_rr(
             domain_name,
             None,
@@ -222,7 +222,7 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr_rtype_second(domain_name: Option<StringLiteral<'a>>, token_1: &'a str, rtype: &'a str, other_tokens: &[EntryRawLiteral<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_second(domain_name: Option<StringLiteral<'a>>, token_1: &'a str, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         if REGEX_RCLASS.is_match(token_1) {
             Ok(Self::new_rr(
                 domain_name,
@@ -245,7 +245,7 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr_rtype_third(domain_name: Option<StringLiteral<'a>>, token_1: &'a str, token_2: &'a str, rtype: &'a str, other_tokens: &[EntryRawLiteral<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_third(domain_name: Option<StringLiteral<'a>>, token_1: &'a str, token_2: &'a str, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
         if REGEX_RCLASS.is_match(token_1) && REGEX_TTL.is_match(token_2) {
             Ok(Self::new_rr(
                 domain_name,
