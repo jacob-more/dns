@@ -12,6 +12,17 @@ pub struct Question {
     qclass: RClass,
 }
 
+impl Default for Question {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            qname: CDomainName::new_root(),
+            qtype: RType::Unknown(0),
+            qclass: RClass::Unknown(0)
+        }
+    }
+}
+
 impl Question {
     #[inline]
     pub const fn new(qname: CDomainName, qtype: RType, qclass: RClass) -> Question {

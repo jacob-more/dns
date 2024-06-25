@@ -9,9 +9,10 @@ edition = "2021"
 dns-macros = {path="../dns-macros"}
 
 async-trait = "0.1"
-lazy_static = "1.4"
+lazy_static = "1.5"
 mac_address = "1.1"
 regex = "1.10"
+tinyvec = { version = "1.6", features = ["alloc"] }
 tokio = { version = "1.38", features = ["full"] }
 ux = "0.1"
 xml = "0.8"

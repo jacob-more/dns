@@ -1,3 +1,4 @@
+use tinyvec::TinyVec;
 use ux::{u3, u1, u4};
 
 use crate::{resource_record::{resource_record::ResourceRecord, rcode::RCode, opcode::OpCode}, serde::wire::{to_wire::ToWire, from_wire::FromWire, write_wire::WriteWireError, read_wire::ReadWireError}};
@@ -20,7 +21,7 @@ pub struct Message {
     pub rcode: RCode,
 
     // Data
-    pub question: Vec<Question>,
+    pub question: TinyVec<[Question; 1]>,
     pub answer: Vec<ResourceRecord>,
     pub authority: Vec<ResourceRecord>,
     pub additional: Vec<ResourceRecord>,
@@ -101,7 +102,7 @@ impl From<Question> for Message {
             recursion_available: false,
             z: u3::new(0),
             rcode: RCode::NoError,
-            question: vec![question],
+            question: TinyVec::from([question]),
             answer: vec![],
             authority: vec![],
             additional: vec![],
@@ -180,7 +181,7 @@ impl ToWire for Message {
         (self.authority.len() as u16).to_wire_format(wire, compression)?;
         (self.additional.len() as u16).to_wire_format(wire, compression)?;
 
-        self.question.to_wire_format(wire, compression)?;
+        self.question.iter().try_for_each(|question| question.to_wire_format(wire, compression))?;
         self.answer.to_wire_format(wire, compression)?;
         self.authority.to_wire_format(wire, compression)?;
         self.additional.to_wire_format(wire, compression)
@@ -200,7 +201,7 @@ impl ToWire for Message {
         + (self.additional.len() as u16).serial_length()
 
         // Data
-        + self.question.serial_length()
+        + self.question.iter().fold(0, |sum, question| sum + question.serial_length())
         + self.answer.serial_length()
         + self.authority.serial_length()
         + self.additional.serial_length()
@@ -236,7 +237,7 @@ impl FromWire for Message {
         let mut ns_count = u16::from_wire_format(wire)?;
         let mut ar_count = u16::from_wire_format(wire)?;
 
-        let mut question = Vec::with_capacity(qd_count as usize);
+        let mut question = TinyVec::with_capacity(qd_count as usize);
         let mut answer = Vec::with_capacity(an_count as usize);
         let mut authority = Vec::with_capacity(ns_count as usize);
         let mut additional = Vec::with_capacity(ar_count as usize);
@@ -259,11 +260,11 @@ impl FromWire for Message {
         }
 
         Ok(Self {
-            id: id,
+            id,
 
             // Flags
-            qr: qr,
-            opcode: opcode,
+            qr,
+            opcode,
             authoritative_answer: aa,
             truncation: tc,
             recursion_desired: rd,
@@ -272,10 +273,10 @@ impl FromWire for Message {
             rcode: rcode,
 
             // Data
-            question: question,
-            answer: answer,
-            authority: authority,
-            additional: additional,
+            question,
+            answer,
+            authority,
+            additional,
         })
     }
 }

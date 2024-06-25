@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, iter::Rev, slice::{Iter, IterMut}};
 
 use lazy_static::lazy_static;
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{constants::{ASCII_BACKSLASH, ASCII_CLOSE_PARENTHESIS, ASCII_OPEN_PARENTHESIS, ASCII_SEMICOLON, ASCII_SPACE, EMPTY_ASCII_STRING}, AsciiChar, AsciiError, AsciiString}};
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{constants::{ASCII_BACKSLASH, ASCII_CLOSE_PARENTHESIS, ASCII_OPEN_PARENTHESIS, ASCII_SEMICOLON, ASCII_SPACE}, AsciiChar, AsciiError, AsciiString}};
 
 use super::ascii::constants::ASCII_HORIZONTAL_TAB;
 
@@ -41,12 +41,10 @@ pub struct CharacterString {
 }
 
 impl CharacterString {
-    pub const EMPTY: Self = Self { ascii: EMPTY_ASCII_STRING };
-
     /// The maximum serial length of a character string, excluding the length octet.
     pub const MAX_OCTETS: usize = 255;
 
-
+    #[inline]
     pub fn new(string: AsciiString) -> Result<Self, CharacterStringError> {
         // Bound checking needs to be done to make sure it will be
         // a legal character string.
@@ -58,12 +56,17 @@ impl CharacterString {
     }
 
     #[inline]
+    pub fn new_empty() -> Self {
+        Self { ascii: AsciiString::new_empty() }
+    }
+
+    #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, CharacterStringError> {
         Self::new(
             AsciiString::from_utf8(string)?
         )
     }
-    
+
     #[inline]
     pub fn len(&self) -> usize {
         self.ascii.len()

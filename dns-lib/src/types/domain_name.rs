@@ -38,6 +38,11 @@ impl DomainName {
     }
 
     #[inline]
+    pub fn new_root() -> Self {
+        Self { domain_name: CDomainName::new_root() }
+    }
+
+    #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, DomainNameError> {
         Ok(Self { domain_name: CDomainName::from_utf8(string)? })
     }
@@ -104,8 +109,8 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn as_vec(&self) -> &Vec<Label> {
-        self.domain_name.as_vec()
+    pub fn to_vec(&self) -> Vec<Label> {
+        self.domain_name.to_vec()
     }
 
     #[inline]

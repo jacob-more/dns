@@ -11,7 +11,7 @@ dns-lib = { path = "../dns-lib" }
 
 async-recursion = "1.1"
 async-trait = "0.1"
-lazy_static = "1.4"
+lazy_static = "1.5"
 quinn = "0.11"
 rand = "0.8"
 socket2 = "0.5"

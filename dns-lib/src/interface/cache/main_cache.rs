@@ -1,6 +1,7 @@
 use std::{io::{Read, self}, fs::File};
 
 use async_trait::async_trait;
+use tinyvec::tiny_vec;
 use tokio::io::AsyncReadExt;
 use ux::u3;
 
@@ -25,7 +26,7 @@ pub trait MainCache {
                     recursion_available: false,
                     z: u3::new(0),
                     rcode: RCode::NoError,
-                    question: vec![],
+                    question: tiny_vec![],
                     answer: vec![record],
                     authority: vec![],
                     additional: vec![],
@@ -97,7 +98,7 @@ pub trait AsyncMainCache {
                         recursion_available: false,
                         z: u3::new(0),
                         rcode: RCode::NoError,
-                        question: vec![],
+                        question: tiny_vec![],
                         answer: vec![record],
                         authority: vec![],
                         additional: vec![],

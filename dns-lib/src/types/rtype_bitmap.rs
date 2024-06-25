@@ -1,10 +1,12 @@
+use tinyvec::ArrayVec;
+
 use crate::{resource_record::rtype::RType, serde::{presentation::{from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::ReadWireError, to_wire::ToWire}}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct WindowBlock {
     window_block_number: u8,
     bitmap_length: u8,  //< Must be between 1 and 32, inclusive.
-    map: Vec<u8>,
+    map: ArrayVec<[u8; WindowBlock::MAX_BITMAP_LENGTH as usize]>,
 }
 
 impl WindowBlock {
@@ -59,7 +61,7 @@ impl FromWire for WindowBlock {
             ));
         }
         
-        let map = <Vec<u8>>::from_wire_format(
+        let map = <ArrayVec<[u8; WindowBlock::MAX_BITMAP_LENGTH as usize]>>::from_wire_format(
             &mut wire.take_as_read_wire(bitmap_length as usize)?
         )?;
 
@@ -100,7 +102,7 @@ impl RTypeBitmap {
             .map(|(window_block_number, (map, bitmap_length))| WindowBlock {
                 window_block_number: window_block_number as u8,
                 bitmap_length: *bitmap_length,
-                map: map[0..(*bitmap_length as usize)].into(),
+                map: ArrayVec::from_array_len(*map, *bitmap_length as usize),
             });
 
         Self { blocks: window_blocks.collect() }

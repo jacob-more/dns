@@ -136,7 +136,7 @@ impl<Records> TreeCache<Records> {
             return Ok(None);
         }
 
-        let qlabels = qname.as_vec();
+        let qlabels = qname.as_slice();
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels[1..qlabels.len()-1].iter().rev() {

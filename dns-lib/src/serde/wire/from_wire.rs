@@ -7,6 +7,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use mac_address::MacAddress;
+use tinyvec::{ArrayVec, TinyVec};
 use ux::{u24, u40, u48, u56, u72, u80, u88, u96, u104, u112, u120, i24, i40, i48, i56, i72, i80, i88, i96, i104, i112, i120, u1, u4, u3, u7};
 
 use crate::serde::const_byte_counts::*;
@@ -134,6 +135,34 @@ impl<T: FromWire> FromWire for Vec<T> {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
         let mut vector = Vec::new();
+        
+        while wire.current_len() > 0 {
+            vector.push(T::from_wire_format(wire)?);
+        }
+
+        Ok(vector)
+    }
+}
+
+impl<T: FromWire + Default, const SIZE: usize> FromWire for TinyVec<[T; SIZE]> where [T; SIZE]: tinyvec::Array<Item = T> {
+    /// Consumes the entire wire buffer.
+    #[inline]
+    fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
+        let mut vector = TinyVec::new();
+        
+        while wire.current_len() > 0 {
+            vector.push(T::from_wire_format(wire)?);
+        }
+
+        Ok(vector)
+    }
+}
+
+impl<T: FromWire + Default, const SIZE: usize> FromWire for ArrayVec<[T; SIZE]> where [T; SIZE]: tinyvec::Array<Item = T> {
+    /// Consumes the entire wire buffer.
+    #[inline]
+    fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
+        let mut vector = ArrayVec::new();
         
         while wire.current_len() > 0 {
             vector.push(T::from_wire_format(wire)?);

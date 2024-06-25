@@ -1,5 +1,7 @@
 use std::{fmt::{Display, Debug}, slice::{Iter, IterMut}, iter::Rev, error::Error, ops::Add};
 
+use tinyvec::{tiny_vec, TinyVec};
+
 use crate::serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::non_escaped_to_escaped::NonEscapedIntoEscapedIter, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
 
 use self::constants::*;
@@ -25,7 +27,7 @@ impl Display for AsciiError {
 pub type AsciiChar = u8;
 
 pub mod constants {
-    use super::{AsciiChar, AsciiString};
+    use super::AsciiChar;
 
     pub const ASCII_NUL: AsciiChar                       = 000;
     pub const ASCII_START_OF_HEADING: AsciiChar          = 001;
@@ -283,8 +285,6 @@ pub mod constants {
     pub const ASCII_LATIN_SMALL_LETTER_Y_WITH_ACUTE: AsciiChar          = 253;
     pub const ASCII_LATIN_SMALL_LETTER_THORN: AsciiChar                 = 254;
     pub const ASCII_LATIN_SMALL_LETTER_Y_WITH_DIAERESIS: AsciiChar      = 255;
-
-    pub const EMPTY_ASCII_STRING: AsciiString = AsciiString { string: vec![] };
 }
 
 // TODO: I am not sure whether it is better to do large match statements, like I have now that match
@@ -426,9 +426,9 @@ pub const fn is_printable(character: AsciiChar) -> bool {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct AsciiString {
-    string: Vec<AsciiChar>,
+    string: TinyVec<[AsciiChar; 5]>,
 }
 
 impl Display for AsciiString {
@@ -449,13 +449,18 @@ impl Debug for AsciiString {
 
 impl AsciiString {
     #[inline]
+    pub fn new_empty() -> Self {
+        Self { string: tiny_vec![] }
+    }
+
+    #[inline]
     pub fn from(string: &[u8]) -> Self {
-        Self { string: string.to_vec() }
+        Self { string: string.into() }
     }
 
     #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, AsciiError> {
-        let mut ascii_characters = Vec::with_capacity(string.len());
+        let mut ascii_characters = TinyVec::with_capacity(string.len());
         for character in string.chars() {
             let u32_character = character as u32;
             if ((u8::MIN as u32) > u32_character) || ((u8::MAX as u32) < u32_character) {
@@ -469,7 +474,7 @@ impl AsciiString {
 
     #[inline]
     pub fn from_range(&self, start: usize, end: usize) -> Self {
-        Self { string: self.string[start..end].to_vec() }
+        Self { string: self.string[start..end].into() }
     }
 
     #[inline]
@@ -569,7 +574,7 @@ impl AsciiString {
         if n <= len {
             let (head, tail) = self.string.split_at(len - n);
             if tail == suffix {
-                return Some(Self { string: head.to_vec() });
+                return Some(Self { string: head.into() });
             }
         }
         None
@@ -582,7 +587,7 @@ impl AsciiString {
         if n <= self.len() {
             let (head, tail) = self.string.split_at(n);
             if head == prefix {
-                return Some(Self { string: tail.to_vec() });
+                return Some(Self { string: tail.into() });
             }
         }
         None
@@ -604,13 +609,8 @@ impl AsciiString {
     }
 
     #[inline]
-    pub fn as_vec(&self) -> &Vec<AsciiChar> {
-        &self.string
-    }
-
-    #[inline]
-    pub fn as_owned_vec(self) -> Vec<AsciiChar> {
-        self.string
+    pub fn to_vec(&self) -> Vec<AsciiChar> {
+        self.string.to_vec()
     }
 
     #[inline]

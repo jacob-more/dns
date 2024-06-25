@@ -1,6 +1,8 @@
-use std::{fmt::{Display, Debug}, error::Error, ops::Add};
+use std::{error::Error, fmt::{Debug, Display}, ops::Add};
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, EscapedToEscapableIter, ParseError}, non_escaped_to_escaped}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{ascii_char_as_lower, constants::{ASCII_PERIOD, EMPTY_ASCII_STRING}, AsciiError, AsciiString}};
+use tinyvec::{tiny_vec, TinyVec};
+
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, EscapedToEscapableIter, ParseError}, non_escaped_to_escaped}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{ascii_char_as_lower, constants::ASCII_PERIOD, AsciiError, AsciiString}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
@@ -43,7 +45,7 @@ impl From<AsciiError> for CDomainNameError {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
 pub struct Label {
     ascii: AsciiString,
 }
@@ -51,8 +53,6 @@ pub struct Label {
 impl Label {
     pub const MAX_OCTETS: usize = 63;
     pub const MIN_OCTETS: usize = 0;
-
-    pub const ROOT_LABEL: Self = Self { ascii: EMPTY_ASCII_STRING };
 
     #[inline]
     pub fn new(string: &AsciiString) -> Result<Self, CDomainNameError> {
@@ -73,6 +73,11 @@ impl Label {
 
         ascii.shrink_to_fit();
         Ok(Self { ascii: AsciiString::from(&ascii) })
+    }
+
+    #[inline]
+    pub fn new_root() -> Self {
+        Self { ascii: AsciiString::new_empty() }
     }
 
     #[inline]
@@ -217,7 +222,7 @@ impl FromWire for Label {
 /// Domain names cannot be compressed: Those not defined in RFC 1035
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CDomainName {
-    labels: Vec<Label>
+    labels: TinyVec<[Label; 5]>
 }
 
 impl CDomainName {
@@ -238,9 +243,9 @@ impl CDomainName {
     /// 
     /// TODO: Update this to allow for the true max.
     pub const MAX_COMPRESSION_POINTERS: u16 = ((Self::MAX_OCTETS + 1) / 2) - 2;
-    
+
     pub fn new(string: &AsciiString) -> Result<Self, CDomainNameError> {
-        let mut labels: Vec<Label> = Vec::new();
+        let mut labels = TinyVec::new();
 
         let mut label_start = 0;
         let mut was_dot = false;
@@ -248,7 +253,7 @@ impl CDomainName {
         for escaped_char_result in EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate()) {
             match (escaped_char_result, string.len(), was_dot) {
                 // leading dots are not legal except for the root zone
-                (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), 1, _) => labels.push(Label::ROOT_LABEL),
+                (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), 1, _) => labels.push(Label::new_root()),
                 (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), 2.., _) => return Err(CDomainNameError::LeadingDot),
                 // consecutive dots are never legal
                 (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), _, true) => return Err(CDomainNameError::ConsecutiveDots),
@@ -268,7 +273,7 @@ impl CDomainName {
                     // If this is the last character in the buffer, then make sure the root label is
                     // appended as well.
                     if index == string_len-1 {
-                        let label = Label::ROOT_LABEL;
+                        let label = Label::new_root();
                         serial_length += label.serial_length();
 
                         if serial_length > Self::MAX_OCTETS {
@@ -296,7 +301,12 @@ impl CDomainName {
             }
         }
 
-        Ok(Self { labels: labels })
+        Ok(Self { labels })
+    }
+
+    #[inline]
+    pub fn new_root() -> Self {
+        Self { labels: tiny_vec![{Label::new_root()}] }
     }
 
     #[inline]
@@ -309,7 +319,7 @@ impl CDomainName {
     #[inline]
     pub fn from_labels(labels: &[Label]) -> Self {
         // TODO: validate the label input to make sure it is actually correct and valid.
-        let mut labels_vec: Vec<Label> = Vec::with_capacity(labels.len());
+        let mut labels_vec = TinyVec::with_capacity(labels.len());
         labels_vec.extend_from_slice(labels);
         Self { labels: labels_vec }
     }
@@ -317,7 +327,7 @@ impl CDomainName {
     #[inline]
     pub fn is_fully_qualified(&self) -> bool {
         match self.labels.last() {
-            Some(last_label) => last_label == &Label::ROOT_LABEL,
+            Some(last_label) => last_label.is_root(),
             None => false,
         }
     }
@@ -326,7 +336,7 @@ impl CDomainName {
     #[inline]
     pub fn fully_qualified(&mut self) {
         if !self.is_fully_qualified() {
-            self.labels.push(Label::ROOT_LABEL);
+            self.labels.push(Label::new_root());
         }
     }
 
@@ -335,7 +345,7 @@ impl CDomainName {
     pub fn as_fully_qualified(&self) -> Self {
         let mut copy = self.clone();
         if !self.is_fully_qualified() {
-            copy.labels.push(Label::ROOT_LABEL);
+            copy.labels.push(Label::new_root());
         }
         return copy;
     }
@@ -349,9 +359,9 @@ impl CDomainName {
     /// of zero.
     #[inline]
     pub fn is_root(&self) -> bool {
-        match self.labels.last() {
-            Some(last_label) => (self.label_count() == 1) && (last_label == &Label::ROOT_LABEL),
-            None => false,
+        match &self.labels.as_slice() {
+            &[label] => label.is_root(),
+            _ => false,
         }
     }
 
@@ -398,7 +408,7 @@ impl CDomainName {
 
     #[inline]
     pub fn as_lower(&self) -> Self {
-        let mut lower_labels = Vec::with_capacity(self.labels.len());
+        let mut lower_labels = TinyVec::with_capacity(self.labels.len());
         for label in &self.labels {
             lower_labels.push(label.as_lower());
         }
@@ -420,8 +430,8 @@ impl CDomainName {
     }
 
     #[inline]
-    pub fn as_vec(&self) -> &Vec<Label> {
-        &self.labels
+    pub fn to_vec(&self) -> Vec<Label> {
+        self.labels.to_vec()
     }
 
     #[inline]
@@ -578,7 +588,7 @@ impl ToWire for CDomainName {
 impl FromWire for CDomainName {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
-        let mut labels: Vec<Label> = Vec::new();
+        let mut labels = TinyVec::new();
         let mut serial_length = 0;
         let mut pointer_count = 0;
 
@@ -648,7 +658,7 @@ impl FromWire for CDomainName {
             wire.set_offset(final_offset as usize)?;
         }
 
-        Ok(Self { labels: labels })
+        Ok(Self { labels })
     }
 }
 
