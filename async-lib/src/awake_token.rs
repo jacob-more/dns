@@ -119,7 +119,10 @@ impl<'a> Future for AwokenToken {
                 // the previous entry.
                 STATE_WAIT => {
                     let mut l_waiters = awake_token.wakers.lock().unwrap();
-                    l_waiters.insert(*waker_id, cx.waker().clone());
+                    match l_waiters.get_mut(waker_id) {
+                        Some(waker) => waker.clone_from(cx.waker()),
+                        None => { l_waiters.insert(*waker_id, cx.waker().clone()); },
+                    }
                     drop(l_waiters);
 
                     // State Unchanged: Registered --> Registered
@@ -144,7 +147,7 @@ impl Drop for AwokenToken {
             AwokenState::Fresh { awake_token: _ } => (),
             AwokenState::Registered { awake_token, waker_id } => {
                 let mut l_waiters = awake_token.wakers.lock().unwrap();
-                l_waiters.remove(&waker_id);
+                l_waiters.remove(waker_id);
                 drop(l_waiters);
             },
             AwokenState::Awoken => (),
