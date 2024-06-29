@@ -67,6 +67,15 @@ impl AwakeToken {
             err_state => panic!("The awake token was in a state of neither being WAIT ({STATE_WAIT}) nor AWAKE ({STATE_AWAKE}). State was {err_state}"),
         }
     }
+
+    #[inline]
+    pub fn try_awoken(self: Arc<Self>) -> bool {
+        match self.state.load(Ordering::SeqCst) {
+            STATE_WAIT => false,
+            STATE_AWAKE => true,
+            err_state => panic!("The awake token was in a state of neither being WAIT ({STATE_WAIT}) nor AWAKE ({STATE_AWAKE}). State was {err_state}"),
+        }
+    }
 }
 
 #[derive(Debug)]
