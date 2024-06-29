@@ -6,7 +6,9 @@ use dns_lib::{query::message::Message, serde::wire::{compression_map::Compressio
 use socket2::{SockRef, TcpKeepalive};
 use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task, time};
 
-const MAX_MESSAGE_SIZE: usize = 4096;
+const MAX_MESSAGE_SIZE: usize = 8192;
+const UDP_RETRANSMIT_MS: u64 = 125;
+const TCP_TIMEOUT_MS: u64 = 500;
 
 
 pub enum QueryOptions {
@@ -55,11 +57,11 @@ impl MixedSocket {
     #[inline]
     pub fn new(upstream_socket: SocketAddr) -> Arc<Self> {
         Arc::new(MixedSocket {
-            udp_retransmit: Duration::from_millis(125),
+            udp_retransmit: Duration::from_millis(UDP_RETRANSMIT_MS),
             udp_timeout_count: AtomicU8::new(0),
             udp_shared: RwLock::new(SharedUdp { state: UdpState::None }),
 
-            tcp_timeout: Duration::from_millis(500),
+            tcp_timeout: Duration::from_millis(TCP_TIMEOUT_MS),
             tcp_shared: RwLock::new(SharedTcp { state: TcpState::None }),
 
             upstream_socket,
@@ -118,6 +120,10 @@ impl MixedSocket {
         loop {
             select! {
                 biased;
+                _ = &mut udp_kill_awoken => {
+                    println!("UDP Socket {} Canceled. Shutting down UDP Listener.", self.upstream_socket);
+                    break;
+                },
                 response = read_udp_message(udp_reader.clone()) => {
                     match response {
                         Ok(response) => {
@@ -136,6 +142,8 @@ impl MixedSocket {
                             // process is free to move on.
                         },
                         Err(error) => match error.kind() {
+                            io::ErrorKind::NotFound => {println!("UDP Listener for {} unable to read from stream (fatal). Not Found: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::PermissionDenied => {println!("UDP Listener for {} unable to read from stream (fatal). Permission Denied: {error}", self.upstream_socket); break;},
                             io::ErrorKind::ConnectionRefused => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Refused: {error}", self.upstream_socket); break;},
                             io::ErrorKind::ConnectionReset => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Reset: {error}", self.upstream_socket); break;},
                             io::ErrorKind::ConnectionAborted => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Aborted: {error}", self.upstream_socket); break;},
@@ -145,15 +153,11 @@ impl MixedSocket {
                             io::ErrorKind::TimedOut => {println!("UDP Listener for {} unable to read from stream (fatal). Timed Out: {error}", self.upstream_socket); break;},
                             io::ErrorKind::Unsupported => {println!("UDP Listener for {} unable to read from stream (fatal). Unsupported: {error}", self.upstream_socket); break;},
                             io::ErrorKind::BrokenPipe => {println!("UDP Listener for {} unable to read from stream (fatal). Broken Pipe: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::UnexpectedEof => (),   //< This error usually occurs a bunch of times and fills up the logs. Don't want to print it.
-                            _ => println!("UDP Listener for {} unable to read from stream (non-fatal). {error}", self.upstream_socket),
+                            io::ErrorKind::UnexpectedEof => {println!("UDP Listener for {} unable to read from stream (fatal). Unexpected End of File: {error}", self.upstream_socket); break;},
+                            _ => {println!("UDP Listener for {} unable to read from stream (fatal). {error}", self.upstream_socket); break},
                         },
                     }
                 },
-                _ = &mut udp_kill_awoken => {
-                    println!("UDP Socket {} Canceled. Shutting down UDP Listener.", self.upstream_socket);
-                    break;
-                }
             }
         }
 
@@ -184,6 +188,10 @@ impl MixedSocket {
         loop {
             select! {
                 biased;
+                _ = &mut tcp_kill_awoken => {
+                    println!("TCP Socket {} Canceled. Shutting down TCP Listener.", self.upstream_socket);
+                    break;
+                },
                 response = read_tcp_message(&mut tcp_reader) => {
                     match response {
                         Ok(response) => {
@@ -201,6 +209,8 @@ impl MixedSocket {
                             // process is free to move on.
                         },
                         Err(error) => match error.kind() {
+                            io::ErrorKind::NotFound => {println!("TCP Listener for {} unable to read from stream (fatal). Not Found: {error}", self.upstream_socket); break;},
+                            io::ErrorKind::PermissionDenied => {println!("TCP Listener for {} unable to read from stream (fatal). Permission Denied: {error}", self.upstream_socket); break;},
                             io::ErrorKind::ConnectionRefused => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Refused: {error}", self.upstream_socket); break;},
                             io::ErrorKind::ConnectionReset => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Reset: {error}", self.upstream_socket); break;},
                             io::ErrorKind::ConnectionAborted => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Aborted: {error}", self.upstream_socket); break;},
@@ -210,15 +220,11 @@ impl MixedSocket {
                             io::ErrorKind::TimedOut => {println!("TCP Listener for {} unable to read from stream (fatal). Timed Out: {error}", self.upstream_socket); break;},
                             io::ErrorKind::Unsupported => {println!("TCP Listener for {} unable to read from stream (fatal). Unsupported: {error}", self.upstream_socket); break;},
                             io::ErrorKind::BrokenPipe => {println!("TCP Listener for {} unable to read from stream (fatal). Broken Pipe: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::UnexpectedEof => (),   //< This error usually occurs a bunch of times and fills up the logs. Don't want to print it.
-                            _ => println!("TCP Listener for {} unable to read from stream (non-fatal). {error}", self.upstream_socket),
+                            io::ErrorKind::UnexpectedEof => {println!("TCP Listener for {} unable to read from stream (fatal). Unexpected End of File: {error}", self.upstream_socket); break;},
+                            _ => {println!("TCP Listener for {} unable to read from stream (fatal). {error}", self.upstream_socket); break},
                         },
                     }
                 },
-                _ = &mut tcp_kill_awoken => {
-                    println!("TCP Socket {} Canceled. Shutting down TCP Listener.", self.upstream_socket);
-                    break;
-                }
             }
         }
 
@@ -290,6 +296,8 @@ impl MixedSocket {
 
             // Note: this task is not responsible for actual cleanup. Once the listener closes, it
             // will kill any active queries and change the UdpState.
+        } else {
+            drop(r_udp);
         }
         Ok(())
     }
@@ -311,6 +319,8 @@ impl MixedSocket {
 
             // Note: this task is not responsible for actual cleanup. Once the listener closes, it
             // will kill any active queries and change the TcpState.
+        } else {
+            drop(r_tcp);
         }
         Ok(())
     }
@@ -523,10 +533,7 @@ impl MixedSocket {
                 drop(r_tcp);
                 match receiver.recv().await {
                     Ok((tcp_socket, udp_kill)) => return Ok((tcp_socket.clone(), udp_kill.clone())),
-                    Err(_) => {
-                        eprintln!("Failed to establish TCP connection to {}", self.upstream_socket);
-                        return Err(io::Error::from(io::ErrorKind::Interrupted));
-                    },
+                    Err(_) => return Err(io::Error::from(io::ErrorKind::Interrupted)),
                 }
             },
             TcpState::None => (),
@@ -549,10 +556,7 @@ impl MixedSocket {
                 drop(w_tcp);
                 match receiver.recv().await {
                     Ok((tcp_socket, udp_kill)) => return Ok((tcp_socket.clone(), udp_kill.clone())),
-                    Err(_) => {
-                        eprintln!("Failed to establish TCP connection to {}", self.upstream_socket);
-                        return Err(io::Error::from(io::ErrorKind::Interrupted));
-                    },
+                    Err(_) => return Err(io::Error::from(io::ErrorKind::Interrupted)),
                 }
             },
             TcpState::None => (),
@@ -666,7 +670,7 @@ impl MixedSocket {
                 }
                 return self.cleanup_query(query_id).await;
             },
-            _ = udp_canceled => {
+            _ = &mut udp_canceled => {
                 println!("UDP Cleanup: UDP canceled while waiting to receive message with ID {}", query_id);
                 return self.cleanup_query(query_id).await;
             },
@@ -683,6 +687,10 @@ impl MixedSocket {
                         Err(broadcast::error::RecvError::Closed) => println!("UDP Cleanup: Channel closed for query with ID {}", query_id),
                         Err(broadcast::error::RecvError::Lagged(skipped_messages)) => println!("UDP Cleanup: Channel lagged for query with ID {}, skipping {skipped_messages} messages", query_id),
                     }
+                    return self.cleanup_query(query_id).await;
+                },
+                _ = &mut udp_canceled => {
+                    println!("UDP Cleanup: UDP canceled while waiting to receive message with ID {}", query_id);
                     return self.cleanup_query(query_id).await;
                 },
                 result = task::spawn(self.clone().init_tcp()) => {
@@ -707,6 +715,10 @@ impl MixedSocket {
                             udp_kill
                         }
                     }
+                },
+                _ = time::sleep(self.tcp_timeout) => {
+                    println!("UDP Timeout: Took too long to establish TCP connection to receive message with ID {}", query_id);
+                    return self.cleanup_query(query_id).await;
                 },
             },
         };
@@ -1096,7 +1108,7 @@ async fn read_udp_message(udp_socket: Arc<UdpSocket>) -> io::Result<Message> {
     let received_byte_count = udp_socket.recv(&mut buffer).await?;
 
     // Step 3: Deserialize the Message received on UDP socket.
-    let mut wire = ReadWire::from_bytes(&mut buffer[..received_byte_count]);
+    let mut wire = ReadWire::from_bytes(&buffer[..received_byte_count]);
     let message = match Message::from_wire_format(&mut wire) {
         Ok(message) => message,
         Err(wire_error) => return Err(io::Error::new(
