@@ -2,7 +2,7 @@ use std::{collections::HashMap, io::ErrorKind, net::SocketAddr, sync::{atomic::{
 
 use async_lib::awake_token::AwakeToken;
 use async_recursion::async_recursion;
-use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
+use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}, types::{base64::Base64, base_conversions::BaseConversions}};
 use socket2::{SockRef, TcpKeepalive};
 use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task, time};
 
@@ -20,7 +20,7 @@ struct InFlight { send_response: broadcast::Sender<Message> }
 
 enum TcpState {
     Managed(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>),
-    Establishing(broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>),
+    Establishing(broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>, Arc<AwakeToken>),
     None,
     Blocked,
 }
@@ -244,7 +244,7 @@ impl MixedSocket {
 
                 tcp_kill.awake();
             },
-            TcpState::Establishing(_) => panic!("TCP listener exists but TcpState is TcpState::Establishing"),
+            TcpState::Establishing(_, _) => panic!("TCP listener exists but TcpState is TcpState::Establishing"),
             TcpState::None => (),
             TcpState::Blocked => (),
         }
@@ -305,22 +305,45 @@ impl MixedSocket {
     #[inline]
     pub async fn shutdown_tcp(self: Arc<Self>) -> io::Result<()> {
         let r_tcp = self.tcp_shared.read().await;
-        if let TcpState::Managed(tcp_socket, tcp_kill) = &r_tcp.state {
-            let tcp_socket = tcp_socket.clone();
-            let tcp_kill = tcp_kill.clone();
-            drop(r_tcp);
-            
-            println!("Shutting down TCP socket {}", self.upstream_socket);
-            let w_tcp_socket = tcp_socket.lock().await;
-            SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
-            drop(w_tcp_socket);
+        match &r_tcp.state {
+            TcpState::Managed(tcp_socket, tcp_kill) => {
+                let tcp_socket = tcp_socket.clone();
+                let tcp_kill = tcp_kill.clone();
+                drop(r_tcp);
+                
+                println!("Shutting down TCP socket {}", self.upstream_socket);
+                let w_tcp_socket = tcp_socket.lock().await;
+                SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
+                drop(w_tcp_socket);
+    
+                tcp_kill.awake();
+    
+                // Note: this task is not responsible for actual cleanup. Once the listener closes, it
+                // will kill any active queries and change the TcpState.
+            },
+            TcpState::Establishing(sender, tcp_init_kill) => {
+                let mut receiver = sender.subscribe();
+                let tcp_init_kill = tcp_init_kill.clone();
+                drop(r_tcp);
 
-            tcp_kill.awake();
+                // Try to prevent the socket from being initialized.
+                tcp_init_kill.awake();
 
-            // Note: this task is not responsible for actual cleanup. Once the listener closes, it
-            // will kill any active queries and change the TcpState.
-        } else {
-            drop(r_tcp);
+                // If the socket still initialized, shut it down immediately.
+                match receiver.recv().await {
+                    Ok((tcp_socket, tcp_kill)) => {
+                        println!("Shutting down TCP socket {}", self.upstream_socket);
+                        let w_tcp_socket = tcp_socket.lock().await;
+                        SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
+                        drop(w_tcp_socket);
+
+                        tcp_kill.awake();
+                    },
+                    Err(_) => (),   //< Nothing to do, no connection established.
+                }
+            },
+            TcpState::None => drop(r_tcp),
+            TcpState::Blocked => drop(r_tcp),
         }
         Ok(())
     }
@@ -397,13 +420,27 @@ impl MixedSocket {
 
                 Ok(())
             },
-            TcpState::Establishing(sender) => {
+            TcpState::Establishing(sender, tcp_init_kill) => {
                 let mut receiver = sender.subscribe();
+                let tcp_init_kill = tcp_init_kill.clone();
                 drop(w_tcp);
 
-                // We don't care about the result, we just need to know that a connection has been
-                // established so we can no recurse and kill it.
-                let _ = receiver.recv().await;
+                // Try to prevent the socket from being initialized.
+                tcp_init_kill.awake();
+
+                // If the socket still initialized, shut it down immediately.
+                match receiver.recv().await {
+                    Ok((tcp_socket, tcp_kill)) => {
+                        println!("Shutting down TCP socket {}", self.upstream_socket);
+                        let w_tcp_socket = tcp_socket.lock().await;
+                        SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
+                        drop(w_tcp_socket);
+
+                        tcp_kill.awake();
+                    },
+                    Err(_) => (),   //< Nothing to do, no connection established.
+                }
+
                 self.disable_tcp().await
             },
             TcpState::None => {
@@ -454,7 +491,7 @@ impl MixedSocket {
         let mut w_tcp = self.tcp_shared.write().await;
         match &w_tcp.state {
             TcpState::Managed(_, _) => (),      //< Already enabled
-            TcpState::Establishing(_) => (),    //< Already enabled
+            TcpState::Establishing(_, _) => (), //< Already enabled
             TcpState::None => (),               //< Already enabled
             TcpState::Blocked => w_tcp.state = TcpState::None,
         }
@@ -497,8 +534,6 @@ impl MixedSocket {
         let udp_writer = udp_socket;
         let udp_kill = Arc::new(AwakeToken::new());
 
-        let listener = task::spawn(self.clone().listen_udp(udp_reader, udp_kill.clone()));
-
         // Since there is no intermediate state while the UDP socket is being
         // set up and the lock is dropped, it is possible that another process
         // was doing the same task.
@@ -506,18 +541,18 @@ impl MixedSocket {
         let mut w_udp = self.udp_shared.write().await;
         match &w_udp.state {
             UdpState::Managed(existing_udp_socket, _) => {
-                listener.abort();
                 return Ok((existing_udp_socket.clone(), udp_kill.clone()));
             },
             UdpState::None => {
                 w_udp.state = UdpState::Managed(udp_writer.clone(), udp_kill.clone());
+                drop(w_udp);
+                task::spawn(self.clone().listen_udp(udp_reader, udp_kill.clone()));
             },
             UdpState::Blocked => {
                 drop(w_udp);
                 return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
             },
         }
-        drop(w_udp);
 
         return Ok((udp_writer, udp_kill));
     }
@@ -528,7 +563,7 @@ impl MixedSocket {
         let r_tcp = self.tcp_shared.read().await;
         match &r_tcp.state {
             TcpState::Managed(tcp_socket, udp_kill) => return Ok((tcp_socket.clone(), udp_kill.clone())),
-            TcpState::Establishing(sender) => {
+            TcpState::Establishing(sender, _) => {
                 let mut receiver = sender.subscribe();
                 drop(r_tcp);
                 match receiver.recv().await {
@@ -546,12 +581,13 @@ impl MixedSocket {
 
         // Setup for once the write lock is obtained.
         let (tcp_socket_sender, _) = broadcast::channel(1);
+        let tcp_init_kill = Arc::new(AwakeToken::new());
 
         // Need to re-verify state with new lock. State could have changed in between.
         let mut w_tcp = self.tcp_shared.write().await;
         match &w_tcp.state {
             TcpState::Managed(tcp_socket, udp_kill) => return Ok((tcp_socket.clone(), udp_kill.clone())),
-            TcpState::Establishing(sender) => {
+            TcpState::Establishing(sender, _) => {
                 let mut receiver = sender.subscribe();
                 drop(w_tcp);
                 match receiver.recv().await {
@@ -566,7 +602,7 @@ impl MixedSocket {
             },
         }
 
-        w_tcp.state = TcpState::Establishing(tcp_socket_sender.clone());
+        w_tcp.state = TcpState::Establishing(tcp_socket_sender.clone(), tcp_init_kill.clone());
         drop(w_tcp);
         println!("Initializing TCP connection to {}", self.upstream_socket);
 
@@ -574,25 +610,35 @@ impl MixedSocket {
         // in charge of establishing the TCP connection. Next time the write
         // lock is obtained, it won't need to check the state.
 
-        let tcp_socket = match TcpStream::connect(self.upstream_socket).await {
-            Ok(tcp_socket) => tcp_socket,
-            Err(error) => {
-                eprintln!("Failed to establish TCP connection to {}", self.upstream_socket);
-
-                // Before returning, we must ensure that the "Establishing" status gets cleared
-                // since we failed to establish the connection.
-                let mut w_tcp = self.tcp_shared.write().await;
-                w_tcp.state = TcpState::None;
-                drop(w_tcp);
-
+        let tcp_socket = select! {
+            _ = tcp_init_kill.clone().awoken() => {
+                eprintln!("Failed to establish TCP connection to {} (Canceled)", self.upstream_socket);
                 // Notify all of the waiters by dropping the sender. This
                 // causes the receivers to receiver an error.
-
-                // It might be worth adding another state that blocks future TCP connections.
                 drop(tcp_socket_sender);
-                return Err(error);
+                return Err(io::Error::from(io::ErrorKind::ConnectionAborted))
+            },
+            tcp_socket = TcpStream::connect(self.upstream_socket) => match tcp_socket {
+                Ok(tcp_socket) => tcp_socket,
+                Err(error) => {
+                    eprintln!("Failed to establish TCP connection to {} ({error})", self.upstream_socket);
+    
+                    // Before returning, we must ensure that the "Establishing" status gets cleared
+                    // since we failed to establish the connection.
+                    let mut w_tcp = self.tcp_shared.write().await;
+                    w_tcp.state = TcpState::None;
+                    drop(w_tcp);
+    
+                    // Notify all of the waiters by dropping the sender. This
+                    // causes the receivers to receiver an error.
+    
+                    // It might be worth adding another state that blocks future TCP connections.
+                    drop(tcp_socket_sender);
+                    return Err(error);
+                },
             },
         };
+
         // Keep-alive configs
         let keep_alive = TcpKeepalive::new()
             .with_time(Duration::from_secs(2))
@@ -604,13 +650,13 @@ impl MixedSocket {
         };
         let (tcp_reader, tcp_writer) = tcp_socket.into_split();
         let tcp_writer = Arc::new(Mutex::new(tcp_writer));
-        let tcp_kill = Arc::new(AwakeToken::new());
-
-        task::spawn(self.clone().listen_tcp(tcp_reader, tcp_kill.clone()));
+        let tcp_kill = tcp_init_kill;
 
         let mut w_tcp = self.tcp_shared.write().await;
         w_tcp.state = TcpState::Managed(tcp_writer.clone(), tcp_kill.clone());
         drop(w_tcp);
+
+        task::spawn(self.clone().listen_tcp(tcp_reader, tcp_kill.clone()));
 
         let _ = tcp_socket_sender.send((tcp_writer.clone(), tcp_kill.clone()));
 
@@ -938,7 +984,7 @@ impl MixedSocket {
                 drop(r_tcp);
                 return self.query_tcp(tcp_socket, tcp_kill, query).await;
             },
-            TcpState::Establishing(tcp_socket_sender) => {
+            TcpState::Establishing(tcp_socket_sender, _) => {
                 let mut tcp_socket_receiver = tcp_socket_sender.subscribe();
                 drop(r_tcp);
                 match tcp_socket_receiver.recv().await {
@@ -1063,12 +1109,12 @@ impl MixedSocket {
             },
 
             // Only TCP is allowed
-            (QueryOptions::TcpOnly, _, _, TcpState::None | TcpState::Establishing(_) | TcpState::Managed(_, _)) => {
+            (QueryOptions::TcpOnly, _, _, TcpState::None | TcpState::Establishing(_, _) | TcpState::Managed(_, _)) => {
                 drop(r_udp);
                 self.query_tcp_rsocket(r_tcp, query).await?
             },
             // Too many UDP timeouts, a TCP socket is still being setup or already exists.
-            (QueryOptions::Both, 4.., _, TcpState::Establishing(_) | TcpState::Managed(_, _)) => {
+            (QueryOptions::Both, 4.., _, TcpState::Establishing(_, _) | TcpState::Managed(_, _)) => {
                 drop(r_udp);
                 self.query_tcp_rsocket(r_tcp, query).await?
             },
@@ -1086,7 +1132,7 @@ impl MixedSocket {
                 drop(r_tcp);
                 self.query_udp_rsocket(r_udp, query).await?
             },
-            (QueryOptions::Both, _, UdpState::Blocked, TcpState::None | TcpState::Establishing(_) | TcpState::Managed(_, _)) => {
+            (QueryOptions::Both, _, UdpState::Blocked, TcpState::None | TcpState::Establishing(_, _) | TcpState::Managed(_, _)) => {
                 drop(r_udp);
                 self.query_tcp_rsocket(r_tcp, query).await?
             },
