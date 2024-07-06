@@ -1,7 +1,31 @@
 use std::{collections::HashMap, future::Future, sync::{atomic::{AtomicU8, AtomicUsize, Ordering}, Arc, Mutex}, task::{Poll, Waker}};
 
+/// A state in which the token has not yet been awoken. In this state, wakers
+/// can be added to the `waker` map and they will be awoken if the state
+/// changes to `STATE_AWAKE`.
 const STATE_WAIT: u8 = 0;
+/// A state in which the token has been awoken. No additional wakers should be
+/// added to `wakers`.
 const STATE_AWAKE: u8 = 1;
+
+#[repr(u8)]
+enum State {
+    /// Equivalent to `STATE_WAIT`
+    Wait = STATE_WAIT,
+    /// Equivalent to `STATE_AWAKE`
+    Awake = STATE_AWAKE,
+}
+
+impl From<u8> for State {
+    #[inline]
+    fn from(value: u8) -> Self {
+        match value {
+            STATE_WAIT => State::Wait,
+            STATE_AWAKE => State::Awake,
+            err_state => panic!("The awake token was in a state of neither being WAIT ({STATE_WAIT}) nor AWAKE ({STATE_AWAKE}). State was {err_state}"),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct IdGenerator {
@@ -16,7 +40,7 @@ impl IdGenerator {
 
     #[inline]
     fn next(&self) -> usize {
-        self.next_id.fetch_add(1, Ordering::SeqCst)
+        self.next_id.fetch_add(1, Ordering::AcqRel)
     }
 }
 
@@ -31,7 +55,7 @@ impl AwakeToken {
     #[inline]
     pub fn new() -> Self {
         Self {
-            state: AtomicU8::new(STATE_WAIT),
+            state: AtomicU8::new(State::Wait as u8),
             id_gen: IdGenerator::new(),
             wakers: Mutex::new(HashMap::new()),
         }
@@ -39,41 +63,31 @@ impl AwakeToken {
 
     #[inline]
     pub fn awake(&self) {
-        match self.state.swap(STATE_AWAKE, Ordering::SeqCst) {
-            STATE_WAIT => {
-                // Note that we don't need to worry about any future tasks awaiting `AwokenToken`
-                // fighting for the `wakers` lock because the state was set to AWAKE during the
-                // atomic swap.
+        match State::from(self.state.swap(State::Awake as u8, Ordering::AcqRel)) {
+            State::Wait => {
                 let mut l_wakers = self.wakers.lock().unwrap();
                 for (_waker_id, waker) in l_wakers.drain() {
                     waker.wake();
                 }
-                // This map is never going to be used again. The heap allocated memory can be freed.
-                // However, need to wait until all the references to this `AwakeToken` have been
-                // dropped before dropping the rest of the object.
-                l_wakers.shrink_to(0);
                 drop(l_wakers);
             },
-            STATE_AWAKE => (),   // Already awake, cannot be awoken twice.
-            err_state => panic!("The awake token was in a state of neither being WAIT ({STATE_WAIT}) nor AWAKE ({STATE_AWAKE}). State was {err_state}"),
+            State::Awake => (),   // Already awake, cannot be awoken twice.
         };
     }
 
     #[inline]
     pub fn awoken(self: Arc<Self>) -> AwokenToken {
-        match self.state.load(Ordering::SeqCst) {
-            STATE_WAIT => AwokenToken { state: AwokenState::Fresh { awake_token: self } },
-            STATE_AWAKE => AwokenToken { state: AwokenState::Awoken },
-            err_state => panic!("The awake token was in a state of neither being WAIT ({STATE_WAIT}) nor AWAKE ({STATE_AWAKE}). State was {err_state}"),
+        match State::from(self.state.load(Ordering::Acquire)) {
+            State::Wait => AwokenToken { state: AwokenState::Fresh { awake_token: self } },
+            State::Awake => AwokenToken { state: AwokenState::Awoken },
         }
     }
 
     #[inline]
-    pub fn try_awoken(self: Arc<Self>) -> bool {
-        match self.state.load(Ordering::SeqCst) {
-            STATE_WAIT => false,
-            STATE_AWAKE => true,
-            err_state => panic!("The awake token was in a state of neither being WAIT ({STATE_WAIT}) nor AWAKE ({STATE_AWAKE}). State was {err_state}"),
+    pub fn try_awoken(&self) -> bool {
+        match State::from(self.state.load(Ordering::Acquire)) {
+            State::Wait => false,
+            State::Awake => true,
         }
     }
 }
@@ -96,8 +110,8 @@ impl<'a> Future for AwokenToken {
     #[inline]
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         match &self.state {
-            AwokenState::Fresh { awake_token } => match awake_token.state.load(Ordering::SeqCst) {
-                STATE_WAIT => {
+            AwokenState::Fresh { awake_token } => match State::from(awake_token.state.load(Ordering::Acquire)) {
+                State::Wait => {
                     // FIXME: this could cause problems if all possible IDs already exist. It will
                     //        get stuck in an infinite loop.
                     let mut id = awake_token.id_gen.next();
@@ -108,41 +122,57 @@ impl<'a> Future for AwokenToken {
                     l_waiters.insert(id, cx.waker().clone());
                     drop(l_waiters);
 
-                    // State Change: Fresh --> Registered
-                    self.state = AwokenState::Registered { awake_token: awake_token.clone(), waker_id: id };
-                    Poll::Pending
+                    // Need to double check that the state was not switched
+                    // while we were waiting for the lock.
+                    match State::from(awake_token.state.load(Ordering::Acquire)) {
+                        State::Wait => {
+                            // State Change: Fresh --> Registered
+                            self.state = AwokenState::Registered { awake_token: awake_token.clone(), waker_id: id };
+                            Poll::Pending
+                        },
+                        State::Awake => {
+                            // State Change: Fresh --> Awoken
+                            self.state = AwokenState::Awoken;
+                            Poll::Ready(())
+                        },
+                    }
                 },
-                STATE_AWAKE => {
+                State::Awake => {
                     // State Change: Registered --> Awoken
                     self.state = AwokenState::Awoken;
                     Poll::Ready(())
                 },
-                err_state => panic!("The awake token was in a state of neither being WAIT ({STATE_WAIT}) nor AWAKE ({STATE_AWAKE}). State was {err_state}"),
             },
-            AwokenState::Registered { awake_token, waker_id } => match awake_token.state.load(Ordering::SeqCst) {
-                // There is a weird case where the future gets re-polled, but is still alive.
-                // This probably should not happen since the waker should only get woken if the
-                // state was set to `STATE_AWAKE`. However, if it does happen for some reason, we
-                // want to handle it gracefully by re-registering.
-                // It can re-use the same id it was given before too, since it will be overwriting
+            AwokenState::Registered { awake_token, waker_id } => match State::from(awake_token.state.load(Ordering::Acquire)) {
+                // There is a case where the future gets re-polled, but is still alive.
+                // It can re-use the same id it was given before, since it will be overwriting
                 // the previous entry.
-                STATE_WAIT => {
+                State::Wait => {
                     let mut l_waiters = awake_token.wakers.lock().unwrap();
                     match l_waiters.get_mut(waker_id) {
-                        Some(waker) => waker.clone_from(cx.waker()),
-                        None => { l_waiters.insert(*waker_id, cx.waker().clone()); },
-                    }
-                    drop(l_waiters);
+                        Some(waker) => {
+                            waker.clone_from(cx.waker());
+                            drop(l_waiters);
 
-                    // State Unchanged: Registered --> Registered
-                    Poll::Pending
+                            // State Unchanged: Registered --> Registered
+                            Poll::Pending
+                        },
+                        None => {
+                            // This case occurs if the state changed to Awake
+                            // while we were trying to acquire the lock.
+                            drop(l_waiters);
+
+                            // State Unchanged: Registered --> Ready
+                            self.state = AwokenState::Awoken;
+                            Poll::Ready(())
+                        },
+                    }
                 },
-                STATE_AWAKE => {
+                State::Awake => {
                     // State Change: Registered --> Awoken
                     self.state = AwokenState::Awoken;
                     Poll::Ready(())
                 },
-                err_state => panic!("The awake token was in a state of neither being WAIT ({STATE_WAIT}) nor AWAKE ({STATE_AWAKE}). State was {err_state}"),
             },
             AwokenState::Awoken => Poll::Ready(()),
         }
