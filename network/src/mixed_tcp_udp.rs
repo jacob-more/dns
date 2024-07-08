@@ -1336,3 +1336,170 @@ async fn read_tcp_message(tcp_stream: &mut OwnedReadHalf) -> io::Result<Message>
 
     return Ok(message);
 }
+
+#[cfg(test)]
+mod mixed_udp_tcp_tests {
+    use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, time::Duration};
+
+    use dns_lib::{query::{message::Message, qr::QR, question::Question}, resource_record::{opcode::OpCode, rclass::RClass, rcode::RCode, resource_record::{RRHeader, ResourceRecord}, rtype::RType, time::Time, types::a::A}, serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire}, types::c_domain_name::CDomainName};
+    use tinyvec::TinyVec;
+    use tokio::{io::AsyncReadExt, select};
+    use ux::u3;
+
+    use crate::mixed_tcp_udp::{MixedSocket, QueryOptions};
+
+    const LISTEN_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 65000);
+    const SEND_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 65000);
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn udp_manager_no_responses() {
+        // Setup
+        let listen_udp_socket = tokio::net::UdpSocket::bind(LISTEN_ADDR).await.unwrap();
+        let listen_tcp_socket = tokio::net::TcpListener::bind(LISTEN_ADDR).await.unwrap();
+
+        let example_domain = CDomainName::from_utf8("example.org.").unwrap();
+        let example_class = RClass::Internet;
+
+        let question = Question::new(
+            example_domain.clone(),
+            RType::A,
+            RClass::Internet
+        );
+        let answer = ResourceRecord::A(
+            RRHeader::new(example_domain, example_class, Time::from_secs(3600)),
+            A::new(Ipv4Addr::LOCALHOST),
+        );
+        let query = Message {
+            id: 42,
+            qr: QR::Query,
+            opcode: OpCode::Query,
+            authoritative_answer: false,
+            truncation: false,
+            recursion_desired: false,
+            recursion_available: false,
+            z: u3::new(0),
+            rcode: RCode::NoError,
+            question: TinyVec::from([question.clone()]),
+            answer: vec![],
+            authority: vec![],
+            additional: vec![],
+        };
+        let response = Message {
+            id: 42,
+            qr: QR::Response,
+            opcode: OpCode::Query,
+            authoritative_answer: false,
+            truncation: false,
+            recursion_desired: false,
+            recursion_available: false,
+            z: u3::new(0),
+            rcode: RCode::NoError,
+            question: TinyVec::from([question.clone()]),
+            answer: vec![answer],
+            authority: vec![],
+            additional: vec![],
+        };
+
+        let mixed_socket = MixedSocket::new(SEND_ADDR);
+
+        // Test: Start Query
+        let query_task = tokio::spawn(mixed_socket.clone().query(query.clone(), QueryOptions::Both));
+
+        // Test: Receiver first query (no response + no TCP)
+        let mut buffer = [0_u8; 512];
+        let bytes_read = select! {
+            bytes_read = listen_udp_socket.recv(&mut buffer) => bytes_read,
+            () = tokio::time::sleep(Duration::from_secs(1)) => {
+                panic!("Did not receive first message in time.")
+            },
+        };
+        assert!(bytes_read.is_ok());
+        let bytes_read = bytes_read.unwrap();
+        assert!(bytes_read <= query.serial_length() as usize);
+
+        let mut wire = ReadWire::from_bytes(&buffer[..(bytes_read as usize)]);
+        let actual_query = Message::from_wire_format(&mut wire);
+        assert!(actual_query.is_ok());
+        let actual_query = actual_query.unwrap();
+        let mut expected_query = query.clone();
+        expected_query.id = actual_query.id;
+        assert_eq!(actual_query, expected_query);
+
+        tokio::time::sleep(Duration::from_millis(125)).await;
+
+        // Test: Receiver second query (no response)
+        let mut buffer = [0_u8; 512];
+        let bytes_read = select! {
+            bytes_read = listen_udp_socket.recv(&mut buffer) => bytes_read,
+            () = tokio::time::sleep(Duration::from_secs(1)) => {
+                panic!("Did not receive second message in time.")
+            },
+        };
+        assert!(bytes_read.is_ok());
+        let bytes_read = bytes_read.unwrap();
+        assert!(bytes_read <= query.serial_length() as usize);
+
+        let mut wire = ReadWire::from_bytes(&buffer[..(bytes_read as usize)]);
+        let actual_query = Message::from_wire_format(&mut wire);
+        assert!(actual_query.is_ok());
+        let actual_query = actual_query.unwrap();
+        assert_eq!(actual_query, expected_query);   //< no ID change allowed for same query
+
+        // Test: TCP Connection is requested
+        let tcp_receiver = select! {
+            tcp_receiver = listen_tcp_socket.accept() => tcp_receiver,
+            () = tokio::time::sleep(Duration::from_secs(1)) => {
+                panic!("Did not receive TCP connection request in time.")
+            },
+        };
+        assert!(tcp_receiver.is_ok());
+        let mut tcp_receiver = tcp_receiver.unwrap().0;
+
+        // Test: TCP request is not yet made
+        let mut buffer = [0_u8; 512];
+        let bytes_read = tcp_receiver.try_read(&mut buffer);
+        assert!(bytes_read.is_err());
+
+        tokio::time::sleep(Duration::from_millis(125)).await;
+
+        // Test: TCP request
+        let mut buffer = [0_u8; 2];
+        let bytes_read = select! {
+            bytes_read = tcp_receiver.read_exact(&mut buffer) => bytes_read,
+            () = tokio::time::sleep(Duration::from_secs(1)) => {
+                panic!("Did not receive third message in time (size bytes).")
+            },
+        };
+        assert!(bytes_read.is_ok());
+        let bytes_read = bytes_read.unwrap();
+        assert_eq!(bytes_read, 2);
+        let expected_bytes = u16::from_be_bytes(buffer);
+        assert!(expected_bytes <= query.serial_length());
+
+        let mut buffer = [0_u8; 512];
+        let bytes_read = select! {
+            bytes_read = tcp_receiver.read_exact(&mut buffer[..(expected_bytes as usize)]) => bytes_read,
+            () = tokio::time::sleep(Duration::from_secs(1)) => {
+                panic!("Did not receive third message in time (message bytes).")
+            },
+        };
+        assert!(bytes_read.is_ok());
+        let bytes_read = bytes_read.unwrap();
+        assert_eq!(bytes_read, expected_bytes as usize);
+
+        let mut wire = ReadWire::from_bytes(&buffer[..(expected_bytes as usize)]);
+        let actual_query = Message::from_wire_format(&mut wire);
+        assert!(actual_query.is_ok());
+        let actual_query = actual_query.unwrap();
+        assert_eq!(actual_query, expected_query);   //< no ID change allowed for same query
+
+        // Test: Client connection failed
+        let query_task_response = query_task.await;
+        assert!(query_task_response.is_ok());   //< JoinError
+        let query_task_response = query_task_response.unwrap();
+        assert!(query_task_response.is_err());   //< io error
+
+        // Cleanup
+        assert!(mixed_socket.disable_both().await.is_ok());
+    }
+}
