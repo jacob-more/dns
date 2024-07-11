@@ -57,7 +57,7 @@ impl InternalSocketManager {
                 socket.reset_recent_messages_sent_and_received();
                 true
             } else {
-                tokio::task::spawn(socket.clone().shutdown_both());
+                tokio::task::spawn(socket.clone().disable_both());
                 socket.reset_recent_messages_sent_and_received();
                 println!("GC: Removing {address} from socket manager");
                 false

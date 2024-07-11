@@ -1213,7 +1213,7 @@ impl MixedSocket {
         drop(w_in_flight);
     }
 
-    pub async fn query(self: Arc<Self>, query: Message, options: QueryOptions) -> io::Result<Message> {
+    pub async fn query(self: Arc<Self>, query: Message, options: QueryOptions, timeout: Option<Duration>, kill_token: Option<Arc<AwakeToken>>) -> io::Result<Message> {
         let self_lock_1 = self.clone();
         let self_lock_2 = self.clone();
         let (r_udp, r_tcp) = join!(
@@ -1263,10 +1263,43 @@ impl MixedSocket {
                 self.query_tcp_rsocket(r_tcp, query).await?
             },
         };
-        match receiver.recv().await {
-            Ok(response) => return Ok(response),
-            Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
-        };
+
+        match (timeout, kill_token) {
+            (None, None) => match receiver.recv().await {
+                Ok(response) => return Ok(response),
+                Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
+            },
+            (None, Some(kill_token)) => select! {
+                response = receiver.recv() => match response {
+                    Ok(response) => return Ok(response),
+                    Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
+                },
+                () = kill_token.awoken() => {
+                    return Err(io::Error::from(io::ErrorKind::Other))
+                },
+            },
+            (Some(timeout), None) => select! {
+                response = receiver.recv() => match response {
+                    Ok(response) => return Ok(response),
+                    Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
+                },
+                () = tokio::time::sleep(timeout) => {
+                    return Err(io::Error::from(io::ErrorKind::TimedOut))
+                },
+            },
+            (Some(timeout), Some(kill_token)) => select! {
+                response = receiver.recv() => match response {
+                    Ok(response) => return Ok(response),
+                    Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
+                },
+                () = tokio::time::sleep(timeout) => {
+                    return Err(io::Error::from(io::ErrorKind::TimedOut))
+                },
+                () = kill_token.awoken() => {
+                    return Err(io::Error::from(io::ErrorKind::Other))
+                },
+            },
+        }
     }
 }
 
@@ -1403,7 +1436,7 @@ mod mixed_udp_tcp_tests {
         let mixed_socket = MixedSocket::new(SEND_ADDR);
 
         // Test: Start Query
-        let query_task = tokio::spawn(mixed_socket.clone().query(query.clone(), QueryOptions::Both));
+        let query_task = tokio::spawn(mixed_socket.clone().query(query.clone(), QueryOptions::Both, None, None));
 
         // Test: Receiver first query (no response + no TCP)
         let mut buffer = [0_u8; 512];
