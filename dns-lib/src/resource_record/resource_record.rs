@@ -12,6 +12,11 @@ pub struct RRHeader {
 }
 
 impl RRHeader {
+    #[inline]
+    pub fn new(name: CDomainName, rclass: RClass, ttl: Time) -> Self {
+        Self { name, rclass, ttl }
+    }
+
     /// A less strict version of equality. If two records match, that means that
     /// the records have the following equalities:
     /// 

@@ -244,7 +244,7 @@ impl<'a, Records: 'a> Iterator for TreeChildIterator<'a, Records> {
                 self.current_child_iter = Some(Box::new(TreeChildIterator::new(next_child)));
                 self.next()
             },
-            (None, Some(self_node)) => {
+            (None, Some(_)) => {
                 let self_node = self.self_node;
                 self.self_node = None;
                 self_node

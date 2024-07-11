@@ -1,5 +1,4 @@
-use dns_lib::{interface::cache::{cache::Cache, transaction_cache::TransactionCache, main_cache::MainCache}, query::{message::Message, qr::QR}, resource_record::{rcode::RCode, opcode::OpCode}};
-use ux::u3;
+use dns_lib::interface::cache::{cache::Cache, main_cache::MainCache, transaction_cache::TransactionCache, CacheQuery, CacheRecord, CacheResponse};
 
 use super::{main_cache::MainTreeCache, transaction_cache::TransactionTreeCache};
 
@@ -19,89 +18,26 @@ impl<'a> TreeCache<'a> {
 }
 
 impl<'a> Cache for TreeCache<'a> {
-    fn get(&self, query: &Message) -> Message {
-        let mut transaction_response = self.transaction_cache.get(query);
+    fn get(&self, query: &CacheQuery) -> CacheResponse {
+        let transaction_response = self.transaction_cache.get(query);
         let main_response = self.main_cache.get(query);
-        match (transaction_response.rcode, main_response.rcode) {
-            (RCode::NoError, RCode::NoError) => {
-                Message {
-                    id: query.id,
-                    qr: QR::Response,
-                    opcode: OpCode::Query,
-                    authoritative_answer: transaction_response.authoritative_answer && main_response.authoritative_answer,
-                    truncation: transaction_response.authoritative_answer || main_response.authoritative_answer,
-                    recursion_desired: query.recursion_desired,
-                    recursion_available: false,
-                    z: u3::new(0),
-                    rcode: RCode::NoError,
-                    question: transaction_response.question,
-                    answer: {
-                        for main_record in main_response.answer {
-                            if !transaction_response.answer.iter().any(|transaction_record| main_record.matches(transaction_record)) {
-                                transaction_response.answer.push(main_record);
-                            }
-                        }
-                        transaction_response.answer
-                    },
-                    authority: {
-                        for main_record in main_response.authority {
-                            if !transaction_response.authority.iter().any(|transaction_record| main_record.matches(transaction_record)) {
-                                transaction_response.authority.push(main_record);
-                            }
-                        }
-                        transaction_response.authority
-                    },
-                    additional: {
-                        for main_record in main_response.additional {
-                            if !transaction_response.additional.iter().any(|transaction_record| main_record.matches(transaction_record)) {
-                                transaction_response.additional.push(main_record);
-                            }
-                        }
-                        transaction_response.additional
-                    },
-                }
-            },
-            (RCode::NoError, _) => {
-                Message {
-                    id: query.id,
-                    qr: QR::Response,
-                    opcode: OpCode::Query,
-                    authoritative_answer: transaction_response.authoritative_answer,
-                    truncation: transaction_response.authoritative_answer,
-                    recursion_desired: query.recursion_desired,
-                    recursion_available: false,
-                    z: u3::new(0),
-                    rcode: RCode::NoError,
-                    question: transaction_response.question,
-                    answer: transaction_response.answer,
-                    authority: transaction_response.authority,
-                    additional: transaction_response.additional,
-                }
-            },
+        match (transaction_response, main_response) {
             // Note: The transaction cache CANNOT return an error, otherwise the overall response is
             // an error since it may hold critical records.
-            (transaction_rcode, _) => {
-                Message {
-                    id: query.id,
-                    qr: QR::Response,
-                    opcode: OpCode::Query,
-                    authoritative_answer: transaction_response.authoritative_answer && main_response.authoritative_answer,
-                    truncation: transaction_response.authoritative_answer || main_response.authoritative_answer,
-                    recursion_desired: query.recursion_desired,
-                    recursion_available: false,
-                    z: u3::new(0),
-                    rcode: transaction_rcode,
-                    question: transaction_response.question,
-                    answer: vec![],
-                    authority: vec![],
-                    additional: vec![],
-                }
+            (CacheResponse::Err(rcode), _) => CacheResponse::Err(rcode),
+
+            (CacheResponse::Records(mut transaction_records), CacheResponse::Records(main_records)) => {
+                transaction_records.extend(main_records);
+                CacheResponse::Records(transaction_records)
             },
+            (transaction_records @ CacheResponse::Records(_), CacheResponse::Err(_)) => transaction_records,
+
         }
     }
-
-    fn insert(&mut self, records: &Message) {
-        self.transaction_cache.insert(records);
-        self.main_cache.insert(records);
+    
+    fn insert_record(&mut self, record: CacheRecord) {
+        self.transaction_cache.insert_record(record.clone());
+        self.main_cache.insert_record(record);
     }
+
 }

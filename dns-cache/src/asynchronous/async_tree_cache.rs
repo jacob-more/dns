@@ -1,7 +1,8 @@
-use std::{collections::HashMap, error::Error, fmt::Display, sync::Arc};
+use std::{collections::{HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
 
-use dns_lib::{resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{Label, CDomainName}, query::question::Question};
-use tokio::sync::RwLock;
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, Label}};
+use futures::StreamExt;
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum AsyncTreeCacheError {
@@ -32,7 +33,7 @@ pub struct TreeNode<Records> {
     pub records: MappedRecords<Records>,
 }
 
-impl<Records> AsyncTreeCache<Records> {
+impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
     #[inline]
     pub fn new() -> Self {
         Self { root_nodes: RwLock::new(HashMap::new()) }
@@ -202,5 +203,57 @@ impl<Records> AsyncTreeCache<Records> {
         let result = write_children.remove(&qlabels[0]);
         drop(write_children);
         return Ok(result);
+    }
+
+    async fn get_subdomains(node: Arc<TreeNode<Records>>) -> HashSet<Vec<Label>> {
+        let read_node_children = node.children.read().await;
+        let node_children = read_node_children.clone();
+        drop(read_node_children);
+
+        let children_names = Arc::new(Mutex::new(HashSet::new()));
+        futures::stream::iter(node_children.into_iter()).for_each_concurrent(None, |(label, child)| {
+            let children_names = children_names.clone();
+            async move {
+                let subdomain_names = Self::get_subdomains(child).await;
+                let mut write_children_names = children_names.lock().await;
+                write_children_names.extend(
+                    subdomain_names.into_iter().map(|mut subdomain_name| {subdomain_name.push(label.clone()); subdomain_name})
+                );
+                write_children_names.insert(vec![label]);
+                drop(write_children_names);
+                drop(children_names);
+            }
+        }).await;
+
+        Arc::into_inner(children_names)
+            .expect("The `children_names` did not get dropped")
+            .into_inner()
+    }
+
+    pub async fn get_domains(&self) -> HashSet<CDomainName> {
+        let read_root_node = self.root_nodes.read().await;        
+        let root_nodes = read_root_node.clone();
+        drop(read_root_node);
+
+        let domains = Arc::new(Mutex::new(HashSet::new()));
+        futures::stream::iter(root_nodes.into_iter()).for_each_concurrent(None, |(_, root_node)| {
+            let domains = domains.clone();
+            async move {
+                let subdomain_names = Self::get_subdomains(root_node).await;
+                let mut write_domains = domains.lock().await;
+                write_domains.extend(
+                    subdomain_names.into_iter()
+                        .map(|mut subdomain_name| {subdomain_name.push(Label::new_root()); subdomain_name})
+                        .map(|domain_name| CDomainName::from_labels(domain_name.as_slice()))
+                );
+                write_domains.insert(CDomainName::new_root());
+                drop(write_domains);
+                drop(domains);
+            }
+        }).await;
+
+        Arc::into_inner(domains)
+            .expect("The `domains` did not get dropped")
+            .into_inner()
     }
 }

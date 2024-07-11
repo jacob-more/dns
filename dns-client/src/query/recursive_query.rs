@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use dns_lib::{query::{question::Question, message::Message}, resource_record::{resource_record::ResourceRecord, rcode::RCode, rtype::RType}, interface::cache::{cache::AsyncCache, main_cache::AsyncMainCache}, types::c_domain_name::CDomainName};
+use dns_lib::{interface::cache::{cache::AsyncCache, main_cache::AsyncMainCache, CacheQuery, CacheResponse}, query::question::Question, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
 use rand::{thread_rng, seq::SliceRandom};
 
 use crate::{query::round_robin_query::query_name_servers, DNSAsyncClient};
@@ -18,14 +18,16 @@ pub(crate) enum QueryResponse<T> {
 #[async_recursion]
 pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, question: &Question) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync {
     println!("Start: Recursive Search for '{question}'");
-    let cache_response = client.cache.get(&Message::from(question)).await;
+    let cache_response: dns_lib::interface::cache::CacheResponse = client.cache.get(&CacheQuery {
+        authoritative: false,
+        question: question.clone(),
+    }).await;
     // Initial Cache Check: Check to see if the records we're looking for are already cached.
-    match (cache_response.rcode_flag(), cache_response.answer().len()) {
-        (RCode::NoError, 0) => (),
-        (RCode::NoError, 1..) => return QueryResponse::Records(cache_response.answer),
-        (RCode::NXDomain, _) => return QueryResponse::Error(RCode::NXDomain),
-        (_, _) => (),
-    }
+    match cache_response {
+        CacheResponse::Records(records) if (records.len() == 0) => (),
+        CacheResponse::Records(records) => return QueryResponse::Records(records.into_iter().map(|cache_record| cache_record.record).collect()),
+        CacheResponse::Err(rcode) => return QueryResponse::Error(rcode),
+    };
 
     // Discovery Stage: See if we have name servers that handle one of the parent domains of the
     // qname.
@@ -118,11 +120,14 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
 }
 
 pub async fn query_cache<CCache>(joined_cache: &Arc<CCache>, question: &Question) -> QueryResponse<ResourceRecord> where CCache: AsyncCache {
-    let response = joined_cache.get(&Message::from(question)).await;
-    match (response.rcode_flag(), response.answer().len()) {
-        (RCode::NoError, 0) => QueryResponse::NoRecords,
-        (RCode::NoError, 1..) => QueryResponse::Records(response.answer),
-        (error, _) => QueryResponse::Error(error.clone())
+    let response = joined_cache.get(&CacheQuery {
+        authoritative: false,
+        question: question.clone(),
+    }).await;
+    match response {
+        CacheResponse::Records(records) if (records.len() == 0) => QueryResponse::NoRecords,
+        CacheResponse::Records(records) => QueryResponse::Records(records.into_iter().map(|cache_record| cache_record.record).collect()),
+        CacheResponse::Err(rcode) => QueryResponse::Error(rcode),
     }
 }
 
