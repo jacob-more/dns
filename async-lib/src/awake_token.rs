@@ -110,14 +110,12 @@ impl NeighborPtr {
         self.in_use.fetch_add(1, Ordering::Release);
         let arc_ptr = match NonNull::new(self.neighbor.load(Ordering::Acquire)) {
             Some(neighbor_ptr) => {
-                match unsafe { neighbor_ptr.as_ref() } {
-                    AwokenState::Registered { awake_token: _, waker: _, left: _, ref_count: neighbor_ref_count, right: _ } => {
-                        neighbor_ref_count.fetch_add(1, Ordering::Release);
-                    },
-                    AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
-                    AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
-                }
-                Some(ArcAwokenState { ptr: neighbor_ptr })
+                // We have incremented the `in_use` counter. That indicates
+                // that whatever is being pointed to cannot be deallocated
+                // until that counter is decremented.
+                unsafe { neighbor_ptr.ref_count() }.fetch_add(1, Ordering::Release);
+                let neighbor_ptr = unsafe { ArcAwokenState::from_ptr(neighbor_ptr) };
+                Some(neighbor_ptr)
             },
             None => None,
         };
@@ -139,71 +137,41 @@ impl NeighborPtr {
     }
 }
 
-fn state_waker(state: &NonNull<AwokenState>) -> &Mutex<Waker> {
-    match unsafe { state.as_ref() } {
-        AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
-        AwokenState::Registered { awake_token: _, waker, left: _, ref_count: _, right: _ } => waker,
-        AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
-    }
+trait RegisteredState {
+    fn waker(&self) -> &Mutex<Waker>;
+    fn ref_count(&self) -> &AtomicUsize;
+    fn awake_token(&self) -> &AwakeToken;
+    fn left(&self) -> &AtomicPtr<AwokenState>;
+    fn right(&self) -> &NeighborPtr;
 }
 
-fn state_ref_count(state: &NonNull<AwokenState>) -> &AtomicUsize {
-    match unsafe { state.as_ref() } {
-        AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
-        AwokenState::Registered { awake_token: _, waker: _, left: _, ref_count, right: _ } => ref_count,
-        AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
-    }
+trait UnsafeRegisteredState {
+    unsafe fn waker(&self) -> &Mutex<Waker>;
+    unsafe fn ref_count(&self) -> &AtomicUsize;
+    unsafe fn awake_token(&self) -> &AwakeToken;
+    unsafe fn left(&self) -> &AtomicPtr<AwokenState>;
+    unsafe fn right(&self) -> &NeighborPtr;
 }
 
-fn state_left(state: &NonNull<AwokenState>) -> &AtomicPtr<AwokenState> {
-    match unsafe { state.as_ref() } {
-        AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
-        AwokenState::Registered { awake_token: _, waker: _, left, ref_count: _, right: _ } => left,
-        AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
-    }
-}
-
-fn state_right(state: &NonNull<AwokenState>) -> &NeighborPtr {
-    match unsafe { state.as_ref() } {
-        AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
-        AwokenState::Registered { awake_token: _, waker: _, left: _, ref_count: _, right } => right,
-        AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
-    }
-}
-
-/// A reference counted pointer to a node in the ALinkedList. Where possible, this is used to ensure
-/// that reference counts are always decremented when a reference counted pointer is dropped.
-struct ArcAwokenState {
-    ptr: NonNull<AwokenState>
-}
-
-impl ArcAwokenState {
-    fn waker(&self) -> &Mutex<Waker> {
-        state_waker(&self.ptr)
+impl UnsafeRegisteredState for NonNull<AwokenState> {
+    unsafe fn waker(&self) -> &Mutex<Waker> {
+        unsafe { self.as_ref() }.waker()
     }
 
-    fn ref_count(&self) -> &AtomicUsize {
-        state_ref_count(&self.ptr)
+    unsafe fn ref_count(&self) -> &AtomicUsize {
+        unsafe { self.as_ref() }.ref_count()
     }
 
-    fn left(&self) -> &AtomicPtr<AwokenState> {
-        state_left(&self.ptr)
+    unsafe fn awake_token(&self) -> &AwakeToken {
+        unsafe { self.as_ref() }.awake_token()
     }
 
-    fn right(&self) -> &NeighborPtr {
-        state_right(&self.ptr)
+    unsafe fn left(&self) -> &AtomicPtr<AwokenState> {
+        unsafe { self.as_ref() }.left()
     }
-}
 
-impl Drop for ArcAwokenState {
-    fn drop(&mut self) {
-        match unsafe { self.ptr.as_ref() } {
-            AwokenState::Registered { awake_token: _, waker: _, left: _, ref_count: self_ref_count, right: _ } => {
-                self_ref_count.fetch_sub(1, Ordering::Release);
-            },
-            AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
-            AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
-        }
+    unsafe fn right(&self) -> &NeighborPtr {
+        unsafe { self.as_ref() }.right()
     }
 }
 
@@ -240,7 +208,7 @@ enum AwokenState {
     Awoken,
 }
 
-impl AwokenState {
+impl RegisteredState for AwokenState {
     fn waker(&self) -> &Mutex<Waker> {
         match &self {
             AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
@@ -248,7 +216,7 @@ impl AwokenState {
             AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
         }
     }
-    
+
     fn ref_count(&self) -> &AtomicUsize {
         match &self {
             AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
@@ -256,7 +224,7 @@ impl AwokenState {
             AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
         }
     }
-    
+
     fn awake_token(&self) -> &AwakeToken {
         match &self {
             AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
@@ -264,7 +232,7 @@ impl AwokenState {
             AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
         }
     }
-    
+
     fn left(&self) -> &AtomicPtr<AwokenState> {
         match &self {
             AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
@@ -272,13 +240,65 @@ impl AwokenState {
             AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
         }
     }
-    
+
     fn right(&self) -> &NeighborPtr {
         match &self {
             AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
             AwokenState::Registered { awake_token: _, waker: _, left: _, ref_count: _, right } => right,
             AwokenState::Awoken => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Awoken"),
         }
+    }
+}
+
+/// A reference counted pointer to a node in the ALinkedList. Where possible, this is used to ensure
+/// that reference counts are always decremented when a reference counted pointer is dropped.
+struct ArcAwokenState {
+    ptr: NonNull<AwokenState>
+}
+
+impl ArcAwokenState {
+    /// The pointer must be associated with a reference count. Creating the
+    /// ArcAwokenState from a pointer passes the responsibility of decrementing
+    /// the reference count to the ArcAwokenState.
+    unsafe fn from_ptr(ptr: NonNull<AwokenState>) -> Self { Self { ptr } }
+    fn as_ptr(&self) -> *mut AwokenState { self.ptr.as_ptr() }
+}
+
+impl RegisteredState for ArcAwokenState {
+    fn waker(&self) -> &Mutex<Waker> {
+        // The pointer is reference counted. As long as we hold this reference,
+        // the value is guaranteed to exist.
+        unsafe { self.ptr.waker() }
+    }
+
+    fn ref_count(&self) -> &AtomicUsize {
+        // The pointer is reference counted. As long as we hold this reference,
+        // the value is guaranteed to exist.
+        unsafe { self.ptr.ref_count() }
+    }
+
+    fn awake_token(&self) -> &AwakeToken {
+        // The pointer is reference counted. As long as we hold this reference,
+        // the value is guaranteed to exist.
+        unsafe { self.ptr.awake_token() }
+    }
+
+    fn left(&self) -> &AtomicPtr<AwokenState> {
+        // The pointer is reference counted. As long as we hold this reference,
+        // the value is guaranteed to exist.
+        unsafe { self.ptr.left() }
+    }
+
+    fn right(&self) -> &NeighborPtr {
+        // The pointer is reference counted. As long as we hold this reference,
+        // the value is guaranteed to exist.
+        unsafe { self.ptr.right() }
+    }
+}
+
+impl Drop for ArcAwokenState {
+    fn drop(&mut self) {
+        self.ref_count().fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -297,6 +317,10 @@ impl AwokenToken {
         // it points to.
         match NonNull::new(self.state.left().swap(null_mut(), Ordering::AcqRel)) {
             Some(self_left) => {
+                // We are taking ownership of the reference counted left
+                // pointer. We are responsible for decrementing so we'll wrap
+                // it in a type to indicate that.
+                let self_left = unsafe { ArcAwokenState::from_ptr(self_left) };
                 let mut removed_refs = 0;
 
                 // If the node to our right is also doing a `remove()` operation, we should wait for
@@ -309,7 +333,7 @@ impl AwokenToken {
                             // It's ok to post-increment the ref count because we our holding a
                             // reference to `left` that is reference counted so it cannot be
                             // deallocated before we drop that reference.
-                            state_ref_count(&self_left).fetch_add(1, Ordering::AcqRel);
+                            self_left.ref_count().fetch_add(1, Ordering::AcqRel);
                             removed_refs += 1;
                             self_right = Some(self_right_current);
                             break;
@@ -322,7 +346,7 @@ impl AwokenToken {
                         // It's ok to post-increment the ref count because we our holding a
                         // reference to `left` that is reference counted so it cannot be deallocated
                         // before we drop that reference.
-                        state_ref_count(&self_left).fetch_add(1, Ordering::AcqRel);
+                        self_left.ref_count().fetch_add(1, Ordering::AcqRel);
                         removed_refs += 1;
                         self_right = None;
                         break;
@@ -337,13 +361,11 @@ impl AwokenToken {
                         // actually several nodes before you still.
                         // Need to wait until it points to yourself before you can move on.
                         self_right.ref_count().fetch_add(1, Ordering::AcqRel);
-                        while let Err(_) = state_right(&self_left).neighbor.compare_exchange(self_addr, self_right.ptr.as_ptr(), Ordering::AcqRel, Ordering::Relaxed) {
+                        while let Err(_) = self_left.right().neighbor.compare_exchange(self_addr, self_right.ptr.as_ptr(), Ordering::AcqRel, Ordering::Relaxed) {
                             spin_loop();
                         }
                         removed_refs += 1;
-
-                        state_ref_count(&self_left).fetch_sub(1, Ordering::AcqRel);
-                        let _ = self_left;  //< We decremented ref count. No longer safe to us.
+                        drop(self_left);
 
                         // At this point, there is no way to reach us from our neighbors.
                         // `head` and `tail` cannot point to us because we were an interior node and
@@ -369,13 +391,11 @@ impl AwokenToken {
                         // still being removed, your `self_left` variable may point to a node that
                         // actually several nodes before you still.
                         // Need to wait until it points to yourself before you can move on.
-                        while let Err(_) = state_right(&self_left).neighbor.compare_exchange(self_addr, null_mut(), Ordering::AcqRel, Ordering::Relaxed) {
+                        while let Err(_) = self_left.right().neighbor.compare_exchange(self_addr, null_mut(), Ordering::AcqRel, Ordering::Relaxed) {
                             spin_loop();
                         }
                         removed_refs += 1;
-
-                        state_ref_count(&self_left).fetch_sub(1, Ordering::AcqRel);
-                        let _ = self_left;  //< We decremented ref count. No longer safe to us.
+                        drop(self_left);
 
                         // At this point, there is no way to reach us from our neighbors.
                         // `head` and `tail` cannot point to us because we were not the leftmost
@@ -538,7 +558,11 @@ impl<'a> Future for AwokenToken {
                             // Note: Reference counts accounted for at start.
                             self.state.left().store(left_neighbor_ptr.as_ptr(), Ordering::Release);
                             // Now need to add ourself as their neighbor.
-                            while let Err(_) = state_right(&left_neighbor_ptr).neighbor.compare_exchange(null_mut(), self_addr, Ordering::AcqRel, Ordering::Relaxed) {
+                            // We just stored our reference to the token to the
+                            // left. Only neighbors to our left can modify our
+                            // left pointer. So, our reference is safe until
+                            // the left neighbors `right` pointer is updated.
+                            while let Err(_) = unsafe { left_neighbor_ptr.right() }.neighbor.compare_exchange(null_mut(), self_addr, Ordering::AcqRel, Ordering::Relaxed) {
                                 spin_loop();
                             }
                         },
