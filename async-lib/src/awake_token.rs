@@ -1,4 +1,4 @@
-use std::{future::Future, hint::spin_loop, ptr::{addr_of_mut, null_mut, NonNull}, sync::{atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering}, Arc, Mutex}, task::{Poll, Waker}};
+use std::{future::Future, hint::spin_loop, mem, ptr::{addr_of_mut, null_mut, NonNull}, sync::{atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering}, Arc, Mutex}, task::{Poll, Waker}};
 
 /// A state in which the token has not yet been awoken. In this state, wakers
 /// can be added to the `waker` map and they will be awoken if the state
@@ -30,7 +30,7 @@ impl From<u8> for State {
 #[derive(Debug)]
 struct ALinkedList {
     head: NeighborPtr,
-    tail: AtomicPtr<AwokenState>,
+    tail: AtomicArcAwokenState,
 }
 
 #[derive(Debug)]
@@ -46,7 +46,7 @@ impl AwakeToken {
             state: AtomicU8::new(State::Wait as u8),
             wakers: ALinkedList {
                 head: NeighborPtr::new(),
-                tail: AtomicPtr::new(null_mut()),
+                tail: AtomicArcAwokenState::new_null(),
             },
         }
     }
@@ -69,7 +69,7 @@ impl AwakeToken {
 
     #[inline]
     pub fn awoken(self: Arc<Self>) -> AwokenToken {
-        match State::from(self.state.load(Ordering::Acquire)) {
+        match State::from(self.state.load(Ordering::Relaxed)) {
             State::Wait => AwokenToken { state: AwokenState::Fresh { awake_token: self } },
             State::Awake => AwokenToken { state: AwokenState::Awoken },
         }
@@ -77,62 +77,9 @@ impl AwakeToken {
 
     #[inline]
     pub fn try_awoken(&self) -> bool {
-        match State::from(self.state.load(Ordering::Acquire)) {
+        match State::from(self.state.load(Ordering::Relaxed)) {
             State::Wait => false,
             State::Awake => true,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct NeighborPtr {
-    /// The number of nodes actively following this pointer who have not yet updated the reference
-    /// count at the node it points to. This will prevent this pointer from being dropped before the
-    /// neighbor's reference count can be incremented.
-    in_use: AtomicUsize,
-    /// A pointer to a neighboring node. Can be null.
-    neighbor: AtomicPtr<AwokenState>,
-}
-
-impl NeighborPtr {
-    /// Creates a struct representing a pointer to a neighbor. The `neighbor` is null and `in_use`
-    /// is set to `0`.
-    fn new() -> Self {
-        Self {
-            in_use: AtomicUsize::new(0),
-            neighbor: AtomicPtr::new(null_mut()),
-        }
-    }
-
-    /// Follows the neighbor pointer safely, incrementing and decrementing reference counts as
-    /// needed.
-    fn follow(&self) -> Option<ArcAwokenState>{
-        self.in_use.fetch_add(1, Ordering::Release);
-        let arc_ptr = match NonNull::new(self.neighbor.load(Ordering::Acquire)) {
-            Some(neighbor_ptr) => {
-                // We have incremented the `in_use` counter. That indicates
-                // that whatever is being pointed to cannot be deallocated
-                // until that counter is decremented.
-                unsafe { neighbor_ptr.ref_count() }.fetch_add(1, Ordering::Release);
-                let neighbor_ptr = unsafe { ArcAwokenState::from_ptr(neighbor_ptr) };
-                Some(neighbor_ptr)
-            },
-            None => None,
-        };
-        self.in_use.fetch_sub(1, Ordering::Release);
-        arc_ptr
-    }
-
-    /// Wait for this pointer to not be in use. This is used to prevent anyone from getting stuck in
-    /// a state where they have loaded the pointer but then the thing it pointed to got deallocated.
-    /// After changing the the underlying pointer, this should be called to make sure everyone has
-    /// acquired their proper reference counts.
-    /// It's worth noting that this may result in you waiting on people referencing whatever you
-    /// swapped this neighbor ptr with. But this is safer than the alternative where you deallocate
-    /// memory and then they try to reference it.
-    fn wait(&self) {
-        while self.in_use.load(Ordering::Acquire) > 0 {
-            spin_loop();
         }
     }
 }
@@ -141,7 +88,7 @@ trait RegisteredState {
     fn waker(&self) -> &Mutex<Waker>;
     fn ref_count(&self) -> &AtomicUsize;
     fn awake_token(&self) -> &AwakeToken;
-    fn left(&self) -> &AtomicPtr<AwokenState>;
+    fn left(&self) -> &AtomicArcAwokenState;
     fn right(&self) -> &NeighborPtr;
 }
 
@@ -149,7 +96,7 @@ trait UnsafeRegisteredState {
     unsafe fn waker(&self) -> &Mutex<Waker>;
     unsafe fn ref_count(&self) -> &AtomicUsize;
     unsafe fn awake_token(&self) -> &AwakeToken;
-    unsafe fn left(&self) -> &AtomicPtr<AwokenState>;
+    unsafe fn left(&self) -> &AtomicArcAwokenState;
     unsafe fn right(&self) -> &NeighborPtr;
 }
 
@@ -166,7 +113,7 @@ impl UnsafeRegisteredState for NonNull<AwokenState> {
         unsafe { self.as_ref() }.awake_token()
     }
 
-    unsafe fn left(&self) -> &AtomicPtr<AwokenState> {
+    unsafe fn left(&self) -> &AtomicArcAwokenState {
         unsafe { self.as_ref() }.left()
     }
 
@@ -192,7 +139,7 @@ enum AwokenState {
         /// The linked list's head pointer might be null (not point at this node) during some
         /// transition times so this is the only reliable way to know if this node is the head.
         /// This pointer can only be used by the node that owns it.
-        left: AtomicPtr<AwokenState>,
+        left: AtomicArcAwokenState,
         /// Counts the number of other pointers to this node. When all paths into this node have
         /// been removed and this counter has reached zero, it is safe to drop or replace this
         /// memory.
@@ -233,7 +180,7 @@ impl RegisteredState for AwokenState {
         }
     }
 
-    fn left(&self) -> &AtomicPtr<AwokenState> {
+    fn left(&self) -> &AtomicArcAwokenState {
         match &self {
             AwokenState::Fresh { awake_token: _ } => panic!("The AwokenToken's state must be Registered to be a part of the linked list but it was Fresh"),
             AwokenState::Registered { awake_token: _, waker: _, left, ref_count: _, right: _ } => left,
@@ -252,6 +199,7 @@ impl RegisteredState for AwokenState {
 
 /// A reference counted pointer to a node in the ALinkedList. Where possible, this is used to ensure
 /// that reference counts are always decremented when a reference counted pointer is dropped.
+#[derive(Debug)]
 struct ArcAwokenState {
     ptr: NonNull<AwokenState>
 }
@@ -262,6 +210,7 @@ impl ArcAwokenState {
     /// the reference count to the ArcAwokenState.
     unsafe fn from_ptr(ptr: NonNull<AwokenState>) -> Self { Self { ptr } }
     fn as_ptr(&self) -> *mut AwokenState { self.ptr.as_ptr() }
+    fn as_non_null(&self) -> NonNull<AwokenState> { self.ptr }
 }
 
 impl RegisteredState for ArcAwokenState {
@@ -283,7 +232,7 @@ impl RegisteredState for ArcAwokenState {
         unsafe { self.ptr.awake_token() }
     }
 
-    fn left(&self) -> &AtomicPtr<AwokenState> {
+    fn left(&self) -> &AtomicArcAwokenState {
         // The pointer is reference counted. As long as we hold this reference,
         // the value is guaranteed to exist.
         unsafe { self.ptr.left() }
@@ -296,9 +245,197 @@ impl RegisteredState for ArcAwokenState {
     }
 }
 
+impl Clone for ArcAwokenState {
+    fn clone(&self) -> Self {
+        self.ref_count().fetch_add(1, Ordering::AcqRel);
+        unsafe { Self::from_ptr(self.ptr) }
+    }
+}
+
 impl Drop for ArcAwokenState {
     fn drop(&mut self) {
         self.ref_count().fetch_sub(1, Ordering::Release);
+    }
+}
+
+/// A reference counted pointer to a node in the ALinkedList. Where possible, this is used to ensure
+/// that reference counts are always decremented when a reference counted pointer is dropped.
+/// Unlike ArcAwokenState, this is intended for cases where the underlying pointer can be changed
+/// at any time. Fewer operations are provided because operations like `load` are inherently unsafe.
+#[derive(Debug)]
+struct AtomicArcAwokenState {
+    ptr: AtomicPtr<AwokenState>
+}
+
+impl AtomicArcAwokenState {
+    fn new_null() -> Self { Self { ptr: AtomicPtr::new(null_mut()) } }
+
+    /// The pointer must be associated with a reference count if it is
+    /// non-null. Creating themArcAwokenState from a pointer passes the
+    /// responsibility of decrementing the reference count to the
+    /// ArcAwokenState.
+    unsafe fn from_ptr(ptr: *mut AwokenState) -> Self { Self { ptr: AtomicPtr::new(ptr) } }
+
+    fn take(&self, ordering: Ordering) -> Option<ArcAwokenState> {
+        match NonNull::new(self.ptr.swap(null_mut(), ordering)) {
+            // Safety: We have swapped the ptr with a null. That means we are
+            // in charge of managing the pointer's reference count.
+            Some(ptr) => Some(unsafe { ArcAwokenState::from_ptr(ptr) }),
+            None => None,
+        }
+    }
+
+    fn swap(&self, new: Option<ArcAwokenState>, ordering: Ordering) -> Option<ArcAwokenState> {
+        match new {
+            Some(new) => {
+                let new_ptr = new.as_ptr();
+                mem::forget(new);
+                match NonNull::new(self.ptr.swap(new_ptr, ordering)) {
+                    // Safety: We have swapped the ptr with another reference
+                    // counted ptr. That means we are in charge of managing the
+                    // old pointer's reference count.
+                    Some(old_ptr) => Some(unsafe { ArcAwokenState::from_ptr(old_ptr) }),
+                    None => None,
+                }
+            },
+            None => self.take(ordering),
+        }
+    }
+
+    fn store(&self, new: Option<ArcAwokenState>, ordering: Ordering) {
+        // Like `swap`, but the result is dropped so that the reference counter
+        // is decremented if needed.
+        let _ = self.swap(new, ordering);
+    }
+
+    fn compare_exchange(&self, current: *mut AwokenState, new: Option<ArcAwokenState>, success: Ordering, failure: Ordering) -> Result<Option<ArcAwokenState>, (*mut AwokenState, Option<ArcAwokenState>)> {
+        match new {
+            Some(new) => {
+                let new_ptr = new.as_ptr();
+                match self.ptr.compare_exchange(current, new_ptr, success, failure) {
+                    // Safety: It is guaranteed that the Ok result is equal to
+                    // `current`. So, we will use the value in our local
+                    // `current` variable so that the compiler can optimize it
+                    // more easily.
+                    Ok(_) => {
+                        mem::forget(new);
+                        match NonNull::new(current) {
+                            Some(current) => Ok(Some(unsafe { ArcAwokenState::from_ptr(current) })),
+                            None => Ok(None),
+                        }
+                    },
+                    Err(actual) => Err((actual, Some(new))),
+                }
+            },
+            None => {
+                match self.ptr.compare_exchange(current, null_mut(), success, failure) {
+                    // Safety: It is guaranteed that the Ok result is equal to
+                    // `current`. So, we will use the value in our local
+                    // `current` variable so that the compiler can optimize it
+                    // more easily.
+                    Ok(_) => match NonNull::new(current) {
+                        Some(current) => Ok(Some(unsafe { ArcAwokenState::from_ptr(current) })),
+                        None => Ok(None),
+                    },
+                    Err(actual) => Err((actual, None)),
+                }
+            },
+        }
+    }
+
+    fn compare_exchange_spin_lock(&self, current: *mut AwokenState, mut new: Option<ArcAwokenState>, success: Ordering) -> Option<ArcAwokenState> {
+        loop {
+            match self.compare_exchange(current, new, success, Ordering::Relaxed) {
+                Ok(current) => return current,
+                Err((_, still_new)) => new = still_new,
+            }
+            spin_loop()
+        }
+    }
+}
+
+impl Drop for AtomicArcAwokenState {
+    fn drop(&mut self) {
+        // If we still point to something, load it and drop it.
+        // Since it is an `ArcAwokenState`, the reference count is
+        // automatically decremented.
+        // Otherwise, this just drops `None` which has no effect.
+        drop(self.take(Ordering::Acquire))
+    }
+}
+
+#[derive(Debug)]
+struct NeighborPtr {
+    /// The number of nodes actively following this pointer who have not yet updated the reference
+    /// count at the node it points to. This will prevent this pointer from being dropped before the
+    /// neighbor's reference count can be incremented.
+    in_use: AtomicUsize,
+    /// A pointer to a neighboring node. Can be null.
+    neighbor: AtomicArcAwokenState,
+}
+
+impl NeighborPtr {
+    /// Creates a struct representing a pointer to a neighbor. The `neighbor` is null and `in_use`
+    /// is set to `0`.
+    fn new() -> Self {
+        Self {
+            in_use: AtomicUsize::new(0),
+            neighbor: AtomicArcAwokenState::new_null(),
+        }
+    }
+
+    /// Follows the neighbor pointer safely, incrementing and decrementing reference counts as
+    /// needed.
+    fn follow(&self) -> Option<ArcAwokenState>{
+        self.in_use.fetch_add(1, Ordering::Acquire);
+        let arc_ptr = match NonNull::new(self.neighbor.ptr.load(Ordering::Acquire)) {
+            Some(neighbor_ptr) => {
+                // We have incremented the `in_use` counter. That indicates
+                // that whatever is being pointed to cannot be deallocated
+                // until that counter is decremented.
+                unsafe { neighbor_ptr.ref_count() }.fetch_add(1, Ordering::Acquire);
+                let neighbor_ptr = unsafe { ArcAwokenState::from_ptr(neighbor_ptr) };
+                Some(neighbor_ptr)
+            },
+            None => None,
+        };
+        // Use Relaxed because we have made no changes to the data that the
+        // neighbor ptr points to.
+        self.in_use.fetch_sub(1, Ordering::Relaxed);
+        arc_ptr
+    }
+
+    /// Wait for this pointer to not be in use. This is used to prevent anyone from getting stuck in
+    /// a state where they have loaded the pointer but then the thing it pointed to got deallocated.
+    /// After changing the the underlying pointer, this should be called to make sure everyone has
+    /// acquired their proper reference counts.
+    /// It's worth noting that this may result in you waiting on people referencing whatever you
+    /// swapped this neighbor ptr with. But this is safer than the alternative where you deallocate
+    /// memory and then they try to reference it.
+    fn wait(&self) {
+        while self.in_use.load(Ordering::Acquire) > 0 {
+            spin_loop();
+        }
+    }
+
+    fn take(&self, ordering: Ordering) -> Option<ArcAwokenState> {
+        self.neighbor.take(ordering)
+    }
+
+    fn swap(&self, new: Option<ArcAwokenState>, ordering: Ordering) -> Option<ArcAwokenState> {
+        self.neighbor.swap(new, ordering)
+    }
+
+    fn store(&self, new: Option<ArcAwokenState>, ordering: Ordering) {
+        self.neighbor.store(new, ordering)
+    }
+
+    fn compare_exchange(&self, current: *mut AwokenState, new: Option<ArcAwokenState>, success: Ordering, failure: Ordering) -> Result<Option<ArcAwokenState>, (*mut AwokenState, Option<ArcAwokenState>)> {
+        self.neighbor.compare_exchange(current, new, success, failure)
+    }
+
+    fn compare_exchange_spin_lock(&self, current: *mut AwokenState, new: Option<ArcAwokenState>, success: Ordering) -> Option<ArcAwokenState> {
+        self.neighbor.compare_exchange_spin_lock(current, new, success)
     }
 }
 
@@ -313,186 +450,121 @@ impl AwokenToken {
         let self_addr = addr_of_mut!(self.state);
         let awake_token = self.state.awake_token();
 
-        // If left is Some, then dropping it requires decrementing the reference count at the node
-        // it points to.
-        match NonNull::new(self.state.left().swap(null_mut(), Ordering::AcqRel)) {
-            Some(self_left) => {
-                // We are taking ownership of the reference counted left
-                // pointer. We are responsible for decrementing so we'll wrap
-                // it in a type to indicate that.
-                let self_left = unsafe { ArcAwokenState::from_ptr(self_left) };
-                let mut removed_refs = 0;
-
-                // If the node to our right is also doing a `remove()` operation, we should wait for
-                // them to update our right pointer.
-                let self_right;
-                loop {
-                    if let Some(self_right_current) = self.state.right().follow() {
-                        if let Ok(_) = self_right_current.left().compare_exchange(self_addr, self_left.as_ptr(), Ordering::AcqRel, Ordering::Relaxed) {
-                            // `next` now points to `left` instead of us.
-                            // It's ok to post-increment the ref count because we our holding a
-                            // reference to `left` that is reference counted so it cannot be
-                            // deallocated before we drop that reference.
-                            self_left.ref_count().fetch_add(1, Ordering::AcqRel);
-                            removed_refs += 1;
-                            self_right = Some(self_right_current);
-                            break;
-                        }
-                        drop(self_right_current);
-                    // If the node to our right was the tail, we may become the new tail.
-                    // We should try to make node before us the tail instead if that occurs.
-                    } else if let Ok(_) = awake_token.wakers.tail.compare_exchange(self_addr, self_left.as_ptr(), Ordering::AcqRel, Ordering::Relaxed) {
-                        // `tail` now has pointer to `left` instead of us.
-                        // It's ok to post-increment the ref count because we our holding a
-                        // reference to `left` that is reference counted so it cannot be deallocated
-                        // before we drop that reference.
-                        self_left.ref_count().fetch_add(1, Ordering::AcqRel);
-                        removed_refs += 1;
+        let self_left = self.state.left().swap(None, Ordering::Acquire);
+        let mut self_left_for_right = self_left.clone();
+        // If the node to our right is also doing a `remove()` operation, we should wait for
+        // them to update our right pointer.
+        let self_right;
+        loop {
+            if let Some(self_right_current) = self.state.right().follow() {
+                match self_right_current.left().compare_exchange(self_addr, self_left_for_right, Ordering::AcqRel, Ordering::Relaxed) {
+                    Ok(_) => {
+                        self_right = Some(self_right_current);
+                        break;
+                    },
+                    Err((_, self_left_for_right_again)) => self_left_for_right = self_left_for_right_again,
+                }
+                drop(self_right_current);
+            // If the node to our right was the tail, we may become the new tail.
+            // We should try to make node before us the tail instead if that occurs.
+            } else {
+                match awake_token.wakers.tail.compare_exchange(self_addr, self_left_for_right, Ordering::AcqRel, Ordering::Relaxed) {
+                    Ok(_) => {
                         self_right = None;
                         break;
-                    }
-                    spin_loop();
-                }
-
-                match self_right {
-                    Some(self_right) => {
-                        // Because you can acquire self_left while the node directly to your left is
-                        // still being removed, your `self_left` variable may point to a node that
-                        // actually several nodes before you still.
-                        // Need to wait until it points to yourself before you can move on.
-                        self_right.ref_count().fetch_add(1, Ordering::AcqRel);
-                        while let Err(_) = self_left.right().neighbor.compare_exchange(self_addr, self_right.ptr.as_ptr(), Ordering::AcqRel, Ordering::Relaxed) {
-                            spin_loop();
-                        }
-                        removed_refs += 1;
-                        drop(self_left);
-
-                        // At this point, there is no way to reach us from our neighbors.
-                        // `head` and `tail` cannot point to us because we were an interior node and
-                        // we modified references to our left and right to skip us.
-
-                        // Wait for anybody actively iterating through us to leave.
-                        while self.state.ref_count().load(Ordering::Acquire) > removed_refs {
-                            spin_loop();
-                        }
-                        // Wait for anybody actively iterating through us to have made it to the
-                        // next node.
-                        self.state.right().wait();
-
-                        // Clear paths to reach our neighbors.
-                        self.state.right().neighbor.store(null_mut(), Ordering::Release);
-                        // Clear reference count from our `right` value.
-                        self_right.ref_count().fetch_sub(1, Ordering::AcqRel);
-                        // Reference count from `self_right` is automatically dealt with.
-                        drop(self_right);
                     },
-                    None => {
-                        // Because you can acquire self_left while the node directly to your left is
-                        // still being removed, your `self_left` variable may point to a node that
-                        // actually several nodes before you still.
-                        // Need to wait until it points to yourself before you can move on.
-                        while let Err(_) = self_left.right().neighbor.compare_exchange(self_addr, null_mut(), Ordering::AcqRel, Ordering::Relaxed) {
-                            spin_loop();
-                        }
-                        removed_refs += 1;
-                        drop(self_left);
-
-                        // At this point, there is no way to reach us from our neighbors.
-                        // `head` and `tail` cannot point to us because we were not the leftmost
-                        // node and if `tail` did point to us, that was swapped during the first
-                        // spin lock.
-
-                        // Wait for anybody actively iterating through us to leave.
-                        while self.state.ref_count().load(Ordering::Acquire) > removed_refs {
-                            spin_loop();
-                        }
-                        // Wait for anybody actively iterating through us to have made it to the
-                        // next node.
-                        self.state.right().wait();
-
-                        // No neighbors to our right so we are all done.
-                    },
-                }
-            },
-            // Nobody to the left = we are head of list. Special case.
-            None => {
-                let mut removed_refs = 0;
-
-                // If the node to our right is also doing a `remove()` operation, we should
-                // wait for them to update our right pointer.
-                let self_right;
-                loop {
-                    if let Some(self_right_current) = self.state.right().follow() {
-                        if let Ok(_) = self_right_current.left().compare_exchange(self_addr, null_mut(), Ordering::AcqRel, Ordering::Relaxed) {
-                            // `next` now points to null instead of us. This makes them the
-                            // new head, although we have not yet updated the `head` to
-                            // reflect this change.
-                            removed_refs += 1;
-                            self_right = Some(self_right_current);
-                            break;
-                        }
-                        drop(self_right_current);
-                    // If the node to our right was the tail, we may become the new tail.
-                    // We should try to make node before us the tail instead if that occurs.
-                    } else if let Ok(_) = awake_token.wakers.tail.compare_exchange(self_addr, null_mut(), Ordering::AcqRel, Ordering::Relaxed) {
-                        // `tail` now has pointer to null instead of us.
-                        removed_refs += 1;
-                        self_right = None;
-                        break;
-                    }
-                    spin_loop();
-                }
-
-                match self_right {
-                    Some(self_right) => {
-                        while let Err(_) = awake_token.wakers.head.neighbor.compare_exchange(self_addr, self_right.ptr.as_ptr(), Ordering::AcqRel, Ordering::Relaxed) {
-                            spin_loop();
-                        }
-                        removed_refs += 1;
-
-                        // At this point, there is no way to reach us from our neighbors.
-
-                        // Wait for anybody actively acquiring a pointer to us to have
-                        // acquired a strong reference count.
-                        awake_token.wakers.head.wait();
-                        // Wait for anybody actively iterating through us to leave.
-                        while self.state.ref_count().load(Ordering::Acquire) > removed_refs {
-                            spin_loop();
-                        }
-                        // Wait for anybody actively iterating through us to have made it to
-                        // the next node.
-                        self.state.right().wait();
-
-                        // Clear paths to reach our neighbors.
-                        self.state.right().neighbor.store(null_mut(), Ordering::Release);
-                        // Clear reference count from our `right` value.
-                        self_right.ref_count().fetch_sub(1, Ordering::AcqRel);
-                        // Reference count from `self_right` is automatically dealt with.
-                        drop(self_right);
-                    },
-                    None => {
-                        while let Err(_) = awake_token.wakers.head.neighbor.compare_exchange(self_addr, null_mut(), Ordering::AcqRel, Ordering::Relaxed) {
-                            spin_loop();
-                        }
-                        removed_refs += 1;
-
-                        // At this point, there is no way to reach us from our neighbors.
-
-                        // Wait for anybody actively acquiring a pointer to us to have
-                        // acquired a strong reference count.
-                        awake_token.wakers.head.wait();
-                        // Wait for anybody actively iterating through us to leave.
-                        while self.state.ref_count().load(Ordering::Acquire) > removed_refs {
-                            spin_loop();
-                        }
-                        // Wait for anybody actively iterating through us to have made it to
-                        // the next node (in this case, null).
-                        self.state.right().wait();
-
-                        // No neighbors to our right so we are all done.
-                    },
+                    Err((_, self_left_for_right_again)) => self_left_for_right = self_left_for_right_again,
                 }
             }
+            spin_loop();
+        }
+
+        // If left is Some, then dropping it requires decrementing the reference count at the node
+        // it points to.
+        match (self_left, self_right) {
+            (Some(self_left), Some(self_right)) => {
+                // Because you can acquire self_left while the node directly to your left is
+                // still being removed, your `self_left` variable may point to a node that
+                // actually several nodes before you still.
+                // Need to wait until it points to yourself before you can move on.
+                self_left.right().compare_exchange_spin_lock(self_addr, Some(self_right), Ordering::AcqRel);
+                self_left.right().wait();
+                drop(self_left);
+
+                // At this point, there is no way to reach us from our neighbors.
+                // `head` and `tail` cannot point to us because we were an interior node and
+                // we modified references to our left and right to skip us.
+
+                // Wait for anybody actively iterating through us to leave.
+                while self.state.ref_count().load(Ordering::Acquire) > 0 {
+                    spin_loop();
+                }
+                // Wait for anybody actively iterating through us to have made it to the
+                // next node.
+                self.state.right().wait();
+                // Clear paths to reach our neighbors.
+                self.state.right().store(None, Ordering::Release);
+            },
+            (Some(self_left), None) => {
+                // Because you can acquire self_left while the node directly to your left is
+                // still being removed, your `self_left` variable may point to a node that
+                // actually several nodes before you still.
+                // Need to wait until it points to yourself before you can move on.
+                self_left.right().compare_exchange_spin_lock(self_addr, None, Ordering::AcqRel);
+                self_left.right().wait();
+                drop(self_left);
+
+                // At this point, there is no way to reach us from our neighbors.
+                // `head` and `tail` cannot point to us because we were not the leftmost
+                // node and if `tail` did point to us, that was swapped during the first
+                // spin lock.
+
+                // Wait for anybody actively iterating through us to leave.
+                while self.state.ref_count().load(Ordering::Acquire) > 0 {
+                    spin_loop();
+                }
+                // Wait for anybody actively iterating through us to have made it to the
+                // next node.
+                self.state.right().wait();
+                // No neighbors to our right so we are all done.
+            },
+            // Nobody to the left = we are head of list. Special case.
+            (None, Some(self_right)) => {
+                awake_token.wakers.head.compare_exchange_spin_lock(self_addr, Some(self_right), Ordering::AcqRel);
+
+                // At this point, there is no way to reach us from our neighbors.
+
+                // Wait for anybody actively acquiring a pointer to us to have
+                // acquired a strong reference count.
+                awake_token.wakers.head.wait();
+                // Wait for anybody actively iterating through us to leave.
+                while self.state.ref_count().load(Ordering::Acquire) > 0 {
+                    spin_loop();
+                }
+                // Wait for anybody actively iterating through us to have made it to
+                // the next node.
+                self.state.right().wait();
+                // Clear paths to reach our neighbors.
+                self.state.right().neighbor.store(None, Ordering::Release);
+            },
+            // Nobody to the left = we are head of list. Special case.
+            (None, None) => {
+                awake_token.wakers.head.compare_exchange_spin_lock(self_addr, None, Ordering::AcqRel);
+
+                // At this point, there is no way to reach us from our neighbors.
+
+                // Wait for anybody actively acquiring a pointer to us to have
+                // acquired a strong reference count.
+                awake_token.wakers.head.wait();
+                // Wait for anybody actively iterating through us to leave.
+                while self.state.ref_count().load(Ordering::Acquire) > 0 {
+                    spin_loop();
+                }
+                // Wait for anybody actively iterating through us to have made it to
+                // the next node (in this case, null).
+                self.state.right().wait();
+                // No neighbors to our right so we are all done.
+            },
         }
     }
 
@@ -523,7 +595,7 @@ impl<'a> Future for AwokenToken {
                     self.state = AwokenState::Registered {
                         awake_token: awake_token.clone(),
                         waker: Mutex::new(cx.waker().clone()),
-                        left: AtomicPtr::new(null_mut()),
+                        left: AtomicArcAwokenState::new_null(),
                         // Although we have not yet added the pointers that these reference
                         // counts are accounting for, we will shortly. This makes it so we don't
                         // need to add them later.
@@ -537,34 +609,33 @@ impl<'a> Future for AwokenToken {
                         right: NeighborPtr::new(),
                     };
                     let self_addr = addr_of_mut!(self.state);
+                    let arc_self1 = unsafe { ArcAwokenState::from_ptr(NonNull::new_unchecked(self_addr)) };
+                    let arc_self2 = unsafe { ArcAwokenState::from_ptr(NonNull::new_unchecked(self_addr)) };
 
                     // We own this pointer to our left neighbor even though it has not yet been
                     // added to our left pointer. Our neighbor's reference count already accounts
                     // for this reference since we took it directly from `tail`.
-                    let left_neighbor_ptr = NonNull::new(awake_token.wakers.tail.swap(self_addr, Ordering::AcqRel));
+                    let left_neighbor_ptr = awake_token.wakers.tail.swap(Some(arc_self1), Ordering::AcqRel);
                     match left_neighbor_ptr {
                         // Special case: If the tail was null, that means we are the first node
                         // in the list. Aka. we can also store our address for head. This brings
                         // us to a consistent state early.
                         None => {
                             // Note: Reference count accounted for at start.
-                            while let Err(_) = awake_token.wakers.head.neighbor.compare_exchange(null_mut(), self_addr, Ordering::AcqRel, Ordering::Relaxed) {
-                                spin_loop();
-                            }
+                            awake_token.wakers.head.compare_exchange_spin_lock(null_mut(), Some(arc_self2), Ordering::AcqRel);
                         },
                         // Normal case: There is a neighbor to our left that we need to finish
                         // connecting  ourself to.
-                        Some(left_neighbor_ptr) => {
+                        Some(left_neighbor) => {
                             // Note: Reference counts accounted for at start.
-                            self.state.left().store(left_neighbor_ptr.as_ptr(), Ordering::Release);
+                            let left_neighbor_ptr = left_neighbor.as_non_null();
+                            self.state.left().store(Some(left_neighbor), Ordering::Release);
                             // Now need to add ourself as their neighbor.
                             // We just stored our reference to the token to the
                             // left. Only neighbors to our left can modify our
                             // left pointer. So, our reference is safe until
                             // the left neighbors `right` pointer is updated.
-                            while let Err(_) = unsafe { left_neighbor_ptr.right() }.neighbor.compare_exchange(null_mut(), self_addr, Ordering::AcqRel, Ordering::Relaxed) {
-                                spin_loop();
-                            }
+                            unsafe { left_neighbor_ptr.right() }.compare_exchange_spin_lock(null_mut(), Some(arc_self2), Ordering::AcqRel);
                         },
                     }
 
