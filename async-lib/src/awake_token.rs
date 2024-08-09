@@ -1,4 +1,9 @@
-use std::{future::Future, hint::spin_loop, mem, ptr::{addr_of_mut, null_mut, NonNull}, sync::{atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering}, Arc, Mutex}, task::{Poll, Waker}};
+use std::{future::Future, hint::spin_loop, mem, ptr::{addr_of_mut, null_mut, NonNull}, sync::{atomic::{AtomicPtr, AtomicU8, AtomicUsize, Ordering}, Arc, Mutex}, task::{Poll, Waker}, thread::yield_now};
+
+
+const REMOVE_HEAD_YIELD_CPU_AFTER: u8 = 5;
+const REMOVE_BODY_YIELD_CPU_AFTER: u8 = 5;
+
 
 /// A state in which the token has not yet been awoken. In this state, wakers
 /// can be added to the `waker` map and they will be awoken if the state
@@ -520,6 +525,7 @@ impl AwokenToken {
             },
         }
 
+        let mut iters: u8 = 0;
         while wait_on_head || wait_self_left.is_some() || self.state.ref_count().load(Ordering::Acquire) > 0 {
             let self_left = self.state.left().swap(None, Ordering::Acquire);
             let self_right = self.state.right().follow();
@@ -593,7 +599,13 @@ impl AwokenToken {
                 wait_on_head = false;
             }
 
-            spin_loop();
+            if iters < REMOVE_BODY_YIELD_CPU_AFTER {
+                iters += 1;
+                spin_loop();
+            } else {
+                iters = 0;
+                yield_now();
+            }
         }
 
         // Wait for anybody actively iterating through us to have made it to the
@@ -638,6 +650,7 @@ impl AwokenToken {
             },
         }
 
+        let mut iters: u8 = 0;
         while wait_on_head || self.state.ref_count().load(Ordering::Acquire) > 0 {
             let self_right = self.state.right().follow();
             match self_right {
@@ -668,7 +681,13 @@ impl AwokenToken {
                 wait_on_head = false;
             }
 
-            spin_loop();
+            if iters < REMOVE_HEAD_YIELD_CPU_AFTER {
+                iters += 1;
+                spin_loop();
+            } else {
+                iters = 0;
+                yield_now();
+            }
         }
 
         // Wait for anybody actively iterating through us to have made it to the
@@ -745,7 +764,7 @@ impl<'a> Future for AwokenToken {
                             // left. Only neighbors to our left can modify our
                             // left pointer. So, our reference is safe until
                             // the left neighbors `right` pointer is updated.
-                            unsafe { left_neighbor_ptr.right() }.compare_exchange_spin_lock(null_mut(), Some(arc_self2), Ordering::AcqRel);
+                            unsafe { left_neighbor_ptr.right() }.store(Some(arc_self2), Ordering::Release);
                         },
                     }
 
