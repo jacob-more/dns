@@ -451,121 +451,231 @@ impl AwokenToken {
         let awake_token = self.state.awake_token();
 
         let self_left = self.state.left().swap(None, Ordering::Acquire);
-        let mut self_left_for_right = self_left.clone();
-        // If the node to our right is also doing a `remove()` operation, we should wait for
-        // them to update our right pointer.
-        let self_right;
-        loop {
-            if let Some(self_right_current) = self.state.right().follow() {
-                match self_right_current.left().compare_exchange(self_addr, self_left_for_right, Ordering::AcqRel, Ordering::Relaxed) {
-                    Ok(_) => {
-                        self_right = Some(self_right_current);
-                        break;
-                    },
-                    Err((_, self_left_for_right_again)) => self_left_for_right = self_left_for_right_again,
+        let self_right = self.state.right().follow();
+
+        match self_left {
+            Some(self_left) => {
+                if self_left.as_ptr() == self_addr {
+                    self.remove_as_awoken();
+                } else {
+                    self.remove_as_body(awake_token, self_addr, self_left, self_right)
                 }
-                drop(self_right_current);
-            // If the node to our right was the tail, we may become the new tail.
-            // We should try to make node before us the tail instead if that occurs.
-            } else {
-                match awake_token.wakers.tail.compare_exchange(self_addr, self_left_for_right, Ordering::AcqRel, Ordering::Relaxed) {
-                    Ok(_) => {
-                        self_right = None;
-                        break;
-                    },
-                    Err((_, self_left_for_right_again)) => self_left_for_right = self_left_for_right_again,
+            },
+            None => self.remove_as_head(awake_token, self_addr, self_right),
+        }
+    }
+
+    fn remove_as_awoken(&self) {
+        self.state.left().store(None, Ordering::Release);
+        self.state.right().store(None, Ordering::Release);
+        while self.state.ref_count().load(Ordering::Acquire) > 0 {
+            spin_loop();
+            self.state.left().store(None, Ordering::Release);
+            self.state.right().store(None, Ordering::Release);
+        }
+        self.state.right().wait();
+    }
+
+    fn remove_as_body(&self, awake_token: &AwakeToken, self_addr: *mut AwokenState, self_left: ArcAwokenState, self_right: Option<ArcAwokenState>) {
+        // Invariants:
+        // - No nodes can every be added before you in the list. They can only
+        //   be appended to the tail.
+        //   - We can use this to guarantee that if we pass the tail to a
+        //     pointer before us in the list, it will not come back to us.
+        //   - We can use this to guarantee that if you are the head of the
+        //     list, if any nodes exist before you, they are all being removed.
+
+        let mut wait_on_head = false;
+        let mut check_tail = true;
+        let mut check_head = true;
+        let mut check_rights_left = true;
+
+        self_left.right().store(self_right.clone(), Ordering::Release);
+        let mut wait_self_left;
+        if self_left.right().in_use.load(Ordering::Acquire) == 0 {
+            wait_self_left = None;
+        } else {
+            wait_self_left = Some(self_left.clone());
+        }
+
+        match self_right {
+            Some(self_right) => {
+                if self_right.as_ptr() == self_addr {
+                    // We are being woken up while being removed. The waking
+                    // function will clobber our left and right pointers.
+                    if let Some(self_left) = wait_self_left {
+                        self_left.right().wait();
+                    }
+                    return self.remove_as_awoken();
+                }
+                if let Err((_, self_left)) = self_right.left().compare_exchange(self_addr, Some(self_left), Ordering::Release, Ordering::Relaxed) {
+                    check_rights_left = self_right.left().compare_exchange(null_mut(), self_left, Ordering::Release, Ordering::Relaxed).is_err();
+                } else {
+                    check_rights_left = false;
+                }
+            },
+            None => {
+                // If we become the tail, try to pass it along.
+                check_tail = awake_token.wakers.tail.compare_exchange(self_addr, Some(self_left), Ordering::Release, Ordering::Relaxed).is_err();
+            },
+        }
+
+        while wait_on_head || wait_self_left.is_some() || self.state.ref_count().load(Ordering::Acquire) > 0 {
+            let self_left = self.state.left().swap(None, Ordering::Acquire);
+            let self_right = self.state.right().follow();
+            match (self_left, self_right) {
+                (None, self_right) => {
+                    if check_head && awake_token.wakers.head.compare_exchange(self_addr, self_right, Ordering::Release, Ordering::Relaxed).is_ok() {
+                        wait_on_head = true;
+                        check_head = false;
+                    }
+                    check_tail = check_tail && awake_token.wakers.tail.compare_exchange(self_addr, None, Ordering::Release, Ordering::Relaxed).is_err();
+                },
+                (Some(self_left), self_right) => {
+                    if self_left.as_ptr() == self_addr {
+                        // We are being woken up while being removed. The waking
+                        // function will clobber our left and right pointers.
+                        if let Some(wait_self_left) = wait_self_left {
+                            wait_self_left.right().wait();
+                        }
+                        if wait_on_head {
+                            awake_token.wakers.head.wait();
+                        }
+                        return self.remove_as_awoken();
+                    }
+
+                    self_left.right().store(self_right.clone(), Ordering::Release);
+                    if self_left.right().in_use.load(Ordering::Acquire) > 0 {
+                        // If `wait_self_left` is not being used, we can reuse that variable.
+                        // Otherwise, we'll need to wait.
+                        if let Some(wait_self_left) = wait_self_left {
+                            wait_self_left.right().wait();
+                        }
+                        wait_self_left = Some(self_left.clone())
+                    }
+
+                    match self_right {
+                        Some(self_right) => {
+                            if self_right.as_ptr() == self_addr {
+                                // We are being woken up while being removed. The waking
+                                // function will clobber our left and right pointers.
+                                if let Some(wait_self_left) = wait_self_left {
+                                    wait_self_left.right().wait();
+                                }
+                                if wait_on_head {
+                                    awake_token.wakers.head.wait();
+                                }
+                                return self.remove_as_awoken();
+                            }
+                            if check_rights_left {
+                                if let Err((_, self_left)) = self_right.left().compare_exchange(self_addr, Some(self_left), Ordering::Release, Ordering::Relaxed) {
+                                    check_rights_left = self_right.left().compare_exchange(null_mut(), self_left, Ordering::Release, Ordering::Relaxed).is_err();
+                                } else {
+                                    check_rights_left = false;
+                                }
+                            }
+                        },
+                        None => {
+                            // If we become the tail, try to pass it along.
+                            check_tail = check_tail && awake_token.wakers.tail.compare_exchange(self_addr, Some(self_left), Ordering::Release, Ordering::Relaxed).is_err();
+                        },
+                    }
+                },
+            }
+
+            if let Some(self_left) = &wait_self_left {
+                if self_left.right().in_use.load(Ordering::Acquire) == 0 {
+                    wait_self_left = None;
                 }
             }
+
+            if wait_on_head && (awake_token.wakers.head.in_use.load(Ordering::Acquire) == 0) {
+                wait_on_head = false;
+            }
+
             spin_loop();
         }
 
-        // If left is Some, then dropping it requires decrementing the reference count at the node
-        // it points to.
-        match (self_left, self_right) {
-            (Some(self_left), Some(self_right)) => {
-                // Because you can acquire self_left while the node directly to your left is
-                // still being removed, your `self_left` variable may point to a node that
-                // actually several nodes before you still.
-                // Need to wait until it points to yourself before you can move on.
-                self_left.right().compare_exchange_spin_lock(self_addr, Some(self_right), Ordering::AcqRel);
-                self_left.right().wait();
-                drop(self_left);
+        // Wait for anybody actively iterating through us to have made it to the
+        // next node.
+        self.state.right().wait();
+        // Clear paths to reach our neighbors.
+        self.state.right().store(None, Ordering::Release);
+    }
 
-                // At this point, there is no way to reach us from our neighbors.
-                // `head` and `tail` cannot point to us because we were an interior node and
-                // we modified references to our left and right to skip us.
+    fn remove_as_head(&self, awake_token: &AwakeToken, self_addr: *mut AwokenState, self_right: Option<ArcAwokenState>) {
+        // Invariants:
+        // - No nodes can every be added before you in the list. They can only
+        //   be appended to the tail.
+        //   - We can use this to guarantee that if we pass the tail to a
+        //     pointer before us in the list, it will not come back to us.
+        //   - We can use this to guarantee that if you are the head of the
+        //     list, if any nodes exist before you, they are all being removed.
 
-                // Wait for anybody actively iterating through us to leave.
-                while self.state.ref_count().load(Ordering::Acquire) > 0 {
-                    spin_loop();
+        let mut check_tail = true;
+        let mut check_rights_left = true;
+
+        awake_token.wakers.head.store(self_right.clone(), Ordering::Release);
+        let mut wait_on_head = true;
+
+        match self_right {
+            Some(self_right) => {
+                if self_right.as_ptr() == self_addr {
+                    // We are being woken up while being removed. The waking
+                    // function will clobber our left and right pointers.
+                    return self.remove_as_awoken();
                 }
-                // Wait for anybody actively iterating through us to have made it to the
-                // next node.
-                self.state.right().wait();
-                // Clear paths to reach our neighbors.
-                self.state.right().store(None, Ordering::Release);
+
+                if let Err((_, self_left)) = self_right.left().compare_exchange(self_addr, None, Ordering::Release, Ordering::Relaxed) {
+                    check_rights_left = self_right.left().compare_exchange(null_mut(), self_left, Ordering::Release, Ordering::Relaxed).is_err();
+                } else {
+                    check_rights_left = false;
+                }
             },
-            (Some(self_left), None) => {
-                // Because you can acquire self_left while the node directly to your left is
-                // still being removed, your `self_left` variable may point to a node that
-                // actually several nodes before you still.
-                // Need to wait until it points to yourself before you can move on.
-                self_left.right().compare_exchange_spin_lock(self_addr, None, Ordering::AcqRel);
-                self_left.right().wait();
-                drop(self_left);
-
-                // At this point, there is no way to reach us from our neighbors.
-                // `head` and `tail` cannot point to us because we were not the leftmost
-                // node and if `tail` did point to us, that was swapped during the first
-                // spin lock.
-
-                // Wait for anybody actively iterating through us to leave.
-                while self.state.ref_count().load(Ordering::Acquire) > 0 {
-                    spin_loop();
-                }
-                // Wait for anybody actively iterating through us to have made it to the
-                // next node.
-                self.state.right().wait();
-                // No neighbors to our right so we are all done.
-            },
-            // Nobody to the left = we are head of list. Special case.
-            (None, Some(self_right)) => {
-                awake_token.wakers.head.compare_exchange_spin_lock(self_addr, Some(self_right), Ordering::AcqRel);
-
-                // At this point, there is no way to reach us from our neighbors.
-
-                // Wait for anybody actively acquiring a pointer to us to have
-                // acquired a strong reference count.
-                awake_token.wakers.head.wait();
-                // Wait for anybody actively iterating through us to leave.
-                while self.state.ref_count().load(Ordering::Acquire) > 0 {
-                    spin_loop();
-                }
-                // Wait for anybody actively iterating through us to have made it to
-                // the next node.
-                self.state.right().wait();
-                // Clear paths to reach our neighbors.
-                self.state.right().neighbor.store(None, Ordering::Release);
-            },
-            // Nobody to the left = we are head of list. Special case.
-            (None, None) => {
-                awake_token.wakers.head.compare_exchange_spin_lock(self_addr, None, Ordering::AcqRel);
-
-                // At this point, there is no way to reach us from our neighbors.
-
-                // Wait for anybody actively acquiring a pointer to us to have
-                // acquired a strong reference count.
-                awake_token.wakers.head.wait();
-                // Wait for anybody actively iterating through us to leave.
-                while self.state.ref_count().load(Ordering::Acquire) > 0 {
-                    spin_loop();
-                }
-                // Wait for anybody actively iterating through us to have made it to
-                // the next node (in this case, null).
-                self.state.right().wait();
-                // No neighbors to our right so we are all done.
+            None => {
+                // If we become the tail, try to pass it along.
+                check_tail = awake_token.wakers.tail.compare_exchange(self_addr, None, Ordering::Release, Ordering::Relaxed).is_err();
             },
         }
+
+        while wait_on_head || self.state.ref_count().load(Ordering::Acquire) > 0 {
+            let self_right = self.state.right().follow();
+            match self_right {
+                None => {
+                    check_tail = check_tail && awake_token.wakers.tail.compare_exchange(self_addr, None, Ordering::Release, Ordering::Relaxed).is_err();
+                },
+                Some(self_right) => {
+                    if self_right.as_ptr() == self_addr {
+                        // We are being woken up while being removed. The waking
+                        // function will clobber our left and right pointers.
+                        if wait_on_head {
+                            awake_token.wakers.head.wait();
+                        }
+                        return self.remove_as_awoken();
+                    }
+
+                    if check_rights_left {
+                        if let Err((_, self_left)) = self_right.left().compare_exchange(self_addr, None, Ordering::Release, Ordering::Relaxed) {
+                            check_rights_left = self_right.left().compare_exchange(null_mut(), self_left, Ordering::Release, Ordering::Relaxed).is_err();
+                        } else {
+                            check_rights_left = false;
+                        }
+                    }
+                },
+            }
+
+            if wait_on_head && (awake_token.wakers.head.in_use.load(Ordering::Acquire) == 0) {
+                wait_on_head = false;
+            }
+
+            spin_loop();
+        }
+
+        // Wait for anybody actively iterating through us to have made it to the
+        // next node.
+        self.state.right().wait();
+        // Clear paths to reach our neighbors.
+        self.state.right().store(None, Ordering::Release);
     }
 
     /// Awakes any tokens to the right of this token. This is used to ensure that all tokens to the
@@ -622,7 +732,7 @@ impl<'a> Future for AwokenToken {
                         // us to a consistent state early.
                         None => {
                             // Note: Reference count accounted for at start.
-                            awake_token.wakers.head.compare_exchange_spin_lock(null_mut(), Some(arc_self2), Ordering::AcqRel);
+                            awake_token.wakers.head.store(Some(arc_self2), Ordering::Release);
                         },
                         // Normal case: There is a neighbor to our left that we need to finish
                         // connecting  ourself to.
