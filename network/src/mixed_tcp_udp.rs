@@ -1,17 +1,17 @@
 use std::{collections::HashMap, io::ErrorKind, net::SocketAddr, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, time::Duration};
 
 use async_lib::awake_token::AwakeToken;
-use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}, types::{base64::Base64, base_conversions::BaseConversions}};
+use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
 use socket2::SockRef;
-use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast::{self, error::RecvError}, Mutex, RwLock, RwLockReadGuard}, task, time};
+use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast::{self, error::RecvError}, Mutex, RwLock}, task::{self, JoinHandle}, time};
 
 const MAX_MESSAGE_SIZE: usize = 8192;
 const UDP_RETRANSMIT_MS: u64 = 125;
 const TCP_TIMEOUT_MS: u64 = 500;
 
 
-const TCP_INIT_ESTABLISHING_WAIT_MS: u64 = 1000;
-const TCP_INIT_CONNECTING_WAIT_MS: u64 = 1000;
+const TCP_INIT_ESTABLISHING_WAIT_MS: u64 = 5000;
+const TCP_INIT_CONNECTING_WAIT_MS: u64 = 5000;
 const TCP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
 
 const UDP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
@@ -464,7 +464,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn manage_tcp_query(self: Arc<Self>, kill_tcp: Arc<AwakeToken>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
+    async fn manage_tcp_query(self: Arc<Self>, cancel_query: Arc<AwakeToken>, kill_tcp: Arc<AwakeToken>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
         let mut in_flight_receiver = in_flight_sender.subscribe();
         drop(in_flight_sender);
 
@@ -480,6 +480,7 @@ impl MixedSocket {
                 }
             },
             () = kill_tcp.awoken() => println!("TCP Cleanup: TCP canceled while waiting to receive message with ID {}", query.id),
+            () = cancel_query.awoken() => println!("TCP Cleanup: Query canceled while waiting to receive message with ID {}", query.id),
             () = time::sleep(self.tcp_timeout) => println!("TCP Timeout: TCP query with ID {} took too long to respond", query.id),
         }
         self.cleanup_query(query.id).await;
@@ -487,23 +488,29 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn query_tcp_rsocket<'a>(self: Arc<Self>, r_tcp_state: RwLockReadGuard<'a, TcpState>, query: Message) -> io::Result<broadcast::Receiver<Message>> {
+    async fn query_tcp<'a>(self: Arc<Self>, query: Message, cancel: Arc<AwakeToken>) -> io::Result<broadcast::Receiver<Message>> {
+        let r_tcp_state = self.tcp.read().await;
         match &*r_tcp_state {
             TcpState::Managed { socket, kill: kill_tcp } => {
                 let tcp_socket = socket.clone();
                 let kill_tcp = kill_tcp.clone();
                 drop(r_tcp_state);
 
-                return self.query_tcp(tcp_socket, kill_tcp, query).await;
+                return self.query_tcp_socket(tcp_socket, cancel, kill_tcp, query).await;
             },
             TcpState::Establishing { sender, kill: _ } => {
                 let mut tcp_socket_receiver = sender.subscribe();
                 drop(r_tcp_state);
 
                 match tcp_socket_receiver.recv().await {
-                    Ok((tcp_socket, tcp_kill)) => return self.query_tcp(tcp_socket, tcp_kill, query).await,
+                    Ok((tcp_socket, tcp_kill)) => {
+                        if cancel.try_awoken() {
+                            return Err(io::Error::from(ErrorKind::Interrupted));
+                        }
+                        return self.query_tcp_socket(tcp_socket, cancel, tcp_kill, query).await
+                    },
                     Err(RecvError::Closed) => return Err(io::Error::from(ErrorKind::Interrupted)),
-                    Err(RecvError::Lagged(num_sockets)) => println!("UDP Query: Channel lagged skipping {num_sockets} sockets. Will try again"),
+                    Err(RecvError::Lagged(num_sockets)) => println!("TCP Query: Channel lagged skipping {num_sockets} sockets. Will try again"),
                 };
 
                 // Will only try 1 extra time if the receiver lags.
@@ -511,10 +518,15 @@ impl MixedSocket {
                 // This really should not happen since a socket should only
                 // ever be sent once so we will only retry once.
                 match tcp_socket_receiver.recv().await {
-                    Ok((tcp_socket, tcp_kill)) => return self.query_tcp(tcp_socket, tcp_kill, query).await,
+                    Ok((tcp_socket, tcp_kill)) => {
+                        if cancel.try_awoken() {
+                            return Err(io::Error::from(ErrorKind::Interrupted));
+                        }
+                        return self.query_tcp_socket(tcp_socket, cancel, tcp_kill, query).await
+                    },
                     Err(RecvError::Closed) => return Err(io::Error::from(ErrorKind::Interrupted)),
                     Err(RecvError::Lagged(num_sockets)) => {
-                        println!("UDP Query: Channel lagged skipping {num_sockets} sockets. Will not try again");
+                        println!("TCP Query: Channel lagged skipping {num_sockets} sockets. Will not try again");
                         return Err(io::Error::from(ErrorKind::Interrupted));
                     },
                 };
@@ -523,7 +535,7 @@ impl MixedSocket {
                 drop(r_tcp_state);
 
                 let (tcp_socket, tcp_kill) = self.clone().init_tcp().await?;
-                return self.query_tcp(tcp_socket, tcp_kill, query).await;
+                return self.query_tcp_socket(tcp_socket, cancel, tcp_kill, query).await;
             },
             TcpState::Blocked => {
                 drop(r_tcp_state);
@@ -534,7 +546,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn query_tcp(self: Arc<Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, tcp_kill: Arc<AwakeToken>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
+    async fn query_tcp_socket(self: Arc<Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, cancel_query: Arc<AwakeToken>, tcp_kill: Arc<AwakeToken>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
         // Step 1: Register the query as an in-flight message.
         let (sender, receiver) = broadcast::channel(1);
 
@@ -570,7 +582,7 @@ impl MixedSocket {
         // Now that the message is registered, set up a task to ensure the
         // message is retransmitted as needed and cleaned up once done.
         let query_id = query.id;
-        task::spawn(self.clone().manage_tcp_query(tcp_kill, sender, query.clone()));
+        task::spawn(self.clone().manage_tcp_query(tcp_kill, cancel_query, sender, query.clone()));
 
         // Step 4: Send the message via TCP.
         self.recent_messages_sent.store(true, Ordering::Release);
@@ -830,12 +842,15 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn manage_udp_query(self: Arc<Self>, udp_socket: Arc<UdpSocket>, kill_udp: Arc<AwakeToken>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
+    async fn manage_udp_query(self: Arc<Self>, udp_socket: Arc<UdpSocket>, cancel_query: Arc<AwakeToken>, kill_udp: Arc<AwakeToken>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
         let mut in_flight_receiver = in_flight_sender.subscribe();
         drop(in_flight_sender);
         let query_id = query.id;
 
-        pin!{let udp_canceled = kill_udp.clone().awoken();}
+        pin!{
+            let udp_canceled = kill_udp.clone().awoken();
+            let query_canceled = cancel_query.clone().awoken();
+        }
 
         // Timeout Case 1: resend with UDP
         select! {
@@ -850,6 +865,10 @@ impl MixedSocket {
             },
             () = &mut udp_canceled => {
                 println!("UDP Cleanup: UDP canceled while waiting to receive message with ID {}", query_id);
+                return self.cleanup_query(query_id).await;
+            },
+            () = &mut query_canceled => {
+                println!("UDP Cleanup: Query canceled while waiting to receive message with ID {}", query_id);
                 return self.cleanup_query(query_id).await;
             },
             () = time::sleep(self.udp_retransmit) => {
@@ -877,6 +896,10 @@ impl MixedSocket {
                 println!("UDP Cleanup: UDP canceled while waiting to receive message with ID {}", query_id);
                 return self.cleanup_query(query_id).await;
             },
+            () = &mut query_canceled => {
+                println!("UDP Cleanup: Query canceled while waiting to receive message with ID {}", query_id);
+                return self.cleanup_query(query_id).await;
+            },
             // Although it looks gross, the nested select statement here helps prevent responses
             // from being missed. Unlike the other cases where we can offload the heavy work to
             // other tasks, we need the result here so this seems to be the best way to do it.
@@ -894,6 +917,10 @@ impl MixedSocket {
                 },
                 () = &mut udp_canceled => {
                     println!("UDP Cleanup: UDP canceled while waiting to receive message with ID {}", query_id);
+                    return self.cleanup_query(query_id).await;
+                },
+                () = &mut query_canceled => {
+                    println!("UDP Cleanup: Query canceled while waiting to receive message with ID {}", query_id);
                     return self.cleanup_query(query_id).await;
                 },
                 () = time::sleep(self.tcp_timeout) => {
@@ -945,6 +972,10 @@ impl MixedSocket {
                 println!("UDP Cleanup: TCP canceled while waiting to receive message with ID {}", query_id);
                 return self.cleanup_query(query_id).await;
             },
+            () = &mut query_canceled => {
+                println!("UDP Cleanup: Query canceled while waiting to receive message with ID {}", query_id);
+                return self.cleanup_query(query_id).await;
+            },
             () = time::sleep(self.tcp_timeout) => {
                 println!("UDP Timeout: TCP query with ID {} took too long to respond", query_id);
                 return self.cleanup_query(query_id).await;
@@ -953,23 +984,27 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn query_udp_rsocket<'a>(self: Arc<Self>, r_udp_state: RwLockReadGuard<'a, UdpState>, query: Message) -> io::Result<broadcast::Receiver<Message>> {
+    async fn query_udp<'a>(self: Arc<Self>, query: Message, cancel: Arc<AwakeToken>) -> io::Result<broadcast::Receiver<Message>> {
         let udp_socket;
         let kill_udp;
 
+        let r_udp_state = self.udp.read().await;
         match &*r_udp_state {
             UdpState::Managed(state_udp_socket, state_kill_udp) => {
                 udp_socket = state_udp_socket.clone();
                 kill_udp = state_kill_udp.clone();
                 drop(r_udp_state);
 
-                return self.query_udp(udp_socket.clone(), kill_udp, query).await;
+                return self.query_udp_socket(udp_socket.clone(), cancel, kill_udp, query).await;
             },
             UdpState::None => {
                 drop(r_udp_state);
 
                 (udp_socket, kill_udp) = self.clone().init_udp().await?;
-                return self.query_udp(udp_socket, kill_udp, query).await;
+                if cancel.try_awoken() {
+                    return Err(io::Error::from(ErrorKind::Interrupted));
+                }
+                return self.query_udp_socket(udp_socket, cancel, kill_udp, query).await;
             },
             UdpState::Blocked => {
                 drop(r_udp_state);
@@ -980,7 +1015,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn query_udp(self: Arc<Self>, udp_socket: Arc<UdpSocket>, kill_udp: Arc<AwakeToken>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
+    async fn query_udp_socket(self: Arc<Self>, udp_socket: Arc<UdpSocket>, cancel_query: Arc<AwakeToken>, kill_udp: Arc<AwakeToken>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
         // Step 1: Register the query as an in-flight message.
         let (sender, receiver) = broadcast::channel(1);
 
@@ -1015,7 +1050,7 @@ impl MixedSocket {
         // Now that the message is registered, set up a task to ensure the
         // message is retransmitted as needed and cleaned up once done.
         let query_id = query.id;
-        task::spawn(self.clone().manage_udp_query(udp_socket.clone(), kill_udp, sender, query.clone()));
+        task::spawn(self.clone().manage_udp_query(udp_socket.clone(), cancel_query, kill_udp, sender, query.clone()));
 
         // Step 4: Send the message via UDP.
         self.recent_messages_sent.store(true, Ordering::Release);
@@ -1214,90 +1249,70 @@ impl MixedSocket {
     }
 
     pub async fn query(self: Arc<Self>, query: Message, options: QueryOptions, timeout: Option<Duration>, kill_token: Option<Arc<AwakeToken>>) -> io::Result<Message> {
-        let self_lock_1 = self.clone();
-        let self_lock_2 = self.clone();
-        let (r_udp, r_tcp) = join!(
-            self_lock_1.udp.read(),
-            self_lock_2.tcp.read()
-        );
+        // A local token to cancel the running query.
+        // If a `kill_token` was provided, that will be used as the `cancel_token`.
+        let cancel_token;
+        if let Some(kill_token) = &kill_token {
+            cancel_token = kill_token.clone();
+        } else {
+            cancel_token = Arc::new(AwakeToken::new());
+        }
+
         let udp_timeout_count = self.udp_timeout_count.load(Ordering::Acquire);
-        let mut receiver = match (options, udp_timeout_count, &*r_udp, &*r_tcp) {
-            (QueryOptions::Both, 0..=3, UdpState::None | UdpState::Managed(_, _), _) => {
-                drop(r_tcp);
-                self.query_udp_rsocket(r_udp, query).await?
+        let query_task = match (options, udp_timeout_count) {
+            (QueryOptions::Both, 0..=3) => {
+                task::spawn(self.query_udp(query, cancel_token.clone()))
             },
-            // Too many UDP timeouts, no TCP socket has been established.
-            (QueryOptions::Both, 4.., UdpState::None | UdpState::Managed(_, _), TcpState::None) => {
-                drop(r_tcp);
+            // Too many UDP timeouts.
+            (QueryOptions::Both, 4) => {
                 // It will query via UDP but will start setting up a TCP connection to fall back on.
                 task::spawn(self.clone().init_tcp());
-                self.query_udp_rsocket(r_udp, query).await?
+                task::spawn(self.query_udp(query, cancel_token.clone()))
             },
-
+            // Too many UDP timeouts.
+            (QueryOptions::Both, 5..) => {
+                task::spawn(self.query_tcp(query, cancel_token.clone()))
+            },
             // Only TCP is allowed
-            (QueryOptions::TcpOnly, _, _, TcpState::None | TcpState::Establishing { sender: _, kill: _ } | TcpState::Managed { socket: _, kill: _ }) => {
-                drop(r_udp);
-                self.query_tcp_rsocket(r_tcp, query).await?
-            },
-            // Too many UDP timeouts, a TCP socket is still being setup or already exists.
-            (QueryOptions::Both, 4.., _, TcpState::Establishing { sender: _, kill: _ } | TcpState::Managed { socket: _, kill: _ }) => {
-                drop(r_udp);
-                self.query_tcp_rsocket(r_tcp, query).await?
-            },
-
-            // Cases where one or both of the sockets are blocked.
-            (QueryOptions::TcpOnly, _, _, TcpState::Blocked) => {
-                drop(r_tcp);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
-            },
-            (_, _, UdpState::Blocked, TcpState::Blocked) => {
-                drop(r_tcp);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
-            },
-            (QueryOptions::Both, 4.., UdpState::None | UdpState::Managed(_, _), TcpState::Blocked) => {
-                drop(r_tcp);
-                self.query_udp_rsocket(r_udp, query).await?
-            },
-            (QueryOptions::Both, _, UdpState::Blocked, TcpState::None | TcpState::Establishing { sender: _, kill: _ } | TcpState::Managed { socket: _, kill: _ }) => {
-                drop(r_udp);
-                self.query_tcp_rsocket(r_tcp, query).await?
+            (QueryOptions::TcpOnly, _) => {
+                task::spawn(self.query_tcp(query, cancel_token.clone()))
             },
         };
 
-        match (timeout, kill_token) {
-            (None, None) => match receiver.recv().await {
-                Ok(response) => return Ok(response),
+        /// Awaits the receiver returned by a spawned tokio task.
+        async fn task_receive(task: JoinHandle<io::Result<broadcast::Receiver<Message>>>) -> io::Result<Message> {
+            let mut receiver = match task.await {
+                Ok(Ok(receiver)) => receiver,
+                Ok(Err(io_error)) => return Err(io_error),
                 Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
-            },
+            };
+
+            match receiver.recv().await {
+                Ok(message) => Ok(message),
+                Err(_) => Err(io::Error::from(io::ErrorKind::Other)),
+            }
+        }
+
+        match (timeout, kill_token) {
+            (None, None) => task_receive(query_task).await,
             (None, Some(kill_token)) => select! {
-                response = receiver.recv() => match response {
-                    Ok(response) => return Ok(response),
-                    Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
-                },
-                () = kill_token.awoken() => {
-                    return Err(io::Error::from(io::ErrorKind::Other))
-                },
+                response = task_receive(query_task) => response,
+                () = kill_token.awoken() => Err(io::Error::from(io::ErrorKind::Other)),
             },
             (Some(timeout), None) => select! {
-                response = receiver.recv() => match response {
-                    Ok(response) => return Ok(response),
-                    Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
-                },
+                response = task_receive(query_task) => response,
                 () = tokio::time::sleep(timeout) => {
-                    return Err(io::Error::from(io::ErrorKind::TimedOut))
+                    cancel_token.awake();
+                    Err(io::Error::from(io::ErrorKind::TimedOut))
                 },
             },
             (Some(timeout), Some(kill_token)) => select! {
-                response = receiver.recv() => match response {
-                    Ok(response) => return Ok(response),
-                    Err(_) => return Err(io::Error::from(io::ErrorKind::Other)),
-                },
+                response = task_receive(query_task) => response,
                 () = tokio::time::sleep(timeout) => {
-                    return Err(io::Error::from(io::ErrorKind::TimedOut))
+                    cancel_token.awake();
+                    Err(io::Error::from(io::ErrorKind::TimedOut))
                 },
-                () = kill_token.awoken() => {
-                    return Err(io::Error::from(io::ErrorKind::Other))
-                },
+                () = kill_token.awoken() => Err(io::Error::from(io::ErrorKind::Other)),
             },
         }
     }
