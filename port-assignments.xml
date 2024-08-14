@@ -4,7 +4,7 @@
 <registry xmlns="http://www.iana.org/assignments" id="service-names-port-numbers">
   <title>Service Name and Transport Protocol Port Number Registry</title>
   <category>Service Names and Transport Protocol Port Numbers</category>
-  <updated>2024-07-01</updated>
+  <updated>2024-08-13</updated>
   <xref type="rfc" data="rfc6335"/>
   <expert>TCP/UDP: Joe Touch; Eliot Lear, Kumiko Ono, Wes Eddy, Brian Trammell, 
 Jana Iyengar, and Michael Scharf
@@ -66815,11 +66815,11 @@ common service discovery mechanisms.</note>
     <description>Unassigned</description>
     <number>5815-5819</number>
   </record>
-  <record date="2022-06-10">
+  <record date="2022-06-10" updated="2024-08-01">
     <name>autopassdaemon</name>
     <protocol>tcp</protocol>
     <assignee>
-      <xref type="person" data="Micro_Focus_2"/>
+      <xref type="person" data="opentext"/>
     </assignee>
     <description>AutoPass licensing</description>
     <number>5820</number>
@@ -70174,11 +70174,11 @@ common service discovery mechanisms.</note>
     <description>Unassigned</description>
     <number>6552-6555</number>
   </record>
-  <record date="2020-07-14">
+  <record date="2020-07-14" updated="2024-08-06">
     <name>checkmk-agent</name>
     <protocol>tcp</protocol>
     <assignee>
-      <xref type="person" data="Tribe29_GmbH"/>
+      <xref type="person" data="Checkmk_GmbH"/>
     </assignee>
     <description>Checkmk Monitoring Agent</description>
     <number>6556</number>
@@ -73943,9 +73943,24 @@ common service discovery mechanisms.</note>
     <number>7574</number>
     <xref type="person" data="Mark_Falco"/>
   </record>
+  <record date="2024-08-13">
+    <name>wtmi-panel</name>
+    <protocol>tcp</protocol>
+    <assignee>
+      <xref type="person" data="WTMI_LLC"/>
+    </assignee>
+    <description>Main access port for WTMI Panel</description>
+    <number>7575</number>
+    <xref type="person" data="Jay_Dubinsky"/>
+  </record>
+  <record>
+    <protocol>udp</protocol>
+    <description>Reserved</description>
+    <number>7575</number>
+  </record>
   <record>
     <description>Unassigned</description>
-    <number>7575-7587</number>
+    <number>7576-7587</number>
   </record>
   <record>
     <name>sun-lm</name>
@@ -100971,9 +100986,9 @@ implementations.  See RFC 3692 for details.</footnote>
     </person>
     <person id="Alexander_Wilms">
       <name>Alexander Wilms</name>
-      <org>Tribe29 GmbH</org>
-      <uri>mailto:alex.wilms&amp;tribe29.com</uri>
-      <updated>2020-07-14</updated>
+      <org>Checkmk GmbH</org>
+      <uri>mailto:alex.wilms&amp;checkmk.com</uri>
+      <updated>2024-08-06</updated>
     </person>
     <person id="Alexandre_Carlhian">
       <name>Alexandre Carlhian</name>
@@ -102262,8 +102277,8 @@ implementations.  See RFC 3692 for details.</footnote>
     </person>
     <person id="AutoPass">
       <name>AutoPass</name>
-      <uri>mailto:swpdl.apls_core&amp;microfocus.com</uri>
-      <updated>2022-06-10</updated>
+      <uri>mailto:MFI-swpdl.apls_core&amp;opentext.com</uri>
+      <updated>2024-08-01</updated>
     </person>
     <person id="AVG_Technologies_Norway_AS">
       <org>AVG Technologies Norway AS</org>
@@ -103937,6 +103952,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <org>Check Point Software Technologies Ltd.</org>
       <uri>mailto:rbahadur&amp;checkpoint.com</uri>
       <updated>2012-06-28</updated>
+    </person>
+    <person id="Checkmk_GmbH">
+      <org>Checkmk GmbH</org>
+      <uri>mailto:alex.wilms&amp;checkmk.com</uri>
+      <updated>2024-08-06</updated>
     </person>
     <person id="Chee_Kent_Lam">
       <name>Chee Kent Lam</name>
@@ -105679,7 +105699,8 @@ implementations.  See RFC 3692 for details.</footnote>
     </person>
     <person id="Dave_Thaler">
       <name>Dave Thaler</name>
-      <uri>mailto:thalerd&amp;eecs.umich.edu</uri>
+      <uri>mailto:dave.thaler.ietf&amp;gmail.com</uri>
+      <updated>2024-07-23</updated>
     </person>
     <person id="Dave_Thaler_2">
       <name>Dave Thaler</name>
@@ -110944,6 +110965,12 @@ implementations.  See RFC 3692 for details.</footnote>
       <name>Jay Cotton</name>
       <uri>mailto:JAY&amp;calc.vet.uga.edu</uri>
     </person>
+    <person id="Jay_Dubinsky">
+      <name>Jay Dubinsky</name>
+      <org>WTMI LLC</org>
+      <uri>mailto:jay&amp;wtmi.com</uri>
+      <updated>2024-08-13</updated>
+    </person>
     <person id="Jay_Eckles">
       <name>Jay Eckles</name>
       <uri>mailto:ecklesweb&amp;yahoo.com</uri>
@@ -115055,7 +115082,8 @@ implementations.  See RFC 3692 for details.</footnote>
     </person>
     <person id="Marshall_Rose">
       <name>Marshall Rose</name>
-      <uri>mailto:mrose&amp;dbc.mtview.ca.us</uri>
+      <uri>mailto:mrose17&amp;gmail.com</uri>
+      <updated>2024-07-29</updated>
     </person>
     <person id="Martha_Crisson">
       <name>Martha Crisson</name>
@@ -116230,11 +116258,6 @@ implementations.  See RFC 3692 for details.</footnote>
       <org>Micro Focus</org>
       <uri>mailto:swpdl.dp.rd&amp;microfocus.com</uri>
       <updated>2019-09-30</updated>
-    </person>
-    <person id="Micro_Focus_2">
-      <org>Micro Focus</org>
-      <uri>mailto:swpdl.apls_core&amp;microfocus.com</uri>
-      <updated>2022-06-10</updated>
     </person>
     <person id="Micromat">
       <name>Micromat</name>
@@ -117667,6 +117690,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <uri>mailto:cncf-opentelemetry-governance&amp;lists.cncf.io</uri>
       <updated>2020-12-09</updated>
     </person>
+    <person id="opentext">
+      <org>opentext</org>
+      <uri>mailto:MFI-swpdl.apls_core&amp;opentext.com</uri>
+      <updated>2024-08-01</updated>
+    </person>
     <person id="OPNET_Technologies_Inc">
       <org>OPNET Technologies Inc</org>
       <uri>mailto:tmacomber&amp;opnet.com</uri>
@@ -118119,7 +118147,8 @@ implementations.  See RFC 3692 for details.</footnote>
     </person>
     <person id="Paul_Hoffman">
       <name>Paul Hoffman</name>
-      <uri>mailto:phoffman&amp;imc.org</uri>
+      <uri>mailto:phoffman&amp;proper.com</uri>
+      <updated>2024-07-23</updated>
     </person>
     <person id="Paul_Horton">
       <name>Paul Horton</name>
@@ -119387,7 +119416,8 @@ implementations.  See RFC 3692 for details.</footnote>
     </person>
     <person id="Randall_Gellens">
       <name>Randall Gellens</name>
-      <uri>mailto:randy&amp;qualcomm.com</uri>
+      <uri>mailto:rg+ietf&amp;coretechnologyconsulting.com</uri>
+      <updated>2024-07-29</updated>
     </person>
     <person id="Randall_Stewart">
       <name>Randall Stewart</name>
@@ -124387,11 +124417,6 @@ implementations.  See RFC 3692 for details.</footnote>
       <uri>mailto:admins&amp;tri-tech.com</uri>
       <updated>2012-11-19</updated>
     </person>
-    <person id="Tribe29_GmbH">
-      <org>Tribe29 GmbH</org>
-      <uri>mailto:admins&amp;tribe29.com</uri>
-      <updated>2020-07-14</updated>
-    </person>
     <person id="Tricerat">
       <org>Tricerat</org>
       <uri>mailto:emusgrave&amp;tricerat.com</uri>
@@ -125410,6 +125435,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <org>WS, Inc</org>
       <uri>mailto:Jim.Davis&amp;ws-inc.com</uri>
       <updated>2015-04-24</updated>
+    </person>
+    <person id="WTMI_LLC">
+      <org>WTMI LLC</org>
+      <uri>mailto:engineering&amp;wtmi.com</uri>
+      <updated>2024-08-13</updated>
     </person>
     <person id="www_nsovocal_com">
       <org>www.nsovocal.com</org>
