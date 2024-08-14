@@ -12,8 +12,8 @@ async-trait = "0.1"
 lazy_static = "1.5"
 mac_address = "1.1"
 regex = "1.10"
-tinyvec = { version = "1.6", features = ["alloc"] }
-tokio = { version = "1.38", features = ["full"] }
+tinyvec = { version = "1.8", features = ["alloc"] }
+tokio = { version = "1.39", features = ["full"] }
 ux = "0.1"
 xml = "0.8"
 
