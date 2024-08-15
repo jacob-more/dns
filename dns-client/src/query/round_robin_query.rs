@@ -207,7 +207,25 @@ pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cac
     while let Some((ns_domain, address)) = cached_name_server_address_round_robin.next() {
         println!("Querying Name Server '{ns_domain}' for '{question}'");
         match query_network(client, joined_cache.clone(), question, &address).await {
-            Ok(response) => return sender_return::<CCache>(client, query_response(response), question).await,
+            // No error. Valid response.
+            Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, query_response(response), question).await,
+            // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
+            // Treat as a hard error.
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await,
+            // Only authoritative servers can indicate that a name does not exist.
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question).await,
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }) => continue,
+            // If a server does not support a query type, we can probably assume it is not in that zone.
+            // TODO: verify that this is a valid assumption. Should we return NotImpl?
+            Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, query_response(response), question).await,
+            // If a name server refuses to perform an operation, we should not keep asking the other servers.
+            // TODO: verify that this is a valid way of handling.
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await,
+            // We don't know how to handle unknown errors.
+            // Assume they are a hard failure.
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await,
+            // Malformed response.
+            Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await,
             Err(_) => continue,
         }
     }
@@ -247,7 +265,25 @@ pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cac
     while let Some((ns_domain, address)) = non_cached_name_server_address_round_robin.next() {
         println!("Querying Name Server '{ns_domain}' for '{question}'");
         match query_network(client, joined_cache.clone(), question, &address).await {
-            Ok(response) => return sender_return::<CCache>(client, query_response(response), question).await,
+            // No error. Valid response.
+            Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, query_response(response), question).await,
+            // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
+            // Treat as a hard error.
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await,
+            // Only authoritative servers can indicate that a name does not exist.
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question).await,
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }) => continue,
+            // If a server does not support a query type, we can probably assume it is not in that zone.
+            // TODO: verify that this is a valid assumption. Should we return NotImpl?
+            Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, query_response(response), question).await,
+            // If a name server refuses to perform an operation, we should not keep asking the other servers.
+            // TODO: verify that this is a valid way of handling.
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await,
+            // We don't know how to handle unknown errors.
+            // Assume they are a hard failure.
+            Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await,
+            // Malformed response.
+            Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question).await,
             Err(_) => continue,
         }
     }
