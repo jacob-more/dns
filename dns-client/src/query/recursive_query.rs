@@ -16,7 +16,7 @@ pub(crate) enum QueryResponse<T> {
 }
 
 #[async_recursion]
-pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, question: &Question) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync {
+pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, question: &Question) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
     println!("Start: Recursive Search for '{question}'");
     let cache_response: dns_lib::interface::cache::CacheResponse = client.cache.get(&CacheQuery {
         authoritative: false,
