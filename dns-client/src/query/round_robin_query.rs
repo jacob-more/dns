@@ -1,9 +1,10 @@
-use std::{borrow::BorrowMut, future::Future, io, net::IpAddr, pin::Pin, sync::{atomic::{AtomicUsize, Ordering}, Arc}, task::Poll, time::Duration};
+use std::{borrow::BorrowMut, collections::VecDeque, future::Future, io, net::IpAddr, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
 use async_lib::awake_token::AwakeToken;
 use dns_lib::{interface::cache::cache::AsyncCache, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
-use futures::{stream::FuturesUnordered, StreamExt};
-use tokio::{join, select, sync::broadcast};
+use futures::StreamExt;
+use pin_project::pin_project;
+use tokio::{pin, sync::broadcast};
 
 use crate::DNSAsyncClient;
 
@@ -76,10 +77,6 @@ impl<CCache> NSQuery<CCache> where CCache: AsyncCache + Send + Sync + 'static {
             NSQueryAddressState::CacheHit(_) => true,
             _ => false,
         }
-    }
-
-    pub fn is_querying(&self) -> bool {
-        self.query.is_some()
     }
 }
 
@@ -161,68 +158,200 @@ impl<CCache> Future for NSQuery<CCache> where CCache: AsyncCache + Send + Sync +
     }
 }
 
-struct NSAddressMap<'b, 'c> {
-    ns_domain: &'b CDomainName,
-    index: AtomicUsize,
-    addresses: &'c [IpAddr],
+#[pin_project]
+struct NSSelectQuery<'a, Fut, Queries>
+where
+    Fut: Future<Output = NSQueryResult> + 'a,
+    Queries: Iterator<Item = &'a mut Pin<Box<Fut>>>,
+    
+{
+    ns_queries: Queries,
+    ns_queries_empty: bool,
+    running: Vec<&'a mut Pin<Box<Fut>>>,
+    ready_results: VecDeque<NSQueryResult>,
+    max_concurrency: usize,
+    add_query_timeout: Duration,
+    #[pin]
+    add_query_timer: Option<tokio::time::Sleep>,
 }
 
-impl<'b, 'c> NSAddressMap<'b, 'c> {
-    #[inline]
-    fn new(ns_domain: &'b CDomainName, addresses: &'c [IpAddr]) -> Self {
+impl<'a, Fut, Queries> NSSelectQuery<'a, Fut, Queries>
+where
+    Fut: Future<Output = NSQueryResult> + 'a,
+    Queries: Iterator<Item = &'a mut Pin<Box<Fut>>>,
+{
+    pub fn new(ns_queries: Queries, max_concurrency: usize, add_query_timeout: Duration) -> Self {
         Self {
-            ns_domain,
-            index: AtomicUsize::new(0),
-            addresses,
+            ns_queries,
+            ns_queries_empty: false,
+            running: Vec::new(),
+            ready_results: VecDeque::new(),
+            max_concurrency,
+            add_query_timeout,
+            add_query_timer: None,
         }
     }
 
-    #[inline]
-    fn next(&self) -> Option<&'c IpAddr> {
-        self.addresses.get(self.index.fetch_add(1, Ordering::SeqCst))
+    fn is_first_poll(&self) -> bool {
+        // After the first poll, the running queue should never be left empty
+        // between polls as long as there are more queries to try.
+        self.running.is_empty()
+        && !self.ns_queries_empty
+        && self.ready_results.is_empty()
     }
 }
 
-struct RoundRobinIter<'a, 'b, 'c> {
-    index: usize,
-    some_found: bool,
-    mappings: &'a [NSAddressMap<'b, 'c>],
-}
+impl<'a, Fut, Queries> Future for NSSelectQuery<'a, Fut, Queries>
+where
+    Fut: Future<Output = NSQueryResult> + 'a,
+    Queries: Iterator<Item = &'a mut Pin<Box<Fut>>>,
+{
+    type Output = Option<NSQueryResult>;
 
-impl<'a, 'b, 'c> RoundRobinIter<'a, 'b, 'c> {
-    #[inline]
-    fn new(ns_address_maps: &'a [NSAddressMap<'b, 'c>]) -> Self {
-        Self {
-            index: 0,
-            some_found: false,
-            mappings: ns_address_maps,
-        }
-    }
-
-    #[inline]
-    fn next(&mut self) -> Option<(&'b CDomainName, &'c IpAddr)> {
-        let mut mappings_iter = self.mappings.iter().enumerate().skip(self.index);
-        while let Some((index, ns_address_map)) = mappings_iter.next() {
-            match ns_address_map.next() {
-                Some(address) => {
-                    // Next time `next` is called, start at the next index.
-                    self.index = index + 1;
-                    self.some_found = true;
-                    return Some((ns_address_map.ns_domain, address));
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        if self.is_first_poll() {
+            let mut this = self.as_mut().project();
+            // Initialize the `running` queue with its first query.
+            match this.ns_queries.next() {
+                Some(ns_query) => this.running.push(ns_query),
+                None => {
+                    *this.ns_queries_empty = true;
+                    // Don't want to be erroneously woken up if we are done.
+                    // Although on the first poll, it is probably already None.
+                    this.add_query_timer.set(None);
+                    return Poll::Ready(None);
                 },
-                // End of the list has been reached.
-                None => continue,
+            }
+
+            // Initialize or refresh the `add_query_timer`
+            match (this.add_query_timer.as_mut().as_pin_mut(), tokio::time::Instant::now().checked_add(*this.add_query_timeout)) {
+                // The expected case is that a fresh NSSelectQuery has not yet
+                // had the `add_query_timer` initialized. We should do that
+                // here.
+                (None, Some(deadline)) => this.add_query_timer.set(Some(tokio::time::sleep_until(deadline))),
+                // If a time was created manually, we should refresh the
+                // deadline since it may have become stale if this task has
+                // been waiting to be run for a while.
+                (Some(timer), Some(deadline)) => timer.reset(deadline),
+                // If the timer cannot be reset, then this will only run 1 task
+                // at a time since it is unable to schedule them to start later.
+                // This should never really be an issue, but if it is, we could
+                // have the system schedule `max_concurrency` many tasks
+                // immediately. However, I would be concerned that this may
+                // accidentally overwhelm ourself or the endpoints. Presumably,
+                // if this fails, then this will probably fail for all other
+                // queries in the system. If we had all of them run
+                // `max_concurrency` many concurrent tasks, the system might
+                // DOS itself.
+                (_, None) => this.add_query_timer.set(None),
             }
         }
 
-        if self.some_found {
-            // Start over.
-            self.some_found = false;
-            self.index = 0;
-            return self.next();
-        } else {
-            // All internal iterators are drained. No more addresses.
-            return None;
+        loop {
+            let mut poll_again = false;
+            let mut this = self.as_mut().project();
+            match (this.add_query_timer.as_mut().as_pin_mut(), tokio::time::Instant::now().checked_add(*this.add_query_timeout)) {
+                (Some(mut timer), Some(new_deadline)) => match timer.as_mut().poll(cx) {
+                    Poll::Ready(()) => match this.ns_queries.next() {
+                        Some(ns_query) => {
+                            this.running.push(ns_query);
+                            // Keep setting the timer until the maximum number
+                            // of allowed concurrent queries have been started
+                            // for this group. Then, we will maintain that many
+                            // concurrent queries until we run out of queued
+                            // queries.
+                            if this.running.len() < *this.max_concurrency {
+                                // Poll again is set so that the new timer is
+                                // polled (to get it started).
+                                timer.reset(new_deadline);
+                                poll_again = true;
+                            } else {
+                                this.add_query_timer.set(None);
+                            }
+                        },
+                        None => {
+                            *this.ns_queries_empty = true;
+                            // Don't want to be erroneously woken up if there
+                            // is nobody else to add.
+                            this.add_query_timer.set(None);
+                        },
+                    },
+                    Poll::Pending => (),
+                },
+                (Some(mut timer), None) => match timer.as_mut().poll(cx) {
+                    Poll::Ready(()) => match this.ns_queries.next() {
+                        Some(ns_query) => {
+                            this.running.push(ns_query);
+                            // Since a deadline could not be calculated, the
+                            // timer cannot be reset.
+                            // This could limit the number of concurrent
+                            // processes that can run below `max_concurrency`.
+                            // I go into more detail on why this is the
+                            // preferred option earlier in this function.
+                            this.add_query_timer.set(None);
+                        },
+                        None => {
+                            *this.ns_queries_empty = true;
+                            // Don't want to be erroneously woken up if there
+                            // is nobody else to add.
+                            this.add_query_timer.set(None);
+                        },
+                    },
+                    Poll::Pending => (),
+                },
+                (None, _) => (),
+            }
+
+            // Poll all the tasks currently marked as running. Tasks that are
+            // ready should be removed from this queue and their result should
+            // be stored. They will be replaced (if possible) after this loop
+            // is done to try to maintain the same number of running tasks.
+            let mut removed_count: usize = 0;
+            this.running.retain_mut(|ns_query| match ns_query.as_mut().poll(cx) {
+                Poll::Ready(result) => {
+                    this.ready_results.push_back(result);
+                    removed_count += 1;
+                    false
+                },
+                Poll::Pending => true,
+            });
+            // Add back as many tasks as were removed, unless the queue of
+            // incoming tasks runs out.
+            for _ in 0..removed_count {
+                match this.ns_queries.next() {
+                    Some(ns_query) => {
+                        this.running.push(ns_query);
+                        // Want to get newly added tasks polled so that they
+                        // get started and can wake this task up.
+                        poll_again = true;
+                    },
+                    None => {
+                        *this.ns_queries_empty = true;
+                        // Don't want to be erroneously woken up if there is
+                        // nobody else to add.
+                        this.add_query_timer.set(None);
+                        break;
+                    },
+                }
+            }
+
+            if !poll_again {
+                break;
+            }
+        }
+
+        let this = self.as_mut().project();
+        match (this.running.len(), this.ns_queries_empty, this.ready_results.pop_front()) {
+            // All of the queued queries have been tried.
+            (0, true, None) => Poll::Ready(None),
+            // At least 1 query is still running.
+            (1.., _, None) => Poll::Pending,
+            (_, _, Some(result)) => Poll::Ready(Some(result)),
+            // There is still a queued query but it was never added to the
+            // running queue. This should never occur, even if
+            // `max_concurrency` is less than 1 since it is not checked before
+            // adding the initial query to the queue.
+            (0, false, None) => panic!("There are still queries in the queue but the running queue is empty"),
         }
     }
 }
@@ -237,53 +366,6 @@ fn query_response(answer: Message) -> QueryResponse<ResourceRecord> {
         },
         Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode, question: _, answer: _, authority: _, additional: _ } => QueryResponse::Error(rcode),
         Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ } => QueryResponse::Error(RCode::FormErr),
-    }
-}
-
-#[inline]
-async fn get_cached_name_server_addresses<CCache>(_client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, question: &Question, name_server: &CDomainName) -> Option<Vec<ResourceRecord>> where CCache: AsyncCache + Send + Sync {
-    let a_question = question.with_new_qname_qtype(name_server.clone(), RType::A);
-    let aaaa_question = question.with_new_qname_qtype(name_server.clone(), RType::AAAA);
-
-    let a_search = query_cache(joined_cache, &a_question);
-    let aaaa_search = query_cache(joined_cache, &aaaa_question);
-
-    match join!(a_search, aaaa_search) {
-        (QueryResponse::Records(mut a_records), QueryResponse::Records(aaaa_records)) => {
-            a_records.extend(aaaa_records);
-            Some(a_records)
-        },
-        (QueryResponse::Records(a_records), _) => Some(a_records),
-        (_, QueryResponse::Records(aaaa_records)) => Some(aaaa_records),
-        (_, _) => None,
-    }
-}
-
-// #[inline]
-// async fn get_name_server_addresses<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, question: &Question, name_server: &CDomainName) -> Option<Vec<ResourceRecord>> where CCache: AsyncCache + Send + Sync {
-//     let a_question = question.with_new_qname_qtype(name_server.clone(), RType::A);
-//     let aaaa_question = question.with_new_qname_qtype(name_server.clone(), RType::AAAA);
-
-//     let a_search = recursive_query(client.clone(), joined_cache.clone(), &a_question);
-//     let aaaa_search = recursive_query(client.clone(), joined_cache.clone(), &aaaa_question);
-
-//     match join!(a_search, aaaa_search) {
-//         (QueryResponse::Records(mut a_records), QueryResponse::Records(aaaa_records)) => {
-//             a_records.extend(aaaa_records);
-//             Some(a_records)
-//         },
-//         (QueryResponse::Records(a_records), _) => Some(a_records),
-//         (_, QueryResponse::Records(aaaa_records)) => Some(aaaa_records),
-//         (_, _) => None,
-//     }
-// }
-
-#[inline]
-fn rr_to_ip_address(record: &ResourceRecord) -> Option<IpAddr> {
-    match &record {
-        ResourceRecord::A(_, a_record) => Some(IpAddr::V4(*a_record.ipv4_addr())),
-        ResourceRecord::AAAA(_, aaaa_record) => Some(IpAddr::V6(*aaaa_record.ipv6_addr())),
-        _ => None,
     }
 }
 
@@ -359,166 +441,43 @@ pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cac
         }
     }
 
-    println!("Querying Cached Name Servers for '{question}'");
+    println!("Querying Name Servers for '{question}'");
 
-    let mut active_queries = FuturesUnordered::new();
-    for ns_query in cached_queries.iter_mut() {
-        active_queries.push(ns_query);
-        match active_queries.len() {
-            0..=2 => select! {
-                biased;
-                result = active_queries.select_next_some() => match result {
-                    // No error. Valid response.
-                    NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                    // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
-                    // Treat as a hard error.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // Only authoritative servers can indicate that a name does not exist.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question, Some(kill_token)).await,
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => (),
-                    // If a server does not support a query type, we can probably assume it is not in that zone.
-                    // TODO: verify that this is a valid assumption. Should we return NotImpl?
-                    NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                    // If a name server refuses to perform an operation, we should not keep asking the other servers.
-                    // TODO: verify that this is a valid way of handling.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // We don't know how to handle unknown errors.
-                    // Assume they are a hard failure.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // Malformed response.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    NSQueryResult::QueryResult(Err(_)) => (),
-                    NSQueryResult::OutOfAddresses => (),
-                    NSQueryResult::NSAddressQueryErr(_) => (),
-                },
-                () = tokio::time::sleep(Duration::from_millis(250)) => ()
-            },
-            3.. => select! {
-                biased;
-                result = active_queries.select_next_some() => match result {
-                    // No error. Valid response.
-                    NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                    // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
-                    // Treat as a hard error.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // Only authoritative servers can indicate that a name does not exist.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question, Some(kill_token)).await,
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => (),
-                    // If a server does not support a query type, we can probably assume it is not in that zone.
-                    // TODO: verify that this is a valid assumption. Should we return NotImpl?
-                    NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                    // If a name server refuses to perform an operation, we should not keep asking the other servers.
-                    // TODO: verify that this is a valid way of handling.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // We don't know how to handle unknown errors.
-                    // Assume they are a hard failure.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // Malformed response.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    NSQueryResult::QueryResult(Err(_)) => (),
-                    NSQueryResult::OutOfAddresses => (),
-                    NSQueryResult::NSAddressQueryErr(_) => (),
-                },
-            }
-        }
-    }
-    drop(active_queries);
-
-    println!("Querying Non-Cached Name Servers for '{question}'");
-
-    let mut active_queries = FuturesUnordered::new();
-    // Can include both cached and non-cached servers if the cached server didn't complete.
-    for ns_query in cached_queries.iter_mut()
-        .filter(|ns_query| ns_query.is_querying())
-        .chain(non_cached_queries.iter_mut())
-    {
-        active_queries.push(ns_query);
-        match active_queries.len() {
-            0..=2 => select! {
-                biased;
-                result = &mut active_queries.select_next_some() => match result {
-                    // No error. Valid response.
-                    NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                    // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
-                    // Treat as a hard error.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // Only authoritative servers can indicate that a name does not exist.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question, Some(kill_token)).await,
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => (),
-                    // If a server does not support a query type, we can probably assume it is not in that zone.
-                    // TODO: verify that this is a valid assumption. Should we return NotImpl?
-                    NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                    // If a name server refuses to perform an operation, we should not keep asking the other servers.
-                    // TODO: verify that this is a valid way of handling.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // We don't know how to handle unknown errors.
-                    // Assume they are a hard failure.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // Malformed response.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    NSQueryResult::QueryResult(Err(_)) => (),
-                    NSQueryResult::OutOfAddresses => (),
-                    NSQueryResult::NSAddressQueryErr(_) => (),
-                },
-                () = tokio::time::sleep(Duration::from_millis(450)) => ()
-            },
-            3.. => select! {
-                biased;
-                result = &mut active_queries.select_next_some() => match result {
-                    // No error. Valid response.
-                    NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                    // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
-                    // Treat as a hard error.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // Only authoritative servers can indicate that a name does not exist.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question, Some(kill_token)).await,
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => (),
-                    // If a server does not support a query type, we can probably assume it is not in that zone.
-                    // TODO: verify that this is a valid assumption. Should we return NotImpl?
-                    NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                    // If a name server refuses to perform an operation, we should not keep asking the other servers.
-                    // TODO: verify that this is a valid way of handling.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // We don't know how to handle unknown errors.
-                    // Assume they are a hard failure.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    // Malformed response.
-                    NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                    NSQueryResult::QueryResult(Err(_)) => (),
-                    NSQueryResult::OutOfAddresses => (),
-                    NSQueryResult::NSAddressQueryErr(_) => (),
-                },
-            }
-        }
-    }
-
-    while !active_queries.is_empty() {
-        select! {
-            biased;
-            result = &mut active_queries.select_next_some() => match result {
-                // No error. Valid response.
-                NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
-                // Treat as a hard error.
-                NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                // Only authoritative servers can indicate that a name does not exist.
-                NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question, Some(kill_token)).await,
-                NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })) => (),
-                // If a server does not support a query type, we can probably assume it is not in that zone.
-                // TODO: verify that this is a valid assumption. Should we return NotImpl?
-                NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-                // If a name server refuses to perform an operation, we should not keep asking the other servers.
-                // TODO: verify that this is a valid way of handling.
-                NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                // We don't know how to handle unknown errors.
-                // Assume they are a hard failure.
-                NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                // Malformed response.
-                NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-                NSQueryResult::QueryResult(Err(_)) => (),
-                NSQueryResult::OutOfAddresses => (),
-                NSQueryResult::NSAddressQueryErr(_) => (),
-            },
+    pin!(
+        let active_queries = NSSelectQuery::new(cached_queries.iter_mut().chain(non_cached_queries.iter_mut()), 3, Duration::from_millis(200));
+    );
+    loop {
+        match active_queries.as_mut().await {
+            // No error. Valid response.
+            Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
+            // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
+            // Treat as a hard error.
+            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
+            // Only authoritative servers can indicate that a name does not exist.
+            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question, Some(kill_token)).await,
+            // This server does not have the authority to say that the name
+            // does not exist. Ask others.
+            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }))) => continue,
+            // If a server does not support a query type, we can probably assume it is not in that zone.
+            // TODO: verify that this is a valid assumption. Should we return NotImpl?
+            Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
+            // If a name server refuses to perform an operation, we should not keep asking the other servers.
+            // TODO: verify that this is a valid way of handling.
+            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
+            // We don't know how to handle unknown errors.
+            // Assume they are a hard failure.
+            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
+            // Malformed response.
+            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
+            // If there is an IO error, try a different server.
+            Some(NSQueryResult::QueryResult(Err(_))) => continue,
+            // If a particular name server cannot be queried anymore, then keep
+            // trying to query the others.
+            Some(NSQueryResult::OutOfAddresses) => continue,
+            // If there was an error looking up one of the name servers, keep
+            // trying to look up the others.
+            Some(NSQueryResult::NSAddressQueryErr(_)) => continue,
+            None => break,
         }
     }
 
