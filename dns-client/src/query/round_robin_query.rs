@@ -2,20 +2,52 @@ use std::{borrow::BorrowMut, collections::VecDeque, future::Future, io, net::IpA
 
 use async_lib::awake_token::AwakeToken;
 use dns_lib::{interface::cache::cache::AsyncCache, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
-use futures::StreamExt;
-use pin_project::pin_project;
-use tokio::{pin, sync::broadcast};
+use futures::{future::BoxFuture, FutureExt, StreamExt};
+use pin_project::{pin_project, pinned_drop};
+use tokio::{pin, sync::{broadcast::{self, error::RecvError}, RwLockReadGuard, RwLockWriteGuard}, task::JoinHandle};
 
 use crate::DNSAsyncClient;
 
 use super::{network_query::query_network, recursive_query::{query_cache, recursive_query, QueryResponse}};
 
 
-enum NSQueryAddressState {
+async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, address_rtype: RType, question: Question, kill_token: Option<Arc<AwakeToken>>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
+    let ns_question = Question::new(ns_domain.clone(), address_rtype, question.qclass());
+
+    fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
+        match record {
+            ResourceRecord::A(_, rdata) => Some(IpAddr::V4(*rdata.ipv4_addr())),
+            ResourceRecord::AAAA(_, rdata) => Some(IpAddr::V6(*rdata.ipv6_addr())),
+            _ => None,
+        }
+    }
+
+    let ns_addresses = match query_cache(&joined_cache, &ns_question).await {
+        QueryResponse::Records(mut records) => NSQueryAddressState::CacheHit(
+            records.drain(..).filter_map(|record| rr_to_ip(record)).collect()
+        ),
+        _ => NSQueryAddressState::CacheMiss,
+    };
+
+    NSQuery {
+        ns_domain,
+        question,
+    
+        ns_address_rtype: address_rtype,
+        ns_addresses,
+        query: None,
+        kill_token,
+    
+        client,
+        joined_cache,
+    }
+}
+
+enum NSQueryAddressState<'a> {
     Fresh,
     CacheHit(Vec<IpAddr>),
     CacheMiss,
-    QueryingNetwork(Pin<Box<dyn Future<Output = QueryResponse<ResourceRecord>> + Send>>),
+    QueryingNetwork(BoxFuture<'a, QueryResponse<ResourceRecord>>),
     QuerySuccess(Vec<IpAddr>),
     QueryFailed(RCode),
 }
@@ -26,20 +58,20 @@ enum NSQueryResult {
     QueryResult(io::Result<Message>),
 }
 
-struct NSQuery<CCache> where CCache: AsyncCache + Send + Sync {
+struct NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
     ns_domain: CDomainName,
     question: Question,
 
     ns_address_rtype: RType,
-    ns_addresses: NSQueryAddressState,
-    query: Option<Pin<Box<dyn Future<Output = io::Result<Message>> + Send>>>,
+    ns_addresses: NSQueryAddressState<'b>,
+    query: Option<BoxFuture<'a, io::Result<Message>>>,
     kill_token: Option<Arc<AwakeToken>>,
 
     client: Arc<DNSAsyncClient>,
     joined_cache: Arc<CCache>,
 }
 
-impl<CCache> NSQuery<CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, CCache> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     pub fn new(ns_domain: CDomainName, address_rtype: RType, question: Question, kill_token: Option<Arc<AwakeToken>>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> Self {
         Self {
             ns_domain,
@@ -53,25 +85,6 @@ impl<CCache> NSQuery<CCache> where CCache: AsyncCache + Send + Sync + 'static {
         }
     }
 
-    pub async fn query_cache_for_ns_addresses(mut self: Pin<&mut Self>) {
-        let question = Question::new(self.ns_domain.clone(), self.ns_address_rtype, self.question.qclass());
-
-        fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
-            match record {
-                ResourceRecord::A(_, rdata) => Some(IpAddr::V4(*rdata.ipv4_addr())),
-                ResourceRecord::AAAA(_, rdata) => Some(IpAddr::V6(*rdata.ipv6_addr())),
-                _ => None,
-            }
-        }
-
-        match query_cache(&self.joined_cache, &question).await {
-            QueryResponse::Records(mut records) => self.ns_addresses = NSQueryAddressState::CacheHit(
-                records.drain(..).filter_map(|record| rr_to_ip(record)).collect()
-            ),
-            _ => self.ns_addresses = NSQueryAddressState::CacheMiss,
-        }
-    }
-
     pub fn had_cache_hit(&self) -> bool {
         match &self.ns_addresses {
             NSQueryAddressState::CacheHit(_) => true,
@@ -80,7 +93,7 @@ impl<CCache> NSQuery<CCache> where CCache: AsyncCache + Send + Sync + 'static {
     }
 }
 
-impl<CCache> Future for NSQuery<CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     type Output = NSQueryResult;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -159,15 +172,10 @@ impl<CCache> Future for NSQuery<CCache> where CCache: AsyncCache + Send + Sync +
 }
 
 #[pin_project]
-struct NSSelectQuery<'a, Fut, Queries>
-where
-    Fut: Future<Output = NSQueryResult> + 'a,
-    Queries: Iterator<Item = &'a mut Pin<Box<Fut>>>,
-    
-{
-    ns_queries: Queries,
-    ns_queries_empty: bool,
-    running: Vec<&'a mut Pin<Box<Fut>>>,
+struct NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
+    // Note: the queries are read in reverse order (like a stack).
+    ns_queries: Vec<Pin<Box<Fut>>>,
+    running: Vec<Pin<Box<Fut>>>,
     ready_results: VecDeque<NSQueryResult>,
     max_concurrency: usize,
     add_query_timeout: Duration,
@@ -175,15 +183,10 @@ where
     add_query_timer: Option<tokio::time::Sleep>,
 }
 
-impl<'a, Fut, Queries> NSSelectQuery<'a, Fut, Queries>
-where
-    Fut: Future<Output = NSQueryResult> + 'a,
-    Queries: Iterator<Item = &'a mut Pin<Box<Fut>>>,
-{
-    pub fn new(ns_queries: Queries, max_concurrency: usize, add_query_timeout: Duration) -> Self {
+impl<Fut> NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
+    pub fn new(ns_queries: Vec<Pin<Box<Fut>>>, max_concurrency: usize, add_query_timeout: Duration) -> Self {
         Self {
             ns_queries,
-            ns_queries_empty: false,
             running: Vec::new(),
             ready_results: VecDeque::new(),
             max_concurrency,
@@ -196,26 +199,21 @@ where
         // After the first poll, the running queue should never be left empty
         // between polls as long as there are more queries to try.
         self.running.is_empty()
-        && !self.ns_queries_empty
+        && !self.ns_queries.is_empty()
         && self.ready_results.is_empty()
     }
 }
 
-impl<'a, Fut, Queries> Future for NSSelectQuery<'a, Fut, Queries>
-where
-    Fut: Future<Output = NSQueryResult> + 'a,
-    Queries: Iterator<Item = &'a mut Pin<Box<Fut>>>,
-{
+impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
     type Output = Option<NSQueryResult>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         if self.is_first_poll() {
             let mut this = self.as_mut().project();
             // Initialize the `running` queue with its first query.
-            match this.ns_queries.next() {
+            match this.ns_queries.pop() {
                 Some(ns_query) => this.running.push(ns_query),
                 None => {
-                    *this.ns_queries_empty = true;
                     // Don't want to be erroneously woken up if we are done.
                     // Although on the first poll, it is probably already None.
                     this.add_query_timer.set(None);
@@ -252,7 +250,7 @@ where
             let mut this = self.as_mut().project();
             match (this.add_query_timer.as_mut().as_pin_mut(), tokio::time::Instant::now().checked_add(*this.add_query_timeout)) {
                 (Some(mut timer), Some(new_deadline)) => match timer.as_mut().poll(cx) {
-                    Poll::Ready(()) => match this.ns_queries.next() {
+                    Poll::Ready(()) => match this.ns_queries.pop() {
                         Some(ns_query) => {
                             this.running.push(ns_query);
                             // Keep setting the timer until the maximum number
@@ -270,7 +268,6 @@ where
                             }
                         },
                         None => {
-                            *this.ns_queries_empty = true;
                             // Don't want to be erroneously woken up if there
                             // is nobody else to add.
                             this.add_query_timer.set(None);
@@ -279,7 +276,7 @@ where
                     Poll::Pending => (),
                 },
                 (Some(mut timer), None) => match timer.as_mut().poll(cx) {
-                    Poll::Ready(()) => match this.ns_queries.next() {
+                    Poll::Ready(()) => match this.ns_queries.pop() {
                         Some(ns_query) => {
                             this.running.push(ns_query);
                             // Since a deadline could not be calculated, the
@@ -291,7 +288,6 @@ where
                             this.add_query_timer.set(None);
                         },
                         None => {
-                            *this.ns_queries_empty = true;
                             // Don't want to be erroneously woken up if there
                             // is nobody else to add.
                             this.add_query_timer.set(None);
@@ -318,7 +314,7 @@ where
             // Add back as many tasks as were removed, unless the queue of
             // incoming tasks runs out.
             for _ in 0..removed_count {
-                match this.ns_queries.next() {
+                match this.ns_queries.pop() {
                     Some(ns_query) => {
                         this.running.push(ns_query);
                         // Want to get newly added tasks polled so that they
@@ -326,7 +322,6 @@ where
                         poll_again = true;
                     },
                     None => {
-                        *this.ns_queries_empty = true;
                         // Don't want to be erroneously woken up if there is
                         // nobody else to add.
                         this.add_query_timer.set(None);
@@ -341,7 +336,7 @@ where
         }
 
         let this = self.as_mut().project();
-        match (this.running.len(), this.ns_queries_empty, this.ready_results.pop_front()) {
+        match (this.running.len(), this.ns_queries.is_empty(), this.ready_results.pop_front()) {
             // All of the queued queries have been tried.
             (0, true, None) => Poll::Ready(None),
             // At least 1 query is still running.
@@ -355,6 +350,343 @@ where
         }
     }
 }
+
+#[pin_project(project = EnumProj, PinnedDrop)]
+enum NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+    'a: 'e + 'f + 'g + 'h,
+    'f: 'e,
+    'h: 'g,
+    'k: 'j,
+    'l: 'j,
+{
+    Fresh {
+        client: &'a Arc<DNSAsyncClient>,
+        joined_cache: &'b Arc<CCache>,
+        question: &'c Question,
+        name_servers: &'d [CDomainName],
+    },
+    AwaitingReadLock {
+        client: &'a Arc<DNSAsyncClient>,
+        joined_cache: &'b Arc<CCache>,
+        question: &'c Question,
+        name_servers: &'d [CDomainName],
+        #[pin]
+        read_lock_future: BoxFuture<'e, RwLockReadGuard<'f, std::collections::HashMap<Question, broadcast::Sender<QueryResponse<ResourceRecord>>>>>,
+    },
+    AwaitingWriteLock {
+        client: &'a Arc<DNSAsyncClient>,
+        joined_cache: &'b Arc<CCache>,
+        question: &'c Question,
+        name_servers: &'d [CDomainName],
+        #[pin]
+        write_lock_future: BoxFuture<'g, RwLockWriteGuard<'h, std::collections::HashMap<Question, broadcast::Sender<QueryResponse<ResourceRecord>>>>>,
+    },
+    Forwarded {
+        client: &'a Arc<DNSAsyncClient>,
+        joined_cache: &'b Arc<CCache>,
+        question: &'c Question,
+        name_servers: &'d [CDomainName],
+        #[pin]
+        receiver: BoxFuture<'i, Result<QueryResponse<ResourceRecord>, RecvError>>,
+    },
+    GetCachedNSAddresses {
+        client: &'a Arc<DNSAsyncClient>,
+        question: &'c Question,
+        sender: broadcast::Sender<QueryResponse<ResourceRecord>>,
+        kill_token: Arc<AwakeToken>,
+        name_server_address_queries: Vec<BoxFuture<'j, NSQuery<'k, 'l, CCache>>>,
+        name_server_non_cached_queries: Vec<Pin<Box<NSQuery<'k, 'l, CCache>>>>,
+        name_server_cached_queries: Vec<Pin<Box<NSQuery<'k, 'l, CCache>>>>,
+    },
+    QueryNameServers {
+        client: &'a Arc<DNSAsyncClient>,
+        question: &'c Question,
+        sender: broadcast::Sender<QueryResponse<ResourceRecord>>,
+        kill_token: Arc<AwakeToken>,
+        #[pin]
+        ns_query_select: NSSelectQuery<NSQuery<'k, 'l, CCache>>,
+    },
+    Cleanup {
+        client: &'a Arc<DNSAsyncClient>,
+        question: &'c Question,
+        write_lock_future: BoxFuture<'g, RwLockWriteGuard<'h, std::collections::HashMap<Question, broadcast::Sender<QueryResponse<ResourceRecord>>>>>,
+        result: QueryResponse<ResourceRecord>,
+    },
+    Complete,
+}
+
+impl <'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+    #[inline]
+    fn new(client: &'a Arc<DNSAsyncClient>, joined_cache: &'b Arc<CCache>, question: &'c Question, name_servers: &'d [CDomainName]) -> Self {
+        Self::Fresh { client, joined_cache, question, name_servers }
+    }
+}
+
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+    type Output = QueryResponse<ResourceRecord>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        loop {
+            match self.as_mut().project() {
+                EnumProj::Fresh { client, joined_cache, question, name_servers } => {
+                    let read_lock_future = client.active_query_manager.read().boxed();
+
+                    let client = *client;
+                    let joined_cache = *joined_cache;
+                    let question = *question;
+                    let name_servers = *name_servers;
+                    self.set(NSRoundRobin::AwaitingReadLock { client, joined_cache, question, name_servers, read_lock_future });
+                    // Next loop will poll the read lock
+                    continue;
+                },
+                EnumProj::AwaitingReadLock { client, joined_cache, question, name_servers, read_lock_future } => {
+                    match read_lock_future.poll(cx) {
+                        Poll::Ready(r_active_queries) => match r_active_queries.get(question) {
+                            Some(sender) => {
+                                let receiver = sender.subscribe();
+                                let receiver = async {
+                                    let mut receiver = receiver;
+                                    receiver.recv().await
+                                }.boxed();
+                                drop(r_active_queries);
+                                println!("Already Forwarded (1): '{question}'");
+
+                                let client = *client;
+                                let joined_cache = *joined_cache;
+                                let question = *question;
+                                let name_servers = *name_servers;
+                                self.set(NSRoundRobin::Forwarded { client, joined_cache, question, name_servers, receiver });
+                                // Next loop will poll the receiver
+                                continue;
+                            },
+                            None => {
+                                drop(r_active_queries);
+                                let write_lock_future = client.active_query_manager.write().boxed();
+
+                                let client = *client;
+                                let joined_cache = *joined_cache;
+                                let question = *question;
+                                let name_servers = *name_servers;
+                                self.set(NSRoundRobin::AwaitingWriteLock { client, joined_cache, question, name_servers, write_lock_future });
+                                // Next loop will poll the write lock
+                                continue;
+                            },
+                        },
+                        // Exit loop. Wait for read lock to wake us again.
+                        Poll::Pending => return Poll::Pending,
+                    }
+                },
+                EnumProj::AwaitingWriteLock { client, joined_cache, question, name_servers, write_lock_future } => {
+                    match write_lock_future.poll(cx) {
+                        Poll::Ready(mut w_active_queries) => match w_active_queries.get(question) {
+                            Some(sender) => {
+                                let receiver = sender.subscribe();
+                                let receiver = async {
+                                    let mut receiver = receiver;
+                                    receiver.recv().await
+                                }.boxed();
+                                drop(w_active_queries);
+                                println!("Already Forwarded (2): '{question}'");
+
+                                let client = *client;
+                                let joined_cache = *joined_cache;
+                                let question = *question;
+                                let name_servers = *name_servers;
+                                self.set(NSRoundRobin::Forwarded { client, joined_cache, question, name_servers, receiver });
+                                // Next loop will poll the receiver
+                                continue;
+                            },
+                            None => {
+                                let (sender, _) = broadcast::channel(1);
+                                w_active_queries.insert(question.clone(), sender.clone());
+                                drop(w_active_queries);
+                                let kill_token = Arc::new(AwakeToken::new());
+
+                                let name_server_address_queries = name_servers.iter()
+                                    .flat_map(|ns_domain| [
+                                        query_cache_for_ns_addresses(ns_domain.clone(), RType::A, question.clone(), Some(kill_token.clone()), client.clone(), joined_cache.clone()).boxed(),
+                                        query_cache_for_ns_addresses(ns_domain.clone(), RType::AAAA, question.clone(), Some(kill_token.clone()), client.clone(), joined_cache.clone()).boxed(),
+                                    ])
+                                    .collect::<Vec<_>>();
+                                let capacity = name_server_address_queries.len();
+
+                                let client = *client;
+                                let question = *question;
+                                self.set(NSRoundRobin::GetCachedNSAddresses { client, question, sender, kill_token, name_server_address_queries, name_server_cached_queries: Vec::with_capacity(capacity), name_server_non_cached_queries: Vec::with_capacity(capacity) });
+                                // Next loop will poll all the NS address queries
+                                continue;
+                            },
+                        },
+                        // Exit loop. Wait for read lock to wake us again.
+                        Poll::Pending => return Poll::Pending,
+                    }
+                },
+                EnumProj::Forwarded { client, joined_cache, question, name_servers, receiver } => {
+                    match receiver.poll(cx) {
+                        // Exit. Answer returned.
+                        Poll::Ready(Ok(query_response)) => return Poll::Ready(query_response),
+                        Poll::Ready(Err(RecvError::Closed)) => {
+                            println!("Recoverable Internal Error: channel closed\nContinuing Query: '{question}'");
+
+                            let client = *client;
+                            let joined_cache = *joined_cache;
+                            let question = *question;
+                            let name_servers = *name_servers;
+                            self.set(NSRoundRobin::Fresh { client, joined_cache, question, name_servers });
+                            // Next loop will restart the query
+                            continue;
+                        },
+                        Poll::Ready(Err(RecvError::Lagged(skipped_message_count))) => {
+                            println!("Recoverable Internal Error: channel lagged. Skipping {skipped_message_count} messages\nContinuing Query: '{question}'");
+                            // Next loop will re-poll the receiver to get a message
+                            continue;
+                        },
+                        // Exit loop. Wait for receiver to wake us again.
+                        Poll::Pending => return Poll::Pending,
+                    }
+                },
+                EnumProj::GetCachedNSAddresses { client, question, sender, kill_token, name_server_address_queries, name_server_cached_queries, name_server_non_cached_queries } => {
+                    name_server_address_queries.retain_mut(|ns_address_query| {
+                        match ns_address_query.as_mut().poll(cx) {
+                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, question: _, ns_address_rtype: _, ns_addresses: NSQueryAddressState::CacheHit(_), query: _, kill_token: _, client: _, joined_cache: _ }) => {
+                                name_server_cached_queries.push(Box::pin(ns_query));
+                                false
+                            },
+                            Poll::Ready(ns_query) => {
+                                name_server_non_cached_queries.push(Box::pin(ns_query));
+                                false
+                            },
+                            Poll::Pending => true,
+                        }
+                    });
+                    if name_server_address_queries.is_empty() {
+                        // Join the two lists of queries. The queries that don't have cached
+                        // addresses are at the front and the ones with cached addresses are at the
+                        // back. This list will be read like a stack, so the cached queries will be
+                        // run first.
+                        let mut ns_queries = Vec::with_capacity(name_server_non_cached_queries.len() + name_server_cached_queries.len());
+                        ns_queries.extend(name_server_non_cached_queries.drain(..));
+                        ns_queries.extend(name_server_cached_queries.drain(..));
+                        let ns_query_select = NSSelectQuery::new(ns_queries, 3, Duration::from_millis(200));
+
+                        let client = *client;
+                        let question = *question;
+                        let sender = sender.clone();
+                        let kill_token = kill_token.clone();
+                        self.set(NSRoundRobin::QueryNameServers { client, question, sender, kill_token, ns_query_select });
+                        // Next loop will select the first query from the list and start it
+                        continue;
+                    } else {
+                        // Exit loop. Wait for one of the address queries to wake us again.
+                        return Poll::Pending;
+                    }
+                },
+                EnumProj::QueryNameServers { client, question, sender, kill_token, ns_query_select } => {
+                    match ns_query_select.poll(cx) {
+                        // No error. Valid response.
+                        Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))))
+                        // If a server does not support a query type, we can probably assume it is not in that zone.
+                        // TODO: verify that this is a valid assumption. Should we return NotImpl?
+                      | Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })))) => {
+                            let result = query_response(response);
+                            let write_lock_future = client.active_query_manager.write().boxed();
+
+                            // Send out the answer to anyone waiting.
+                            let _ = sender.send(result.clone());
+                            kill_token.awake();
+
+                            let client = *client;
+                            let question = *question;
+                            self.set(NSRoundRobin::Cleanup { client, question, write_lock_future, result });
+                            // Next loop will start the cleanup process
+                            continue;
+                        },
+                        // Only authoritative servers can indicate that a name does not exist.
+                        Poll::Ready(Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })))) => {
+                            let result = QueryResponse::Error(RCode::NXDomain);
+                            let write_lock_future = client.active_query_manager.write().boxed();
+
+                            // Send out the answer to anyone waiting.
+                            let _ = sender.send(result.clone());
+                            kill_token.awake();
+
+                            let client = *client;
+                            let question = *question;
+                            self.set(NSRoundRobin::Cleanup { client, question, write_lock_future, result });
+                            // Next loop will start the cleanup process
+                            continue;
+                        },
+                        // This server does not have the authority to say that the name
+                        // does not exist. Ask others.
+                        Poll::Ready(Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }))))
+                        // If there is an IO error, try a different server.
+                      | Poll::Ready(Some(NSQueryResult::QueryResult(Err(_))))
+                        // If a particular name server cannot be queried anymore, then keep
+                        // trying to query the others.
+                      | Poll::Ready(Some(NSQueryResult::OutOfAddresses))
+                        // If there was an error looking up one of the name servers, keep
+                        // trying to look up the others.
+                      | Poll::Ready(Some(NSQueryResult::NSAddressQueryErr(_))) => {
+                            // Next loop will poll the other name servers.
+                            continue;
+                        },
+                        // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
+                        // Treat as a hard error.
+                        Poll::Ready(Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ }))))
+                        // If a name server refuses to perform an operation, we should not keep asking the other servers.
+                        // TODO: verify that this is a valid way of handling.
+                      | Poll::Ready(Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ }))))
+                        // We don't know how to handle unknown errors.
+                        // Assume they are a fatal failure.
+                      | Poll::Ready(Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))))
+                        // Malformed response.
+                      | Poll::Ready(Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))))
+                        // No more servers to query.
+                      | Poll::Ready(None) => {
+                            let result = QueryResponse::Error(RCode::ServFail);
+                            let write_lock_future = client.active_query_manager.write().boxed();
+
+                            // Send out the answer to anyone waiting.
+                            let _ = sender.send(result.clone());
+                            kill_token.awake();
+
+                            let client = *client;
+                            let question = *question;
+                            self.set(NSRoundRobin::Cleanup { client, question, write_lock_future, result });
+                            // Next loop will start the cleanup process
+                            continue;
+                        },
+                        // Exit loop. Wait for one of the ns queries to wake us again.
+                        Poll::Pending => return Poll::Pending,
+                    }
+                },
+                EnumProj::Cleanup { client: _, question, write_lock_future, result } => {
+                    match write_lock_future.as_mut().poll(cx) {
+                        Poll::Ready(mut active_queries) => {
+                            // Cleanup.
+                            let _ = active_queries.remove(question);
+                            drop(active_queries);
+
+                            let result = result.clone();
+                            self.set(NSRoundRobin::Complete);
+
+                            // Exit forever. Query complete.
+                            return Poll::Ready(result);
+                        },
+                        // Exit loop. Wait for the write lock to wake us again.
+                        Poll::Pending => return Poll::Pending,
+                    }
+                }
+                EnumProj::Complete => {
+                    panic!("NSRoundRobin was polled again after it already returned Poll::Ready")
+                },
+            }
+        }
+    }
+}
+
 
 #[inline]
 fn query_response(answer: Message) -> QueryResponse<ResourceRecord> {
@@ -371,136 +703,27 @@ fn query_response(answer: Message) -> QueryResponse<ResourceRecord> {
 
 #[inline]
 pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, question: &Question, name_servers: &[CDomainName]) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
-    // Active Query Check: Check to see if a query has already been made for the record.
-    let read_locked_active_queries = client.active_query_manager.read().await;
-    match read_locked_active_queries.get(question) {
-        Some(sender) => {
-            println!("Already Forwarded (1): '{question}'");
-            let mut receiver = sender.subscribe();
-            drop(read_locked_active_queries);
-            match receiver.recv().await {
-                Ok(response) => return response,
-                // In the event of an error passing messages between tasks, we can continue this query.
-                Err(error) => println!("Recoverable Internal Error: {error}\nContinuing Query,"),
-            }
-        },
-        None => drop(read_locked_active_queries),
-    }
-
-    let mut write_locked_active_queries = client.active_query_manager.write().await;
-    // Since we switched our locks, we should check again that the query has not already been started.
-    match write_locked_active_queries.get(question) {
-        Some(sender) => {
-            println!("Already Forwarded (2): '{question}'");
-            let mut receiver = sender.subscribe();
-            drop(write_locked_active_queries);
-            match receiver.recv().await {
-                Ok(response) => return response,
-                // In the event of an error passing messages between tasks, we can continue this query.
-                Err(error) => println!("Recoverable Internal Error: {error}\nRestarting Name Servers Query,"),
-            }
-        },
-        None => {
-            let (sender, _) = broadcast::channel(1);
-            // IMPORTANT: Any return statements after this should use `sender_return()` so that the
-            // active queries map gets cleaned up and anyone waiting for an answer gets sent the
-            // result.
-            write_locked_active_queries.insert(question.clone(), sender);
-            drop(write_locked_active_queries);
-        }
-    }
-
-    // Choose an order.
-    //      1st, name servers who we already know addresses of (cached).
-    //         we may want to experiment with selecting servers that have not been connected to yet
-    //         to get an idea of how fast those name servers are.
-    //      2nd, name servers who we don't know addresses of (need to be queried for).
-
-    // TODO: still need to order based on which sockets exist and are connected.
-
-    // TODO: Create special-purpose collection to keep pinned values. This way, we don't need to
-    //       use Box.
-    let kill_token = Arc::new(AwakeToken::new());
-    let mut name_server_queries = name_servers.iter()
-        .flat_map(|ns_domain| [
-            Box::pin(NSQuery::new(ns_domain.clone(), RType::A, question.clone(), Some(kill_token.clone()), client.clone(), joined_cache.clone())),
-            Box::pin(NSQuery::new(ns_domain.clone(), RType::AAAA, question.clone(), Some(kill_token.clone()), client.clone(), joined_cache.clone())),
-        ])
-        .collect::<Vec<_>>();
-    futures::stream::iter(name_server_queries.iter_mut())
-        .for_each_concurrent(None, |ns_query| ns_query.as_mut().query_cache_for_ns_addresses())
-        .await;
-
-    let mut cached_queries = Vec::new();
-    let mut non_cached_queries = Vec::new();
-    for ns_query in name_server_queries {
-        if ns_query.had_cache_hit() {
-            cached_queries.push(ns_query);
-        } else {
-            non_cached_queries.push(ns_query)
-        }
-    }
-
     println!("Querying Name Servers for '{question}'");
-
-    pin!(
-        let active_queries = NSSelectQuery::new(cached_queries.iter_mut().chain(non_cached_queries.iter_mut()), 3, Duration::from_millis(200));
-    );
-    loop {
-        match active_queries.as_mut().await {
-            // No error. Valid response.
-            Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-            // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
-            // Treat as a hard error.
-            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-            // Only authoritative servers can indicate that a name does not exist.
-            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::NXDomain), question, Some(kill_token)).await,
-            // This server does not have the authority to say that the name
-            // does not exist. Ask others.
-            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }))) => continue,
-            // If a server does not support a query type, we can probably assume it is not in that zone.
-            // TODO: verify that this is a valid assumption. Should we return NotImpl?
-            Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, query_response(response), question, Some(kill_token)).await,
-            // If a name server refuses to perform an operation, we should not keep asking the other servers.
-            // TODO: verify that this is a valid way of handling.
-            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-            // We don't know how to handle unknown errors.
-            // Assume they are a hard failure.
-            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-            // Malformed response.
-            Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await,
-            // If there is an IO error, try a different server.
-            Some(NSQueryResult::QueryResult(Err(_))) => continue,
-            // If a particular name server cannot be queried anymore, then keep
-            // trying to query the others.
-            Some(NSQueryResult::OutOfAddresses) => continue,
-            // If there was an error looking up one of the name servers, keep
-            // trying to look up the others.
-            Some(NSQueryResult::NSAddressQueryErr(_)) => continue,
-            None => break,
-        }
-    }
-
-    return sender_return::<CCache>(client, QueryResponse::Error(RCode::ServFail), question, Some(kill_token)).await;
+    NSRoundRobin::new(client, joined_cache, question, name_servers).await
 }
 
-#[inline]
-// Note: Returns the result so that this function can be called as the return statement.
-async fn sender_return<CCache>(client: &Arc<DNSAsyncClient>, result: QueryResponse<ResourceRecord>, question: &Question, kill_token: Option<Arc<AwakeToken>>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache {
-    // Cleanup.
-    let mut write_locked_active_query_manager = client.active_query_manager.write().await;
-    let sender = write_locked_active_query_manager.remove(question);
-    drop(write_locked_active_query_manager);
+// #[inline]
+// // Note: Returns the result so that this function can be called as the return statement.
+// async fn sender_return<CCache>(client: &Arc<DNSAsyncClient>, result: QueryResponse<ResourceRecord>, question: &Question, kill_token: Option<Arc<AwakeToken>>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache {
+//     // Cleanup.
+//     let mut write_locked_active_query_manager = client.active_query_manager.write().await;
+//     let sender = write_locked_active_query_manager.remove(question);
+//     drop(write_locked_active_query_manager);
 
-    // Send out the answer to anyone waiting.
-    if let Some(sender) = sender {
-        let _ = sender.send(result.clone());
-    }
+//     // Send out the answer to anyone waiting.
+//     if let Some(sender) = sender {
+//         let _ = sender.send(result.clone());
+//     }
 
-    if let Some(kill_token) = kill_token {
-        kill_token.awake();
-    }
+//     if let Some(kill_token) = kill_token {
+//         kill_token.awake();
+//     }
 
-    // Return the result.
-    return result;
-}
+//     // Return the result.
+//     return result;
+// }
