@@ -1,4 +1,4 @@
-use std::{borrow::BorrowMut, collections::VecDeque, future::Future, io, net::IpAddr, pin::Pin, sync::Arc, task::Poll, time::Duration};
+use std::{borrow::BorrowMut, future::Future, io, net::IpAddr, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
 use async_lib::awake_token::AwakeToken;
 use dns_lib::{interface::cache::cache::AsyncCache, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
@@ -177,7 +177,6 @@ struct NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
     // Note: the queries are read in reverse order (like a stack).
     ns_queries: Vec<Pin<Box<Fut>>>,
     running: Vec<Pin<Box<Fut>>>,
-    ready_results: VecDeque<NSQueryResult>,
     max_concurrency: usize,
     add_query_timeout: Duration,
     #[pin]
@@ -189,7 +188,6 @@ impl<Fut> NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
         Self {
             ns_queries,
             running: Vec::new(),
-            ready_results: VecDeque::new(),
             max_concurrency,
             add_query_timeout,
             add_query_timer: None,
@@ -201,7 +199,6 @@ impl<Fut> NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
         // between polls as long as there are more queries to try.
         self.running.is_empty()
         && !self.ns_queries.is_empty()
-        && self.ready_results.is_empty()
     }
 }
 
@@ -262,9 +259,17 @@ impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult
                             if this.running.len() < *this.max_concurrency {
                                 // Poll again is set so that the new timer is
                                 // polled (to get it started).
+                                // If a result is found and this returns
+                                // Poll::Ready(), then it won't get polled
+                                // unless this struct is awaited again.
                                 timer.reset(new_deadline);
                                 poll_again = true;
                             } else {
+                                // Once we have the maximum number of tasks
+                                // running concurrently, we don't need to wake
+                                // up to add new tasks. New tasks from
+                                // `ns_query` will only be moved to `running`
+                                // when a space opens up in `running`.
                                 this.add_query_timer.set(None);
                             }
                         },
@@ -299,36 +304,40 @@ impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult
                 (None, _) => (),
             }
 
-            // Poll all the tasks currently marked as running. Tasks that are
-            // ready should be removed from this queue and their result should
-            // be stored. They will be replaced (if possible) after this loop
-            // is done to try to maintain the same number of running tasks.
-            let mut removed_count: usize = 0;
-            this.running.retain_mut(|ns_query| match ns_query.as_mut().poll(cx) {
-                Poll::Ready(result) => {
-                    this.ready_results.push_back(result);
-                    removed_count += 1;
-                    false
-                },
-                Poll::Pending => true,
-            });
-            // Add back as many tasks as were removed, unless the queue of
-            // incoming tasks runs out.
-            for _ in 0..removed_count {
-                match this.ns_queries.pop() {
-                    Some(ns_query) => {
-                        this.running.push(ns_query);
-                        // Want to get newly added tasks polled so that they
-                        // get started and can wake this task up.
-                        poll_again = true;
-                    },
-                    None => {
-                        // Don't want to be erroneously woken up if there is
-                        // nobody else to add.
-                        this.add_query_timer.set(None);
-                        break;
-                    },
+            let mut query_result = None;
+            for (index, ns_query) in this.running.iter_mut().enumerate() {
+                if let Poll::Ready(result) = ns_query.as_mut().poll(cx) {
+                    query_result = Some(result);
+                    match this.ns_queries.pop() {
+                        Some(new_ns_query) => {
+                            // We can re-use the spot in the `running` list for
+                            // the new query since we don't care about the
+                            // order of this list. They should all get polled
+                            // eventually (as long as no result is found).
+                            // Re-using the spot means the vector does not need
+                            // to shift all the elements to the right of this
+                            // index left just for us to append to the end.
+                            *ns_query = new_ns_query;
+                            // Want to get newly added tasks polled so that they
+                            // get started and can wake this task up.
+                            // If a result is found and this returns
+                            // Poll::Ready(), then it won't get polled unless
+                            // this struct is awaited again.
+                            poll_again = true;
+                        },
+                        None => {
+                            let _ = this.running.swap_remove(index);
+                            // Don't want to be erroneously woken up if there is
+                            // nobody else to add.
+                            this.add_query_timer.set(None);
+                        },
+                    }
+                    break;
                 }
+            }
+
+            if let Some(result) = query_result {
+                return Poll::Ready(Some(result));
             }
 
             if !poll_again {
@@ -337,17 +346,12 @@ impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult
         }
 
         let this = self.as_mut().project();
-        match (this.running.len(), this.ns_queries.is_empty(), this.ready_results.pop_front()) {
-            // All of the queued queries have been tried.
-            (0, true, None) => Poll::Ready(None),
+        match (this.ns_queries.len(), this.running.len()) {
+            // All of the queued queries have completed.
+            (0, 0) => Poll::Ready(None),
             // At least 1 query is still running.
-            (1.., _, None) => Poll::Pending,
-            (_, _, Some(result)) => Poll::Ready(Some(result)),
-            // There is still a queued query but it was never added to the
-            // running queue. This should never occur, even if
-            // `max_concurrency` is less than 1 since it is not checked before
-            // adding the initial query to the queue.
-            (0, false, None) => panic!("There are still queries in the queue but the running queue is empty"),
+            (_, 1..) => Poll::Pending,
+            (1.., 0) => panic!("There are still queries in the queue but the running queue is empty"),
         }
     }
 }
