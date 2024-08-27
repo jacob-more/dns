@@ -45,31 +45,14 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         // Query the name servers for the child domain (aka. search_name).
         // We set the qtype to be RRTypeCode::A to hide the actual qtype
         // that we're looking for.
-        let used_qtype = if index == 0 { question.qtype() } else { RType::A };
         name_servers.shuffle(&mut thread_rng());
-        match query_name_servers(&client, &joined_cache, &question.with_new_qname_qtype(search_name.clone(), used_qtype), &name_servers).await {
+        match query_name_servers(&client, &joined_cache, &question.with_new_qname_qtype(search_name.clone(), RType::A), &name_servers).await {
             QueryResponse::Error(error) => return QueryResponse::Error(error),
             QueryResponse::NoRecords => {
                 println!("Failed to find records for '{search_name}' while trying to answer '{question}'");
                 return QueryResponse::Error(RCode::ServFail);
             },
             QueryResponse::Records(response_records) => {
-                // If we are at index 0, then we have reached the original qname.
-                // We want to see if this is our answer, a CNAME, or a DNAME
-                if index == 0 && response_records.iter().any(|record| record.rtype() == question.qtype()) {
-                    return QueryResponse::Records(response_records);
-                }
-
-                if index == 0 {
-                    for record in &response_records {
-                        if let ResourceRecord::CNAME(_, cname_rdata) = record {
-                            return recursive_query(client, joined_cache, &question.with_new_qname(cname_rdata.primary_name().clone())).await;
-                        }
-                    }
-                }
-
-                // TODO: Handle DNAME; similar to CNAME
-
                 if response_records.iter().any(|record| record.rtype() == RType::NS) {
                     name_servers.clear();
                     for record in response_records {
