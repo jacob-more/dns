@@ -5,7 +5,7 @@ use tokio::{select, sync::{watch, RwLock}, task::JoinHandle};
 use crate::mixed_tcp_udp::MixedSocket;
 
 
-const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(120);
+const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(30);
 
 
 struct InternalSocketManager {
@@ -30,14 +30,45 @@ impl InternalSocketManager {
     fn start_garbage_collection(internal_socket_manager: Arc<RwLock<Self>>, mut keep_alive_receiver: watch::Receiver<Duration>) -> JoinHandle<()> {
         tokio::task::spawn(async move {
             let mut gc_interval = *keep_alive_receiver.borrow_and_update();
+            let mut start = tokio::time::Instant::now();
+            let mut option_deadline = start.checked_add(gc_interval);
             loop {
-                select! {
-                    biased;
-                    _ = tokio::time::sleep(gc_interval) => Self::drop_unused_sockets(&internal_socket_manager).await,
-                    change_notification = keep_alive_receiver.changed() => {
-                        match change_notification {
-                            // Modifies the interval at which garbage collection is performed.
-                            Ok(()) => gc_interval = *keep_alive_receiver.borrow(),
+                match option_deadline {
+                    Some(deadline) => {
+                        select! {
+                            biased;
+                            () = tokio::time::sleep_until(deadline) => {
+                                Self::drop_unused_sockets(&internal_socket_manager).await;
+                                start = tokio::time::Instant::now();
+                                option_deadline = start.checked_add(gc_interval);
+                            },
+                            change_notification = keep_alive_receiver.changed() => {
+                                match change_notification {
+                                    // Modifies the interval at which garbage collection is performed.
+                                    Ok(()) => {
+                                        gc_interval = *keep_alive_receiver.borrow();
+                                        // Still using the previous `start`. This way, we can run
+                                        // the garbage collection if the new timeout is shorter or
+                                        // hold off on running it if the timeout is longer.
+                                        option_deadline = start.checked_add(gc_interval);
+                                        
+                                    },
+                                    // If the send channel is lost, that means that socket manager was
+                                    // dropped somehow.
+                                    Err(_) => break,
+                                }
+                            },
+                        }
+                    },
+                    None => {
+                        // If we cannot add `gc_interval` to the current time, then we can't run the
+                        // garbage collection unless a new `gc_interval` is provided.
+                        match keep_alive_receiver.changed().await {
+                            Ok(()) => {
+                                gc_interval = *keep_alive_receiver.borrow();
+                                start = tokio::time::Instant::now();
+                                option_deadline = start.checked_add(gc_interval);
+                            },
                             // If the send channel is lost, that means that socket manager was
                             // dropped somehow.
                             Err(_) => break,
