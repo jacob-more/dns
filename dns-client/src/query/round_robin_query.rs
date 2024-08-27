@@ -12,7 +12,7 @@ use super::{network_query::query_network, recursive_query::{query_cache, recursi
 
 
 async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, address_rtype: RType, question: Question, kill_token: Option<Arc<AwakeToken>>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
-    let ns_question = Question::new(ns_domain.clone(), address_rtype, question.qclass());
+    let ns_question = question.with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
 
     fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
         match record {
@@ -22,34 +22,39 @@ async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, ad
         }
     }
 
-    let ns_addresses = match query_cache(&joined_cache, &ns_question).await {
-        QueryResponse::Records(mut records) => NSQueryAddressState::CacheHit(
-            records.drain(..).filter_map(|record| rr_to_ip(record)).collect()
-        ),
-        _ => NSQueryAddressState::CacheMiss,
+    let ns_init_state = match query_cache(&joined_cache, &ns_question).await {
+        QueryResponse::Records(mut records) => NSQueryState::CacheHit {
+            ns_addresses: records.drain(..).filter_map(|record| rr_to_ip(record)).collect()
+        },
+        _ => NSQueryState::CacheMiss,
     };
 
     NSQuery {
         ns_domain,
-        question,
-    
         ns_address_rtype: address_rtype,
-        ns_addresses,
-        query: None,
+        question,
+
         kill_token,
-    
         client,
         joined_cache,
+
+        state: ns_init_state,
     }
 }
 
-enum NSQueryAddressState<'a> {
-    Fresh,
-    CacheHit(Vec<IpAddr>),
+enum NSQueryState<'a, 'b> {
     CacheMiss,
-    QueryingNetwork(BoxFuture<'a, QueryResponse<ResourceRecord>>),
-    QuerySuccess(Vec<IpAddr>),
-    QueryFailed(RCode),
+    QueryingNetworkNSAddresses {
+        ns_addresses_query: BoxFuture<'a, QueryResponse<ResourceRecord>>,
+    },
+    CacheHit {
+        ns_addresses: Vec<IpAddr>,
+    },
+    QueryingNetwork {
+        query: BoxFuture<'b, io::Result<Message>>,
+        remaining_ns_addresses: Vec<IpAddr>,
+    },
+    OutOfAddresses,
 }
 
 enum NSQueryResult {
@@ -58,39 +63,17 @@ enum NSQueryResult {
     QueryResult(io::Result<Message>),
 }
 
+#[pin_project]
 struct NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
     ns_domain: CDomainName,
+    ns_address_rtype: RType,
     question: Question,
 
-    ns_address_rtype: RType,
-    ns_addresses: NSQueryAddressState<'b>,
-    query: Option<BoxFuture<'a, io::Result<Message>>>,
     kill_token: Option<Arc<AwakeToken>>,
-
     client: Arc<DNSAsyncClient>,
     joined_cache: Arc<CCache>,
-}
 
-impl<'a, 'b, CCache> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync + 'static {
-    pub fn new(ns_domain: CDomainName, address_rtype: RType, question: Question, kill_token: Option<Arc<AwakeToken>>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> Self {
-        Self {
-            ns_domain,
-            question,
-            ns_address_rtype: address_rtype,
-            ns_addresses: NSQueryAddressState::Fresh,
-            query: None,
-            kill_token,
-            client,
-            joined_cache,
-        }
-    }
-
-    pub fn had_cache_hit(&self) -> bool {
-        match &self.ns_addresses {
-            NSQueryAddressState::CacheHit(_) => true,
-            _ => false,
-        }
-    }
+    state: NSQueryState<'a, 'b>,
 }
 
 impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync + 'static {
@@ -101,12 +84,8 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
             recursive_query(client, joined_cache, &question).await
         }
 
-        if let NSQueryAddressState::CacheMiss = self.ns_addresses {
-            let client = self.client.clone();
-            let cache = self.joined_cache.clone();
-            let question = self.question.with_new_qname_qtype(self.ns_domain.clone(), self.ns_address_rtype);
-            // TODO: Add proper loop prevention. If there is a loop, this can stop the process.
-            self.ns_addresses = NSQueryAddressState::QueryingNetwork(Box::pin(recursive_query_owned_args(client, cache, question)));
+        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, question: Question, name_server_address: IpAddr, kill_token: Option<Arc<AwakeToken>>) -> io::Result<Message> where CCache: AsyncCache + Send + Sync {
+            query_network(&client, joined_cache, &question, &name_server_address, kill_token).await
         }
 
         fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
@@ -117,58 +96,107 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
             }
         }
 
-        if let NSQueryAddressState::QueryingNetwork(ns_addresses) = &mut self.ns_addresses {
-            match ns_addresses.as_mut().poll(cx) {
-                Poll::Ready(QueryResponse::Records(mut records)) => self.ns_addresses = NSQueryAddressState::QuerySuccess(
-                    records.drain(..).filter_map(|record| rr_to_ip(record)).collect()
-                ),
-                Poll::Ready(QueryResponse::NoRecords) => self.ns_addresses = NSQueryAddressState::QuerySuccess(vec![]),
-                Poll::Ready(QueryResponse::Error(rcode)) => self.ns_addresses = NSQueryAddressState::QueryFailed(rcode),
-                Poll::Pending => (),
-            }
-        }
-
-        match &self.ns_addresses {
-            NSQueryAddressState::QueryFailed(rcode) => {
-                return Poll::Ready(NSQueryResult::NSAddressQueryErr(*rcode));
-            },
-            NSQueryAddressState::CacheHit(addresses) | NSQueryAddressState::QuerySuccess(addresses) => {
-                if let (None, None) = (&self.query, addresses.last()) {
-                    return Poll::Ready(NSQueryResult::OutOfAddresses);
-                }
-            },
-            _ => (),
-        }
-
-        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, question: Question, name_server_address: IpAddr, kill_token: Option<Arc<AwakeToken>>) -> io::Result<Message> where CCache: AsyncCache + Send + Sync {
-            query_network(&client, joined_cache, &question, &name_server_address, kill_token).await
-        }
-
-        if self.query.is_none() {
-            if let NSQueryAddressState::CacheHit(addresses) | NSQueryAddressState::QuerySuccess(addresses) = self.ns_addresses.borrow_mut() {
-                if let Some(name_server_address) = addresses.pop() {
+        loop {
+            let this = self.as_mut().project();
+            match this.state {
+                NSQueryState::CacheMiss => {
                     let client = self.client.clone();
                     let cache = self.joined_cache.clone();
-                    let question = self.question.clone();
-                    let kill_token = self.kill_token.clone();
-                    self.query = Some(Box::pin(query_network_owned_args(client, cache, question, name_server_address, kill_token)));
-                }
-            }
-        }
-
-        // Polls existing query to move it forward if possible.
-        // Or, polls the new query immediately to get it started after it was created.
-        if let Some(query) = self.query.as_mut() {
-            match query.as_mut().poll(cx) {
-                Poll::Ready(result) => {
-                    self.query = None;
-                    return Poll::Ready(NSQueryResult::QueryResult(result))
+                    let ns_address_question = self.question.with_new_qname_qtype(self.ns_domain.clone(), self.ns_address_rtype);
+                    // TODO: Add proper loop prevention. If there is a loop, this can stop the process.
+                    self.state = NSQueryState::QueryingNetworkNSAddresses { ns_addresses_query: Box::pin(recursive_query_owned_args(client, cache, ns_address_question)) };
+                    // Next loop will poll the query for NS addresses
+                    continue;
                 },
-                Poll::Pending => (),
+                NSQueryState::QueryingNetworkNSAddresses { ns_addresses_query } => {
+                    match ns_addresses_query.as_mut().poll(cx) {
+                        Poll::Ready(QueryResponse::Records(mut records)) => {
+                            let mut ns_addresses = records.drain(..)
+                                .filter_map(|record| rr_to_ip(record))
+                                .collect::<Vec<_>>();
+                            match ns_addresses.pop() {
+                                Some(first_ns_address) => {
+                                    let client = self.client.clone();
+                                    let cache = self.joined_cache.clone();
+                                    let question = self.question.clone();
+                                    let kill_token = self.kill_token.clone();
+                                    let query = Box::pin(query_network_owned_args(client, cache, question, first_ns_address, kill_token));
+                                    self.state = NSQueryState::QueryingNetwork { query, remaining_ns_addresses: ns_addresses };
+                                    // Next loop will poll the query for the question.
+                                    continue;
+                                },
+                                None => {
+                                    self.state = NSQueryState::OutOfAddresses;
+                                    // Exit loop. There are no addresses to query.
+                                    return Poll::Ready(NSQueryResult::OutOfAddresses);
+                                },
+                            }
+                        }
+                        Poll::Ready(QueryResponse::NoRecords) => {
+                            self.state = NSQueryState::OutOfAddresses;
+                            // Exit loop. There are no addresses to query.
+                            return Poll::Ready(NSQueryResult::OutOfAddresses);
+                        },
+                        Poll::Ready(QueryResponse::Error(rcode)) => {
+                            self.state = NSQueryState::OutOfAddresses;
+                            // Exit loop. The was an error trying to query for
+                            // the addresses.
+                            return Poll::Ready(NSQueryResult::NSAddressQueryErr(rcode));
+                        },
+                        // Exit loop. Will be woken up by the ns address query.
+                        Poll::Pending => return Poll::Pending,
+                    }
+                },
+                NSQueryState::CacheHit { ns_addresses } => {
+                    match ns_addresses.pop() {
+                        Some(first_ns_address) => {
+                            let client = this.client.clone();
+                            let cache = this.joined_cache.clone();
+                            let question = this.question.clone();
+                            let kill_token = this.kill_token.clone();
+                            let remaining_ns_addresses = ns_addresses.drain(..).collect();
+                            let query = Box::pin(query_network_owned_args(client, cache, question, first_ns_address, kill_token));
+                            self.state = NSQueryState::QueryingNetwork { query, remaining_ns_addresses };
+                            // Next loop will poll the query for the question.
+                            continue;
+                        },
+                        None => {
+                            self.state = NSQueryState::OutOfAddresses;
+                            // Exit loop. There are no addresses to query.
+                            return Poll::Ready(NSQueryResult::OutOfAddresses);
+                        },
+                    }
+                },
+                NSQueryState::QueryingNetwork { query, remaining_ns_addresses } => {
+                    match query.as_mut().poll(cx) {
+                        Poll::Ready(result) => {
+                            match remaining_ns_addresses.pop() {
+                                Some(next_ns_address) => {
+                                    // Set up the next query. It will only be
+                                    // polled if this struct is awaited again.
+                                    let client = this.client.clone();
+                                    let cache = this.joined_cache.clone();
+                                    let question = this.question.clone();
+                                    let kill_token = this.kill_token.clone();
+                                    *query = Box::pin(query_network_owned_args(client, cache, question, next_ns_address, kill_token));
+                                    // Exit loop. A result was found.
+                                    return Poll::Ready(NSQueryResult::QueryResult(result));
+                                },
+                                None => {
+                                    self.state = NSQueryState::OutOfAddresses;
+                                    // Exit loop. A result was found.
+                                    return Poll::Ready(NSQueryResult::QueryResult(result));
+                                },
+                            }
+                        },
+                        // Exit loop. Will be woken up by the query.
+                        Poll::Pending => return Poll::Pending,
+                    }
+                },
+                // Exit loop. All addresses have been queried.
+                NSQueryState::OutOfAddresses => return Poll::Ready(NSQueryResult::OutOfAddresses),
             }
         }
-
-        return Poll::Pending;
     }
 }
 
@@ -540,7 +568,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
 
                     name_server_address_queries.retain_mut(|ns_address_query| {
                         match ns_address_query.as_mut().poll(cx) {
-                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, question: _, ns_address_rtype: _, ns_addresses: NSQueryAddressState::CacheHit(_), query: _, kill_token: _, client: _, joined_cache: _ }) => {
+                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, question: _, kill_token: _, client: _, joined_cache: _, state: NSQueryState::CacheHit { ns_addresses: _ } }) => {
                                 name_server_cached_queries.push(Box::pin(ns_query));
                                 false
                             },
