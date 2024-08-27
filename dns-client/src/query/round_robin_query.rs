@@ -104,7 +104,8 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
         if let NSQueryAddressState::CacheMiss = self.ns_addresses {
             let client = self.client.clone();
             let cache = self.joined_cache.clone();
-            let question = self.question.clone();
+            let question = self.question.with_new_qname_qtype(self.ns_domain.clone(), self.ns_address_rtype);
+            // TODO: Add proper loop prevention. If there is a loop, this can stop the process.
             self.ns_addresses = NSQueryAddressState::QueryingNetwork(Box::pin(recursive_query_owned_args(client, cache, question)));
         }
 
