@@ -1,18 +1,18 @@
 use std::{borrow::BorrowMut, future::Future, io, net::IpAddr, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
 use async_lib::awake_token::AwakeToken;
-use dns_lib::{interface::cache::cache::AsyncCache, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
+use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use pin_project::{pin_project, pinned_drop};
 use tokio::sync::{broadcast::{self, error::RecvError}, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::DNSAsyncClient;
+use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
 
-use super::{network_query::query_network, recursive_query::{query_cache, recursive_query, QueryResponse}};
+use super::{network_query::query_network, recursive_query::{query_cache, QueryResponse}};
 
 
-async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, address_rtype: RType, question: Question, kill_token: Option<Arc<AwakeToken>>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
-    let ns_question = question.with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
+async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, address_rtype: RType, context: Arc<Context>, kill_token: Option<Arc<AwakeToken>>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
+    let ns_question = context.query().with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
 
     fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
         match record {
@@ -32,7 +32,7 @@ async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, ad
     NSQuery {
         ns_domain,
         ns_address_rtype: address_rtype,
-        question,
+        context,
 
         kill_token,
         client,
@@ -67,7 +67,7 @@ enum NSQueryResult {
 struct NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
     ns_domain: CDomainName,
     ns_address_rtype: RType,
-    question: Question,
+    context: Arc<Context>,
 
     kill_token: Option<Arc<AwakeToken>>,
     client: Arc<DNSAsyncClient>,
@@ -80,12 +80,12 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
     type Output = NSQueryResult;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        async fn recursive_query_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, question: Question) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
-            recursive_query(client, joined_cache, &question).await
+        async fn recursive_query_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Context) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
+            recursive_query(client, joined_cache, context).await
         }
 
-        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, question: Question, name_server_address: IpAddr, kill_token: Option<Arc<AwakeToken>>) -> io::Result<Message> where CCache: AsyncCache + Send + Sync {
-            query_network(&client, joined_cache, &question, &name_server_address, kill_token).await
+        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, name_server_address: IpAddr, kill_token: Option<Arc<AwakeToken>>) -> io::Result<Message> where CCache: AsyncCache + Send + Sync {
+            query_network(&client, joined_cache, context.query(), &name_server_address, kill_token).await
         }
 
         fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
@@ -102,11 +102,20 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
                 NSQueryState::CacheMiss => {
                     let client = self.client.clone();
                     let cache = self.joined_cache.clone();
-                    let ns_address_question = self.question.with_new_qname_qtype(self.ns_domain.clone(), self.ns_address_rtype);
-                    // TODO: Add proper loop prevention. If there is a loop, this can stop the process.
-                    self.state = NSQueryState::QueryingNetworkNSAddresses { ns_addresses_query: Box::pin(recursive_query_owned_args(client, cache, ns_address_question)) };
-                    // Next loop will poll the query for NS addresses
-                    continue;
+                    match self.context.clone().new_ns_address(self.context.query().with_new_qname_qtype(self.ns_domain.clone(), self.ns_address_rtype)) {
+                        Ok(ns_address_context) => {
+                            self.state = NSQueryState::QueryingNetworkNSAddresses { ns_addresses_query: Box::pin(recursive_query_owned_args(client, cache, ns_address_context)) };
+                            // Next loop will poll the query for NS addresses
+                            continue;
+                        },
+                        Err(error) => {
+                            self.state = NSQueryState::OutOfAddresses;
+                            println!("NS Lookup Error: {error}");
+                            // Exit loop. The was an error trying to query for
+                            // the addresses.
+                            return Poll::Ready(NSQueryResult::NSAddressQueryErr(RCode::ServFail));
+                        },
+                    };
                 },
                 NSQueryState::QueryingNetworkNSAddresses { ns_addresses_query } => {
                     match ns_addresses_query.as_mut().poll(cx) {
@@ -116,11 +125,11 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
                                 .collect::<Vec<_>>();
                             match ns_addresses.pop() {
                                 Some(first_ns_address) => {
-                                    let client = self.client.clone();
-                                    let cache = self.joined_cache.clone();
-                                    let question = self.question.clone();
+                                    let client = this.client.clone();
+                                    let cache = this.joined_cache.clone();
+                                    let context = this.context.clone();
                                     let kill_token = self.kill_token.clone();
-                                    let query = Box::pin(query_network_owned_args(client, cache, question, first_ns_address, kill_token));
+                                    let query = Box::pin(query_network_owned_args(client, cache, context, first_ns_address, kill_token));
                                     self.state = NSQueryState::QueryingNetwork { query, remaining_ns_addresses: ns_addresses };
                                     // Next loop will poll the query for the question.
                                     continue;
@@ -152,10 +161,10 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
                         Some(first_ns_address) => {
                             let client = this.client.clone();
                             let cache = this.joined_cache.clone();
-                            let question = this.question.clone();
+                            let context = this.context.clone();
                             let kill_token = this.kill_token.clone();
                             let remaining_ns_addresses = ns_addresses.drain(..).collect();
-                            let query = Box::pin(query_network_owned_args(client, cache, question, first_ns_address, kill_token));
+                            let query = Box::pin(query_network_owned_args(client, cache, context, first_ns_address, kill_token));
                             self.state = NSQueryState::QueryingNetwork { query, remaining_ns_addresses };
                             // Next loop will poll the query for the question.
                             continue;
@@ -176,9 +185,9 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
                                     // polled if this struct is awaited again.
                                     let client = this.client.clone();
                                     let cache = this.joined_cache.clone();
-                                    let question = this.question.clone();
+                                    let context = this.context.clone();
                                     let kill_token = this.kill_token.clone();
-                                    *query = Box::pin(query_network_owned_args(client, cache, question, next_ns_address, kill_token));
+                                    *query = Box::pin(query_network_owned_args(client, cache, context, next_ns_address, kill_token));
                                     // Exit loop. A result was found.
                                     return Poll::Ready(NSQueryResult::QueryResult(result));
                                 },
@@ -396,7 +405,7 @@ where
 {
     client: &'a Arc<DNSAsyncClient>,
     joined_cache: &'b Arc<CCache>,
-    question: &'c Question,
+    question: &'c Arc<Context>,
     inner: InnerNSRoundRobin<'d, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache>,
 }
 
@@ -413,11 +422,11 @@ where
     },
     AwaitingReadLock {
         name_servers: &'d [CDomainName],
-        read_lock_future: BoxFuture<'e, RwLockReadGuard<'f, std::collections::HashMap<Question, broadcast::Sender<QueryResponse<ResourceRecord>>>>>,
+        read_lock_future: BoxFuture<'e, RwLockReadGuard<'f, std::collections::HashMap<Question, (Arc<Context>, broadcast::Sender<QueryResponse<ResourceRecord>>)>>>,
     },
     AwaitingWriteLock {
         name_servers: &'d [CDomainName],
-        write_lock_future: BoxFuture<'g, RwLockWriteGuard<'h, std::collections::HashMap<Question, broadcast::Sender<QueryResponse<ResourceRecord>>>>>,
+        write_lock_future: BoxFuture<'g, RwLockWriteGuard<'h, std::collections::HashMap<Question, (Arc<Context>, broadcast::Sender<QueryResponse<ResourceRecord>>)>>>,
     },
     Forwarded {
         name_servers: &'d [CDomainName],
@@ -436,14 +445,14 @@ where
         ns_query_select: Pin<Box<NSSelectQuery<NSQuery<'k, 'l, CCache>>>>,
     },
     Cleanup {
-        write_lock_future: BoxFuture<'g, RwLockWriteGuard<'h, std::collections::HashMap<Question, broadcast::Sender<QueryResponse<ResourceRecord>>>>>,
+        write_lock_future: BoxFuture<'g, RwLockWriteGuard<'h, std::collections::HashMap<Question, (Arc<Context>, broadcast::Sender<QueryResponse<ResourceRecord>>)>>>,
         result: QueryResponse<ResourceRecord>,
     },
     Complete,
 }
 
 impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> where CCache: AsyncCache + Send + Sync + 'static {
-    fn new(client: &'a Arc<DNSAsyncClient>, joined_cache: &'b Arc<CCache>, question: &'c Question, name_servers: &'d [CDomainName]) -> Self {
+    fn new(client: &'a Arc<DNSAsyncClient>, joined_cache: &'b Arc<CCache>, question: &'c Arc<Context>, name_servers: &'d [CDomainName]) -> Self {
         Self { client, joined_cache, question, inner: InnerNSRoundRobin::Fresh { name_servers } }
     }
 }
@@ -456,8 +465,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
             let this = self.as_mut().project();
             match this.inner.borrow_mut() {
                 InnerNSRoundRobin::Fresh { name_servers } => {
-                    println!("Fresh: {}", this.question);
-
                     let read_lock_future = this.client.active_query_manager.read().boxed();
                     let name_servers = *name_servers;
     
@@ -466,23 +473,32 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                     continue;
                 },
                 InnerNSRoundRobin::AwaitingReadLock { name_servers, read_lock_future } => {
-                    println!("AwaitingReadLock: {}", this.question);
-
                     match read_lock_future.as_mut().poll(cx) {
-                        Poll::Ready(r_active_queries) => match r_active_queries.get(this.question) {
-                            Some(sender) => {
-                                let receiver = sender.subscribe();
-                                let receiver = async {
-                                    let mut receiver = receiver;
-                                    receiver.recv().await
-                                }.boxed();
-                                drop(r_active_queries);
-                                println!("Already Forwarded (1): '{}'", this.question);
-                                let name_servers = *name_servers;
+                        Poll::Ready(r_active_queries) => match r_active_queries.get(this.question.query()) {
+                            Some((sender_context, sender)) => {
+                                match sender_context.is_ns_allowed(this.question.qname()) {
+                                    Ok(()) => {
+                                        let receiver = sender.subscribe();
+                                        let receiver = async move {
+                                            let mut receiver = receiver;
+                                            receiver.recv().await
+                                        }.boxed();
+                                        drop(r_active_queries);
+                                        println!("Already Forwarded (1): '{}'", this.question.query());
+                                        let name_servers = *name_servers;
+        
+                                        *this.inner = InnerNSRoundRobin::Forwarded { name_servers, receiver };
+                                        // Next loop will poll the receiver
+                                        continue;
+                                    },
+                                    Err(error) => {
+                                        println!("Cannot use Forwarded (1): {error}");
 
-                                *this.inner = InnerNSRoundRobin::Forwarded { name_servers, receiver };
-                                // Next loop will poll the receiver
-                                continue;
+                                        *this.inner = InnerNSRoundRobin::Complete;
+                                        // Exit forever. Query complete.
+                                        return Poll::Ready(QueryResponse::Error(RCode::ServFail));
+                                    },
+                                }
                             },
                             None => {
                                 drop(r_active_queries);
@@ -499,27 +515,36 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                     }
                 },
                 InnerNSRoundRobin::AwaitingWriteLock { name_servers, write_lock_future } => {
-                    println!("AwaitingWriteLock: {}", this.question);
-
                     match write_lock_future.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => match w_active_queries.get(this.question) {
-                            Some(sender) => {
-                                let receiver = sender.subscribe();
-                                let receiver = async {
-                                    let mut receiver = receiver;
-                                    receiver.recv().await
-                                }.boxed();
-                                drop(w_active_queries);
-                                println!("Already Forwarded (2): '{}'", this.question);
-                                let name_servers = *name_servers;
+                        Poll::Ready(mut w_active_queries) => match w_active_queries.get(this.question.query()) {
+                            Some((sender_context, sender)) => {
+                                match sender_context.is_ns_allowed(this.question.qname()) {
+                                    Ok(()) => {
+                                        let receiver = sender.subscribe();
+                                        let receiver = async move {
+                                            let mut receiver = receiver;
+                                            receiver.recv().await
+                                        }.boxed();
+                                        drop(w_active_queries);
+                                        println!("Already Forwarded (2): '{}'", this.question.query());
+                                        let name_servers = *name_servers;
+        
+                                        *this.inner = InnerNSRoundRobin::Forwarded { name_servers, receiver };
+                                        // Next loop will poll the receiver
+                                        continue;
+                                    },
+                                    Err(error) => {
+                                        println!("Cannot use Forwarded (2): {error}");
 
-                                *this.inner = InnerNSRoundRobin::Forwarded { name_servers, receiver };
-                                // Next loop will poll the receiver
-                                continue;
+                                        *this.inner = InnerNSRoundRobin::Complete;
+                                        // Exit forever. Query complete.
+                                        return Poll::Ready(QueryResponse::Error(RCode::ServFail));
+                                    },
+                                }
                             },
                             None => {
                                 let (sender, _) = broadcast::channel(1);
-                                w_active_queries.insert(this.question.clone(), sender.clone());
+                                w_active_queries.insert(this.question.query().clone(), (this.question.clone(), sender.clone()));
                                 drop(w_active_queries);
                                 let kill_token = Arc::new(AwakeToken::new());
 
@@ -541,13 +566,17 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                     }
                 },
                 InnerNSRoundRobin::Forwarded { name_servers, receiver } => {
-                    println!("Forwarded: {}", this.question);
-
                     match receiver.as_mut().poll(cx) {
                         // Exit. Answer returned.
-                        Poll::Ready(Ok(query_response)) => return Poll::Ready(query_response),
+                        Poll::Ready(Ok(query_response)) => {
+                            println!("Forward Received: '{}'", this.question.query());
+
+                            *this.inner = InnerNSRoundRobin::Complete;
+                            // Exit forever. Query complete.
+                            return Poll::Ready(query_response)
+                        },
                         Poll::Ready(Err(RecvError::Closed)) => {
-                            println!("Recoverable Internal Error: channel closed\nContinuing Query: '{}'", this.question);
+                            println!("Recoverable Internal Error: channel closed\nContinuing Query: '{}'", this.question.query());
                             let name_servers = *name_servers;
 
                             *this.inner = InnerNSRoundRobin::Fresh { name_servers };
@@ -555,7 +584,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                             continue;
                         },
                         Poll::Ready(Err(RecvError::Lagged(skipped_message_count))) => {
-                            println!("Recoverable Internal Error: channel lagged. Skipping {skipped_message_count} messages\nContinuing Query: '{}'", this.question);
+                            println!("Recoverable Internal Error: channel lagged. Skipping {skipped_message_count} messages\nContinuing Query: '{}'", this.question.query());
                             // Next loop will re-poll the receiver to get a message
                             continue;
                         },
@@ -564,11 +593,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                     }
                 },
                 InnerNSRoundRobin::GetCachedNSAddresses { sender, kill_token, name_server_address_queries, name_server_non_cached_queries, name_server_cached_queries } => {
-                    println!("GetCachedNSAddresses: {}", this.question);
-
                     name_server_address_queries.retain_mut(|ns_address_query| {
                         match ns_address_query.as_mut().poll(cx) {
-                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, question: _, kill_token: _, client: _, joined_cache: _, state: NSQueryState::CacheHit { ns_addresses: _ } }) => {
+                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, context: _, kill_token: _, client: _, joined_cache: _, state: NSQueryState::CacheHit { ns_addresses: _ } }) => {
                                 name_server_cached_queries.push(Box::pin(ns_query));
                                 false
                             },
@@ -600,8 +627,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                     }
                 },
                 InnerNSRoundRobin::QueryNameServers { sender, kill_token, ns_query_select } => {
-                    println!("QueryNameServers: {}", this.question);
-
                     match ns_query_select.as_mut().poll(cx) {
                         // No error. Valid response.
                         Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))))
@@ -675,12 +700,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                     }
                 },
                 InnerNSRoundRobin::Cleanup { write_lock_future, result } => {
-                    println!("Cleanup: {}", this.question);
-
                     match write_lock_future.as_mut().poll(cx) {
                         Poll::Ready(mut active_queries) => {
                             // Cleanup.
-                            let _ = active_queries.remove(this.question);
+                            let _ = active_queries.remove(this.question.query());
                             drop(active_queries);
 
                             let result = result.clone();
@@ -694,7 +717,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                     }
                 },
                 InnerNSRoundRobin::Complete => {
-                    panic!("NSRoundRobin query for '{}' was polled again after it already returned Poll::Ready", this.question)
+                    panic!("NSRoundRobin query for '{}' was polled again after it already returned Poll::Ready", this.question.query());
                 },
             }
         }
@@ -714,7 +737,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> PinnedDrop for NSRo
                 let client = this.client.clone();
                 tokio::spawn(async move {
                     let mut write_locked_active_query_manager = client.active_query_manager.write().await;
-                    let _ = write_locked_active_query_manager.remove(&question);
+                    let _ = write_locked_active_query_manager.remove(&question.query());
                     drop(write_locked_active_query_manager);
                 });
             },
@@ -726,7 +749,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> PinnedDrop for NSRo
                 let client = this.client.clone();
                 tokio::spawn(async move {
                     let mut write_locked_active_query_manager = client.active_query_manager.write().await;
-                    let _ = write_locked_active_query_manager.remove(&question);
+                    let _ = write_locked_active_query_manager.remove(&question.query());
                     drop(write_locked_active_query_manager);
                 });
             },
@@ -751,28 +774,7 @@ fn query_response(answer: Message) -> QueryResponse<ResourceRecord> {
 }
 
 #[inline]
-pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, question: &Question, name_servers: &[CDomainName]) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
-    println!("Querying Name Servers for '{question}'");
-    NSRoundRobin::new(client, joined_cache, question, name_servers).await
+pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, question: Arc<Context>, name_servers: &[CDomainName]) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
+    println!("Querying Name Servers for '{}'", question.query());
+    NSRoundRobin::new(client, joined_cache, &question, name_servers).await
 }
-
-// #[inline]
-// // Note: Returns the result so that this function can be called as the return statement.
-// async fn sender_return<CCache>(client: &Arc<DNSAsyncClient>, result: QueryResponse<ResourceRecord>, question: &Question, kill_token: Option<Arc<AwakeToken>>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache {
-//     // Cleanup.
-//     let mut write_locked_active_query_manager = client.active_query_manager.write().await;
-//     let sender = write_locked_active_query_manager.remove(question);
-//     drop(write_locked_active_query_manager);
-
-//     // Send out the answer to anyone waiting.
-//     if let Some(sender) = sender {
-//         let _ = sender.send(result.clone());
-//     }
-
-//     if let Some(kill_token) = kill_token {
-//         kill_token.awake();
-//     }
-
-//     // Return the result.
-//     return result;
-// }
