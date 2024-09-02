@@ -64,6 +64,12 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
                 return QueryResponse::Error(RCode::ServFail);
             },
             QueryResponse::Records(response_records) => {
+                if (index != 0) || (context.qtype() != RType::DNAME) {
+                    if response_records.iter().any(|record| record.rtype() == RType::DNAME) {
+                        return handle_dname(client, joined_cache, context, response_records).await;
+                    }
+                }
+
                 if response_records.iter().any(|record| record.rtype() == RType::NS) {
                     name_servers.clear();
                     for record in &response_records {
@@ -81,19 +87,13 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         QueryResponse::Error(error) => return QueryResponse::Error(error),
         QueryResponse::NoRecords => (),
         QueryResponse::Records(response_records) => {
-            for record in &response_records {
-                if let ResourceRecord::CNAME(_, cname_rdata) = record {
-                    match context.new_cname(cname_rdata.primary_name().clone()) {
-                        Ok(cname_context) => return recursive_query(client, joined_cache, cname_context).await,
-                        Err(error) => {
-                            println!("CName Lookup Error: {error}");
-                            return QueryResponse::Error(RCode::ServFail)
-                        },
-                    };
-                }
+            if (context.qtype() != RType::CNAME) && response_records.iter().any(|record| record.rtype() == RType::CNAME) {
+                return handle_cname(client, joined_cache, context, response_records).await;
             }
 
-            // TODO: Add exception for DNAME, similar to CNAME
+            if (context.qtype() != RType::DNAME) && response_records.iter().any(|record| record.rtype() == RType::DNAME) {
+                return handle_dname(client, joined_cache, context, response_records).await;
+            }
 
             return QueryResponse::Records(response_records);
         },
@@ -104,19 +104,13 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         QueryResponse::Error(error) => return QueryResponse::Error(error),
         QueryResponse::NoRecords => (),
         QueryResponse::Records(response_records) => {
-            for record in &response_records {
-                if let ResourceRecord::CNAME(_, cname_rdata) = record {
-                    match context.new_cname(cname_rdata.primary_name().clone()) {
-                        Ok(cname_context) => return recursive_query(client, joined_cache, cname_context).await,
-                        Err(error) => {
-                            println!("CName Lookup Error: {error}");
-                            return QueryResponse::Error(RCode::ServFail)
-                        },
-                    };
-                }
+            if (context.qtype() != RType::CNAME) && response_records.iter().any(|record| record.rtype() == RType::CNAME) {
+                return handle_cname(client, joined_cache, context, response_records).await;
             }
 
-            // TODO: Add exception for DNAME, similar to CNAME
+            if (context.qtype() != RType::DNAME) && response_records.iter().any(|record| record.rtype() == RType::DNAME) {
+                return handle_dname(client, joined_cache, context, response_records).await;
+            }
 
             return QueryResponse::Records(response_records);
         },
@@ -163,4 +157,72 @@ async fn get_closest_name_server<CCache>(_client: &Arc<DNSAsyncClient>, joined_c
         }
     }
     return NSResponse::Records(max_index, name_servers);
+}
+
+async fn handle_cname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, records: Vec<ResourceRecord>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
+    for record in &records {
+        if let ResourceRecord::CNAME(_, cname_rdata) = record {
+            match context.new_cname(cname_rdata.primary_name().clone()) {
+                Ok(cname_context) => {
+                    match recursive_query(client, joined_cache, cname_context).await {
+                        QueryResponse::Error(rcode) => return QueryResponse::Error(rcode),
+                        QueryResponse::NoRecords => return QueryResponse::Records(records),
+                        QueryResponse::Records(mut answer_records) => {
+                            answer_records.extend(records);
+                            return QueryResponse::Records(answer_records);
+                        },
+                    }
+                },
+                Err(error) => {
+                    println!("CName Lookup Error: {error}");
+                    return QueryResponse::Error(RCode::ServFail);
+                },
+            };
+        }
+    }
+
+    return QueryResponse::Error(RCode::ServFail);
+}
+
+async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, records: Vec<ResourceRecord>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
+    for record in &records {
+        if let ResourceRecord::DNAME(header, dname_rdata) = record {
+            if !context.qname().is_subdomain(header.get_name()) {
+                println!("DName Lookup Error: The query name ('{}') was not a subdomain of the DName's owner name ('{}')", context.qname(), header.get_name());
+                return QueryResponse::Error(RCode::ServFail);
+            }
+            let dname = CDomainName::from_labels_iter(
+                context.qname().as_labels()[..header.get_name().label_count()]
+                    .iter()
+                    .chain(dname_rdata.target_name().iter_labels())
+            );
+
+            let dname = match dname {
+                Ok(dname) => dname,
+                Err(error) => {
+                    println!("DName Lookup Error: {error}");
+                    return QueryResponse::Error(RCode::ServFail);
+                },
+            };
+
+            match context.new_dname(dname) {
+                Ok(dname_context) => {
+                    match recursive_query(client, joined_cache, dname_context).await {
+                        QueryResponse::Error(rcode) => return QueryResponse::Error(rcode),
+                        QueryResponse::NoRecords => return QueryResponse::Records(records),
+                        QueryResponse::Records(mut answer_records) => {
+                            answer_records.extend(records);
+                            return QueryResponse::Records(answer_records);
+                        },
+                    }
+                },
+                Err(error) => {
+                    println!("DName Lookup Error: {error}");
+                    return QueryResponse::Error(RCode::ServFail);
+                },
+            };
+        }
+    }
+
+    return QueryResponse::Error(RCode::ServFail);
 }
