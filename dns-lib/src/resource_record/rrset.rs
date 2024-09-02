@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, fmt::Display};
 
-use crate::types::c_domain_name::CDomainName;
+use crate::types::c_domain_name::{CDomainName, Labels};
 
 use super::{resource_record::ResourceRecord, rtype::RType};
 
@@ -39,7 +39,7 @@ impl RRSet {
     pub fn from_iter<'a>(name: CDomainName, records: impl Iterator<Item = &'a ResourceRecord>) -> Result<Self, RRSetError> {
         let mut rrset_records: HashMap<RType, Records> = HashMap::new();
         for record in records {
-            if !CDomainName::matches(&name, record.name()) {
+            if !name.matches(record.name()) {
                 return Err(RRSetError::DifferingDomainName(name.clone(), record.name().clone()));
             }
             match rrset_records.get_mut(&record.rtype()) {

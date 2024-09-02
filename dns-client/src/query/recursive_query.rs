@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use dns_lib::{interface::{cache::{cache::AsyncCache, main_cache::AsyncMainCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
+use dns_lib::{interface::{cache::{cache::AsyncCache, main_cache::AsyncMainCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::{CDomainName, Labels}};
 use rand::{thread_rng, seq::SliceRandom};
 
 use crate::{query::round_robin_query::query_name_servers, DNSAsyncClient};
@@ -48,6 +48,7 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         // We set the qtype to be RRTypeCode::A to hide the actual qtype
         // that we're looking for.
         name_servers.shuffle(&mut thread_rng());
+
         let search_context = match context.clone().new_search_name(Question::new(search_name.clone(), RType::A, context.qclass())) {
             Ok(search_context) => Arc::new(search_context),
             Err(error) => {
@@ -55,6 +56,7 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
                 return QueryResponse::Error(RCode::ServFail)
             },
         };
+
         match query_name_servers(&client, &joined_cache, search_context, &name_servers).await {
             QueryResponse::Error(error) => return QueryResponse::Error(error),
             QueryResponse::NoRecords => {
@@ -64,7 +66,7 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
             QueryResponse::Records(response_records) => {
                 if response_records.iter().any(|record| record.rtype() == RType::NS) {
                     name_servers.clear();
-                    for record in response_records {
+                    for record in &response_records {
                         if let ResourceRecord::NS(_, ns_rdata) = record {
                             name_servers.push(ns_rdata.name_server_domain_name().clone())
                         }

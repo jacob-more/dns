@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use dns_macros::RTypeCode;
 use ux::{u1, u7};
 
-use crate::{types::domain_name::DomainName, serde::{wire::{to_wire::ToWire, from_wire::FromWire}, presentation::{from_tokenized_rdata::FromTokenizedRData, from_presentation::FromPresentation, to_presentation::ToPresentation}}};
+use crate::{serde::{presentation::{from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::{c_domain_name::Labels, domain_name::DomainName}};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8777#name-amtrelay-rdata-format
 ///

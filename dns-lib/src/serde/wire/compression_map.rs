@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::types::c_domain_name::{CDomainName, Label};
+use crate::types::c_domain_name::{CDomainName, Label, Labels};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CompressionMap {
@@ -15,7 +15,7 @@ impl<'a> CompressionMap {
 
 	#[inline]
     pub fn insert_domain(&mut self, domain: &'a CDomainName, offset: u16) {
-        self.insert_slice_labels(domain.as_slice(), offset);
+        self.insert_slice_labels(domain.as_labels(), offset);
     }
 
 	#[inline]
@@ -30,7 +30,7 @@ impl<'a> CompressionMap {
 
 	#[inline]
     pub fn find_from_domain(&self, domain: &CDomainName) -> Option<u16> {
-        self.find_from_slice_labels(domain.as_slice())
+        self.find_from_slice_labels(domain.as_labels())
     }
 
 	#[inline]

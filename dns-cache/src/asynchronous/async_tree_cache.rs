@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, Label}};
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, Label, Labels}};
 use futures::StreamExt;
 use tokio::sync::{Mutex, RwLock};
 
@@ -82,7 +82,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().iter().rev().skip(1) {
+        for label in question.qname().iter_labels().rev().skip(1) {
             let lowercase_label = label.as_lower();
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
@@ -141,7 +141,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         }
     
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().iter().rev().skip(1) {
+        for label in question.qname().iter_labels().rev().skip(1) {
             let lowercase_label = label.as_lower();
             let read_current_node_children = current_node.children.read().await;
             if let Some(child_node) = read_current_node_children.get(&lowercase_label) {
@@ -183,7 +183,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
             return Ok(None);
         }
 
-        let qlabels = qname.as_slice();
+        let qlabels = qname.as_labels();
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels[1..qlabels.len()-1].iter().rev() {

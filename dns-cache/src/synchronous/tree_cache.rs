@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, hash_map::Values}, error::Error, fmt::Display};
 
-use dns_lib::{resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{Label, CDomainName}, query::question::Question};
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, Label, Labels}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TreeCacheError {
@@ -64,7 +64,7 @@ impl<Records> TreeCache<Records> {
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().iter().rev().skip(1) {
+        for label in question.qname().iter_labels().rev().skip(1) {
             let lowercase_label = label.as_lower();
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
@@ -104,7 +104,7 @@ impl<Records> TreeCache<Records> {
         }
     
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().iter().rev().skip(1) {
+        for label in question.qname().iter_labels().rev().skip(1) {
             let lowercase_label = label.as_lower();
             if let Some(child_node) = current_node.children.get(&lowercase_label) {
                 current_node = child_node;
@@ -136,7 +136,7 @@ impl<Records> TreeCache<Records> {
             return Ok(None);
         }
 
-        let qlabels = qname.as_slice();
+        let qlabels = qname.as_labels();
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels[1..qlabels.len()-1].iter().rev() {

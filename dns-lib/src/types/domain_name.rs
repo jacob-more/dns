@@ -4,6 +4,8 @@ use dns_macros::ToPresentation;
 
 use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, Label}}};
 
+use super::c_domain_name::Labels;
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
     CDomainNameError(CDomainNameError),
@@ -48,11 +50,6 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn from_labels(labels: &[Label]) -> Self {
-        Self { domain_name: CDomainName::from_labels(labels) }
-    }
-
-    #[inline]
     pub fn is_fully_qualified(&self) -> bool {
         self.domain_name.is_fully_qualified()
     }
@@ -67,18 +64,6 @@ impl DomainName {
     #[inline]
     pub fn as_fully_qualified(&self) -> Self {
         Self { domain_name: self.domain_name.as_fully_qualified() }
-    }
-
-    #[inline]
-    pub fn label_count(&self) -> usize {
-        self.domain_name.label_count()
-    }
-
-    /// A domain name is root if it is made up of only 1 label, that has a length
-    /// of zero.
-    #[inline]
-    pub fn is_root(&self) -> bool {
-        self.domain_name.is_root()
     }
 
     #[inline]
@@ -100,40 +85,22 @@ impl DomainName {
     pub fn lower(&mut self) {
         self.domain_name.lower()
     }
+}
 
-    /// is_subdomain checks if child is indeed a child of the parent. If child
-    /// and parent are the same domain true is returned as well.
+impl Labels for DomainName {
     #[inline]
-    pub fn is_subdomain(&self, child: &Self) -> bool {
-        self.domain_name.is_subdomain(&child.domain_name)
+    fn from_labels(labels: &[Label]) -> Self {
+        Self { domain_name: CDomainName::from_labels(labels) }
     }
 
     #[inline]
-    pub fn to_vec(&self) -> Vec<Label> {
-        self.domain_name.to_vec()
+    fn as_labels<'a>(&'a self) -> &'a [Label] {
+        self.domain_name.as_labels()
     }
 
     #[inline]
-    pub fn as_slice(&self) -> &[Label] {
-        self.domain_name.as_slice()
-    }
-
-    #[inline]
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Label> + ExactSizeIterator<Item = &Label> {
-        self.domain_name.iter()
-    }
-
-    #[inline]
-    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
-        self.domain_name.search_domains().map(|c_domain_name| Self { domain_name: c_domain_name })
-    }
-
-    #[inline]
-    pub fn compare_domain_name(domain1: &Self, domain2: &Self) -> usize {
-        CDomainName::compare_domain_name(
-            &domain1.domain_name,
-            &domain2.domain_name
-        )
+    fn to_labels(&self) -> Vec<Label> {
+        self.domain_name.to_labels()
     }
 }
 
@@ -182,6 +149,30 @@ impl FromPresentation for DomainName {
     fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
         let (cdomain_name, tokens) = CDomainName::from_token_format(tokens)?;
         Ok((Self { domain_name: cdomain_name }, tokens))
+    }
+}
+
+impl From<DomainName> for CDomainName {
+    fn from(domain_name: DomainName) -> Self {
+        domain_name.domain_name
+    }
+}
+
+impl From<&DomainName> for CDomainName {
+    fn from(domain_name: &DomainName) -> Self {
+        domain_name.domain_name.clone()
+    }
+}
+
+impl From<CDomainName> for DomainName {
+    fn from(domain_name: CDomainName) -> Self {
+        Self { domain_name }
+    }
+}
+
+impl From<&CDomainName> for DomainName {
+    fn from(domain_name: &CDomainName) -> Self {
+        Self { domain_name: domain_name.clone() }
     }
 }
 

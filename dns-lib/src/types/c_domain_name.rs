@@ -184,6 +184,79 @@ impl FromWire for Label {
     }
 }
 
+pub trait Labels: Sized {
+    fn from_labels(labels: &[Label]) -> Self;
+    fn as_labels<'a>(&'a self) -> &'a [Label];
+    fn to_labels(&self) -> Vec<Label>;
+
+    #[inline]
+    fn iter_labels(&self) -> impl DoubleEndedIterator<Item = &Label> + ExactSizeIterator<Item = &Label> {
+        self.as_labels().iter()
+    }
+
+    #[inline]
+    fn label_count(&self) -> usize {
+        self.as_labels().len()
+    }
+
+    /// A domain name is root if it is made up of only 1 label, that has a length
+    /// of zero.
+    #[inline]
+    fn is_root(&self) -> bool {
+        match &self.as_labels() {
+            &[label] => label.is_root(),
+            _ => false,
+        }
+    }
+
+    #[inline]
+    fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
+        self.iter_labels()
+            .enumerate()
+            .map(|(index, _)| Self::from_labels(&self.as_labels()[index..]))
+    }
+
+    /// counts the number of labels the two domains have in common, starting from the right. Stops
+    /// at the first non-equal pair of labels.
+    #[inline]
+    fn compare_domain_name<T>(&self, other: &T) -> usize where T: Labels {
+        let compar_iter = self.iter_labels()
+            .rev()
+            .zip(other.iter_labels().rev())
+            .map(|(label1, label2)| Label::compare_domain_name_label(label1, label2));
+    
+        let mut counter: usize = 0;
+        for matched in compar_iter {
+            if matched {
+                counter += 1;
+            } else {
+                return counter;
+            }
+        }
+
+        return counter;
+    }
+
+    #[inline]
+    fn matches<T>(&self, other: &T) -> bool where T: Labels {
+        // Same number of labels
+        (self.label_count() == other.label_count())
+        // all of the labels match
+        && self.iter_labels()
+            .rev()
+            .zip(other.iter_labels().rev())
+            .all(|(label1, label2)| Label::compare_domain_name_label(label1, label2))
+    }
+
+    /// is_subdomain checks if child is indeed a child of the parent. If child
+    /// and parent are the same domain true is returned as well.
+    #[inline]
+    fn is_subdomain<T>(&self, child: &T) -> bool where T: Labels {
+        // Entire parent is contained by the child (child = subdomain)
+        return Self::compare_domain_name(self, child) == self.label_count();
+    }
+}
+
 /// This is a compressible domain name. This should only be used in situations where domain name
 /// compression is allowed. In all other cases, use a regular DomainName.
 /// 
@@ -317,14 +390,6 @@ impl CDomainName {
     }
 
     #[inline]
-    pub fn from_labels(labels: &[Label]) -> Self {
-        // TODO: validate the label input to make sure it is actually correct and valid.
-        let mut labels_vec = TinyVec::with_capacity(labels.len());
-        labels_vec.extend_from_slice(labels);
-        Self { labels: labels_vec }
-    }
-
-    #[inline]
     pub fn is_fully_qualified(&self) -> bool {
         match self.labels.last() {
             Some(last_label) => last_label.is_root(),
@@ -348,21 +413,6 @@ impl CDomainName {
             copy.labels.push(Label::new_root());
         }
         return copy;
-    }
-
-    #[inline]
-    pub fn label_count(&self) -> usize {
-        self.labels.len()
-    }
-
-    /// A domain name is root if it is made up of only 1 label, that has a length
-    /// of zero.
-    #[inline]
-    pub fn is_root(&self) -> bool {
-        match &self.labels.as_slice() {
-            &[label] => label.is_root(),
-            _ => false,
-        }
     }
 
     /// as_canonical_name returns the domain name in canonical form. A name in
@@ -420,67 +470,25 @@ impl CDomainName {
         self.labels.iter_mut()
                    .for_each(|label| label.lower());
     }
+}
 
-    /// is_subdomain checks if child is indeed a child of the parent. If child
-    /// and parent are the same domain true is returned as well.
+impl Labels for CDomainName {
     #[inline]
-    pub fn is_subdomain(&self, child: &Self) -> bool {
-        // Entire parent is contained by the child (child = subdomain)
-        return Self::compare_domain_name(self, child) == self.label_count();
+    fn from_labels(labels: &[Label]) -> Self {
+        // TODO: validate the label input to make sure it is actually correct and valid.
+        let mut labels_vec = TinyVec::with_capacity(labels.len());
+        labels_vec.extend_from_slice(labels);
+        Self { labels: labels_vec }
     }
 
     #[inline]
-    pub fn to_vec(&self) -> Vec<Label> {
-        self.labels.to_vec()
-    }
-
-    #[inline]
-    pub fn as_slice(&self) -> &[Label] {
+    fn as_labels<'a>(&'a self) -> &'a [Label] {
         &self.labels
     }
 
     #[inline]
-    pub fn iter(&self) -> impl DoubleEndedIterator<Item = &Label> + ExactSizeIterator<Item = &Label> {
-        self.labels.iter()
-    }
-
-    #[inline]
-    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
-        self.labels.iter()
-            .enumerate()
-            .map(|(index, _)| Self::from_labels(&self.labels[index..]))
-    }
-
-    /// counts the number of labels the two domains have in common, starting from the right. Stops
-    /// at the first non-equal pair of labels.
-    #[inline]
-    pub fn compare_domain_name(domain1: &Self, domain2: &Self) -> usize {
-        let compar_iter = domain1.labels.iter()
-            .rev()
-            .zip(domain2.labels.iter().rev())
-            .map(|(label1, label2)| Label::compare_domain_name_label(label1, label2));
-    
-        let mut counter: usize = 0;
-        for matched in compar_iter {
-            if matched {
-                counter += 1;
-            } else {
-                return counter;
-            }
-        }
-
-        return counter;
-    }
-
-    #[inline]
-    pub fn matches(domain1: &Self, domain2: &Self) -> bool {
-        // Same number of labels
-        (domain1.label_count() == domain2.label_count())
-        // all of the labels match
-        && domain1.labels.iter()
-            .rev()
-            .zip(domain2.labels.iter().rev())
-            .all(|(label1, label2)| Label::compare_domain_name_label(label1, label2))
+    fn to_labels(&self) -> Vec<Label> {
+        self.labels.to_vec()
     }
 }
 

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use tokio::join;
 
-use crate::{query::message::Message, types::c_domain_name::CDomainName};
+use crate::{query::message::Message, types::c_domain_name::Labels};
 
 use super::{CacheMeta, CacheQuery, CacheRecord, CacheResponse, MetaAuth};
 
@@ -37,7 +37,7 @@ pub trait AsyncCache {
                 join!(
                     self.insert_iter(message.answer.iter().map(|answer| CacheRecord {
                         meta: CacheMeta {
-                            auth: if message.authoritative_answer && CDomainName::matches(answer.name(), qname) { MetaAuth::Authoritative } else { MetaAuth::NotAuthoritative },
+                            auth: if message.authoritative_answer && answer.name().matches(qname) { MetaAuth::Authoritative } else { MetaAuth::NotAuthoritative },
                             insertion_time,
                         },
                         record: answer.clone(),
