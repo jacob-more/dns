@@ -244,7 +244,10 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                 write_domains.extend(
                     subdomain_names.into_iter()
                         .map(|mut subdomain_name| {subdomain_name.push(Label::new_root()); subdomain_name})
-                        .map(|domain_name| CDomainName::from_labels(domain_name.as_slice()))
+                        .filter_map(|domain_name| match CDomainName::from_labels(domain_name.as_slice()) {
+                            Ok(domain_name) => Some(domain_name),
+                            Err(_) => None,
+                        })
                 );
                 write_domains.insert(CDomainName::new_root());
                 drop(write_domains);

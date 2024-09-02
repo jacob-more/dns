@@ -11,6 +11,7 @@ pub enum CDomainNameError {
     LongLabel,
     LeadingDot,
     ConsecutiveDots,
+    InternalRootLabel,
     Buffer,
     TooManyPointers,
     ForwardPointers,
@@ -24,16 +25,17 @@ impl Error for CDomainNameError {}
 impl Display for CDomainNameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Fqdn =>            write!(f, "Domain Must Be Fully Qualified: indicates that a domain name does not have a closing dot"),
-            Self::LongDomain =>      write!(f, "Domain Name Exceeded {} Wire-Format Octets", CDomainName::MAX_OCTETS),
-            Self::LongLabel =>       write!(f, "Label Exceeded {} Wire-Format Octets", Label::MAX_OCTETS),
-            Self::LeadingDot =>      write!(f, "Bad Leading Dot: domain name must not begin with a '.' except for in the root zone"),
-            Self::ConsecutiveDots => write!(f, "Two Consecutive Dots: domain name must not contain two consecutive dots '..' unless one of them is escaped"),
-            Self::Buffer =>          write!(f, "Buffer size too small"),
-            Self::TooManyPointers => write!(f, "Too Many Compression Pointers: the maximum compression pointers permitted is {}", CDomainName::MAX_COMPRESSION_POINTERS),
-            Self::ForwardPointers => write!(f, "Forward Pointer: domain name pointers can only point backwards. Cannot point forward in the buffer"),
-            Self::InvalidPointer =>  write!(f, "Invalid Pointer: domain name pointer cannot use the first two bits. These are reserved"),
-            Self::BadRData =>        write!(f, "Bad RData."),
+            Self::Fqdn =>              write!(f, "Domain Must Be Fully Qualified: indicates that a domain name does not have a closing dot"),
+            Self::LongDomain =>        write!(f, "Domain Name Exceeded {} Wire-Format Octets", CDomainName::MAX_OCTETS),
+            Self::LongLabel =>         write!(f, "Label Exceeded {} Wire-Format Octets", Label::MAX_OCTETS),
+            Self::LeadingDot =>        write!(f, "Bad Leading Dot: domain name must not begin with a '.' except for in the root zone"),
+            Self::ConsecutiveDots =>   write!(f, "Two Consecutive Dots: domain name must not contain two consecutive dots '..' unless one of them is escaped"),
+            Self::InternalRootLabel => write!(f, "Internal Root Label: domain name must not a root label unless it is the last label"),
+            Self::Buffer =>            write!(f, "Buffer size too small"),
+            Self::TooManyPointers =>   write!(f, "Too Many Compression Pointers: the maximum compression pointers permitted is {}", CDomainName::MAX_COMPRESSION_POINTERS),
+            Self::ForwardPointers =>   write!(f, "Forward Pointer: domain name pointers can only point backwards. Cannot point forward in the buffer"),
+            Self::InvalidPointer =>    write!(f, "Invalid Pointer: domain name pointer cannot use the first two bits. These are reserved"),
+            Self::BadRData =>          write!(f, "Bad RData."),
             Self::AsciiError(error) => write!(f, "{error}"),
             Self::ParseError(error) => write!(f, "{error}"),
         }
@@ -184,8 +186,9 @@ impl FromWire for Label {
     }
 }
 
-pub trait Labels: Sized {
-    fn from_labels(labels: &[Label]) -> Self;
+pub trait Labels<Err: Debug>: Sized {
+    fn from_labels(labels: &[Label]) -> Result<Self, Err>;
+    fn from_labels_iter<'a>(labels: impl 'a + Iterator<Item = &'a Label>) -> Result<Self, Err>;
     fn as_labels<'a>(&'a self) -> &'a [Label];
     fn to_labels(&self) -> Vec<Label>;
 
@@ -209,17 +212,10 @@ pub trait Labels: Sized {
         }
     }
 
-    #[inline]
-    fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
-        self.iter_labels()
-            .enumerate()
-            .map(|(index, _)| Self::from_labels(&self.as_labels()[index..]))
-    }
-
     /// counts the number of labels the two domains have in common, starting from the right. Stops
     /// at the first non-equal pair of labels.
     #[inline]
-    fn compare_domain_name<T>(&self, other: &T) -> usize where T: Labels {
+    fn compare_domain_name<T: Labels<E>, E: Debug>(&self, other: &T) -> usize {
         let compar_iter = self.iter_labels()
             .rev()
             .zip(other.iter_labels().rev())
@@ -238,7 +234,7 @@ pub trait Labels: Sized {
     }
 
     #[inline]
-    fn matches<T>(&self, other: &T) -> bool where T: Labels {
+    fn matches<T: Labels<E>, E: Debug>(&self, other: &T) -> bool {
         // Same number of labels
         (self.label_count() == other.label_count())
         // all of the labels match
@@ -251,7 +247,7 @@ pub trait Labels: Sized {
     /// is_subdomain checks if child is indeed a child of the parent. If child
     /// and parent are the same domain true is returned as well.
     #[inline]
-    fn is_subdomain<T>(&self, child: &T) -> bool where T: Labels {
+    fn is_subdomain<T: Labels<E>, E: Debug>(&self, child: &T) -> bool {
         // Entire parent is contained by the child (child = subdomain)
         return Self::compare_domain_name(self, child) == self.label_count();
     }
@@ -470,15 +466,60 @@ impl CDomainName {
         self.labels.iter_mut()
                    .for_each(|label| label.lower());
     }
+
+    #[inline]
+    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
+        self.iter_labels()
+            .enumerate()
+            .map(|(index, _)| Self::from_labels(&self.labels[index..]).unwrap())
+    }
 }
 
-impl Labels for CDomainName {
+impl Labels<CDomainNameError> for CDomainName {
     #[inline]
-    fn from_labels(labels: &[Label]) -> Self {
-        // TODO: validate the label input to make sure it is actually correct and valid.
+    fn from_labels(labels: &[Label]) -> Result<Self, CDomainNameError> {
+        let mut serial_len: u16 = 0;
+        let mut last_label_was_dot = false;
+        for label in labels {
+            serial_len += label.serial_length();
+            if serial_len > Self::MAX_OCTETS {
+                return Err(CDomainNameError::LongDomain);
+            }
+
+            match (label.is_root(), last_label_was_dot) {
+                (true, true) => return Err(CDomainNameError::InternalRootLabel),
+                (true, false) => last_label_was_dot = true,
+                (false, true) => return Err(CDomainNameError::InternalRootLabel),
+                (false, false) => (),
+            }
+        }
+
         let mut labels_vec = TinyVec::with_capacity(labels.len());
         labels_vec.extend_from_slice(labels);
-        Self { labels: labels_vec }
+        return Ok(Self { labels: labels_vec });
+    }
+
+    #[inline]
+    fn from_labels_iter<'a>(labels: impl 'a + Iterator<Item = &'a Label>) -> Result<Self, CDomainNameError> {
+        let mut labels_vec = TinyVec::new();
+        let mut serial_len: u16 = 0;
+        let mut last_label_was_dot = false;
+        for label in labels {
+            serial_len += label.serial_length();
+            if serial_len > Self::MAX_OCTETS {
+                return Err(CDomainNameError::LongDomain);
+            }
+
+            match (label.is_root(), last_label_was_dot) {
+                (true, true) => return Err(CDomainNameError::InternalRootLabel),
+                (true, false) => last_label_was_dot = true,
+                (false, true) => return Err(CDomainNameError::InternalRootLabel),
+                (false, false) => (),
+            }
+
+            labels_vec.push(label.clone());
+        }
+        return Ok(Self { labels: labels_vec });
     }
 
     #[inline]

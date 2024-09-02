@@ -85,12 +85,23 @@ impl DomainName {
     pub fn lower(&mut self) {
         self.domain_name.lower()
     }
+
+    #[inline]
+    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
+        self.iter_labels()
+            .enumerate()
+            .map(|(index, _)| Self::from_labels(&self.as_labels()[index..]).unwrap())
+    }
 }
 
-impl Labels for DomainName {
+impl Labels<DomainNameError> for DomainName {
     #[inline]
-    fn from_labels(labels: &[Label]) -> Self {
-        Self { domain_name: CDomainName::from_labels(labels) }
+    fn from_labels(labels: &[Label]) -> Result<Self, DomainNameError> {
+        Ok(Self { domain_name: CDomainName::from_labels(labels)? })
+    }
+    
+    fn from_labels_iter<'a>(labels: impl 'a + Iterator<Item = &'a Label>) -> Result<Self, DomainNameError> {
+        Ok(Self { domain_name: CDomainName::from_labels_iter(labels)? })
     }
 
     #[inline]
