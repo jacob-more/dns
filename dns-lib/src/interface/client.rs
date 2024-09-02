@@ -207,12 +207,14 @@ impl Context {
           | (Ok(()), Context::CName { query: _, parent: _ })
           | (Ok(()), Context::CNameSearch { query: _, parent: _ })
           | (Ok(()), Context::DName { query: _, parent: _ })
-          | (Ok(()), Context::DNameSearch { query: _, parent: _ })
-          | (Ok(()), Context::NSAddress { query: _, parent: _ })
+          | (Ok(()), Context::DNameSearch { query: _, parent: _ }) => {
+                Ok(Self::NSAddress { query, parent: self })
+            },
+            (Ok(()), Context::NSAddress { query: _, parent: _ })
           | (Ok(()), Context::NSAddressSearch { query: _, parent: _ })
           | (Ok(()), Context::SubNSAddress { query: _, parent: _ })
           | (Ok(()), Context::SubNSAddressSearch { query: _, parent: _ }) => {
-                Ok(Self::NSAddress { query, parent: self })
+                Ok(Self::SubNSAddress { query, parent: self })
             },
         }
     }
@@ -318,8 +320,11 @@ impl Context {
                     Ok(())
                 }
             },
-            Context::CName { query, parent }
-          | Context::DName { query, parent } => {
+            Context::RootSearch { query, parent }
+          | Context::CName { query, parent }
+          | Context::CNameSearch { query, parent }
+          | Context::DName { query, parent }
+          | Context::DNameSearch { query, parent } => {
                 if query.qname().is_subdomain(child) {
                     Err(ContextErr::NSWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
@@ -327,21 +332,15 @@ impl Context {
                 }
             },
             Context::NSAddress { query, parent }
-          | Context::SubNSAddress { query, parent } => {
+          | Context::NSAddressSearch { query, parent }
+          | Context::SubNSAddress { query, parent }
+          | Context::SubNSAddressSearch { query, parent } => {
                 if query.qname().eq(child) {
                     Err(ContextErr::NSWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     parent.is_ns_allowed(child)
                 }
             },
-            Context::RootSearch { query: _, parent }
-          | Context::CNameSearch { query: _, parent }
-          | Context::DNameSearch { query: _, parent }
-          | Context::NSAddressSearch { query: _, parent }
-          | Context::SubNSAddressSearch { query: _, parent } => {
-                parent.is_ns_allowed(child)
-            },
-
         }
     }
 

@@ -492,6 +492,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                                         continue;
                                     },
                                     Err(error) => {
+                                        drop(r_active_queries);
                                         println!("Cannot use Forwarded (1): {error}");
 
                                         *this.inner = InnerNSRoundRobin::Complete;
@@ -534,6 +535,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, CCache> Future for NSRoundR
                                         continue;
                                     },
                                     Err(error) => {
+                                        drop(w_active_queries);
                                         println!("Cannot use Forwarded (2): {error}");
 
                                         *this.inner = InnerNSRoundRobin::Complete;
