@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use dns_lib::{interface::{cache::{cache::AsyncCache, main_cache::AsyncMainCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::{CDomainName, Labels}};
+use log::{debug, trace};
 use rand::{thread_rng, seq::SliceRandom};
 
 use crate::{query::round_robin_query::query_name_servers, DNSAsyncClient};
@@ -17,12 +18,13 @@ pub(crate) enum QueryResponse<T> {
 
 #[async_recursion]
 pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Context) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
-    println!("Start: Recursive Search for '{}'", context.query());
+    debug!(context:?; "Start recursive search");
     let cache_response: dns_lib::interface::cache::CacheResponse = client.cache.get(&CacheQuery {
         authoritative: false,
         question: context.query().clone(),
     }).await;
     // Initial Cache Check: Check to see if the records we're looking for are already cached.
+    trace!(context:?; "Recursive search initial cache response: '{cache_response:?}'");
     match cache_response {
         CacheResponse::Records(records) if (records.len() == 0) => (),
         CacheResponse::Records(records) => return QueryResponse::Records(records.into_iter().map(|cache_record| cache_record.record).collect()),
@@ -35,6 +37,7 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         NSResponse::Error(error) => return QueryResponse::Error(error),
         NSResponse::Records(search_names_max_index, name_servers) => (search_names_max_index, name_servers),
     };
+    trace!(context:?; "Recursive search initial name servers: '{name_servers:?}'");
     // Bound the search names based on the max index we reached to make the next stage easier.
     // This will make sure we start the search with the child of the ancestor and continue
     // down the tree from there.
@@ -49,21 +52,28 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         // that we're looking for.
         name_servers.shuffle(&mut thread_rng());
 
-        let search_context = match context.clone().new_search_name(Question::new(search_name.clone(), RType::A, context.qclass())) {
+        let search_query = Question::new(search_name.clone(), RType::A, context.qclass());
+        let search_context = match context.clone().new_search_name(search_query) {
             Ok(search_context) => Arc::new(search_context),
             Err(error) => {
-                println!("Search Lookup Error: {error}");
+                debug!(context:?; "Recursive search new search error: '{error}'");
                 return QueryResponse::Error(RCode::ServFail)
             },
         };
+        trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context '{search_context:?}'");
 
         match query_name_servers(&client, &joined_cache, search_context, &name_servers).await {
-            QueryResponse::Error(error) => return QueryResponse::Error(error),
+            QueryResponse::Error(error) => {
+                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context response: error {error}");
+                return QueryResponse::Error(error)
+            },
             QueryResponse::NoRecords => {
-                println!("Failed to find records for '{search_name}' while trying to answer '{}'", context.query());
+                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context response: no records");
                 return QueryResponse::Error(RCode::ServFail);
             },
             QueryResponse::Records(response_records) => {
+                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context response: '{response_records:?}'");
+
                 if (index != 0) || (context.qtype() != RType::DNAME) {
                     if response_records.iter().any(|record| record.rtype() == RType::DNAME) {
                         return handle_dname(client, joined_cache, context, response_records).await;
@@ -84,9 +94,15 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
 
     // Check for various cached answers.
     match query_cache(&joined_cache, context.query()).await {
-        QueryResponse::Error(error) => return QueryResponse::Error(error),
-        QueryResponse::NoRecords => (),
+        QueryResponse::Error(error) => {
+            trace!(context:?; "Recursive search secondary cache response: error '{error}'");
+            return QueryResponse::Error(error)
+        },
+        QueryResponse::NoRecords => {
+            trace!(context:?; "Recursive search secondary cache response: no records");
+        },
         QueryResponse::Records(response_records) => {
+            trace!(context:?; "Recursive search secondary cache response: '{response_records:?}'");
             if (context.qtype() != RType::CNAME) && response_records.iter().any(|record| record.rtype() == RType::CNAME) {
                 return handle_cname(client, joined_cache, context, response_records).await;
             }
@@ -100,10 +116,17 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
     }
 
     // Query name servers for answers.
+    trace!(context:?; "Recursive search: querying name servers '{name_servers:?}' with full context");
     match query_name_servers(&client, &joined_cache, context.clone(), &name_servers).await {
-        QueryResponse::Error(error) => return QueryResponse::Error(error),
-        QueryResponse::NoRecords => (),
+        QueryResponse::Error(error) => {
+            trace!(context:?; "Recursive search name server response: error '{error}'");
+            return QueryResponse::Error(error)
+        },
+        QueryResponse::NoRecords => {
+            trace!(context:?; "Recursive search name server response: no records");
+        },
         QueryResponse::Records(response_records) => {
+            trace!(context:?; "Recursive search name server response: '{response_records:?}'");
             if (context.qtype() != RType::CNAME) && response_records.iter().any(|record| record.rtype() == RType::CNAME) {
                 return handle_cname(client, joined_cache, context, response_records).await;
             }
@@ -116,6 +139,7 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         },
     }
 
+    trace!(context:?; "Recursive search no records found");
     return QueryResponse::NoRecords;
 }
 
@@ -160,9 +184,10 @@ async fn get_closest_name_server<CCache>(_client: &Arc<DNSAsyncClient>, joined_c
 }
 
 async fn handle_cname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, records: Vec<ResourceRecord>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
+    debug!(context:?; "Recursive search redirected by cname");
     for record in &records {
         if let ResourceRecord::CNAME(_, cname_rdata) = record {
-            match context.new_cname(cname_rdata.primary_name().clone()) {
+            match context.clone().new_cname(cname_rdata.primary_name().clone()) {
                 Ok(cname_context) => {
                     match recursive_query(client, joined_cache, cname_context).await {
                         QueryResponse::Error(rcode) => return QueryResponse::Error(rcode),
@@ -174,21 +199,23 @@ async fn handle_cname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
                     }
                 },
                 Err(error) => {
-                    println!("CName Lookup Error: {error}");
+                    trace!(context:?; "Recursive search new cname error: {error}");
                     return QueryResponse::Error(RCode::ServFail);
                 },
             };
         }
     }
 
+    trace!(context:?; "Recursive search new cname error: no cname record in records '{records:?}'");
     return QueryResponse::Error(RCode::ServFail);
 }
 
 async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, records: Vec<ResourceRecord>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
+    debug!(context:?; "Recursive search redirected by dname");
     for record in &records {
         if let ResourceRecord::DNAME(header, dname_rdata) = record {
             if !context.qname().is_subdomain(header.get_name()) {
-                println!("DName Lookup Error: The query name ('{}') was not a subdomain of the DName's owner name ('{}')", context.qname(), header.get_name());
+                trace!(context:?; "Recursive search new dname error: The query name '{}' is not a subdomain of the dname's owner name '{}'", context.qname(), header.get_name());
                 return QueryResponse::Error(RCode::ServFail);
             }
             let dname = CDomainName::from_labels_iter(
@@ -200,12 +227,12 @@ async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
             let dname = match dname {
                 Ok(dname) => dname,
                 Err(error) => {
-                    println!("DName Lookup Error: {error}");
+                    trace!(context:?; "Recursive search new cname error: {error}");
                     return QueryResponse::Error(RCode::ServFail);
                 },
             };
 
-            match context.new_dname(dname) {
+            match context.clone().new_dname(dname) {
                 Ok(dname_context) => {
                     match recursive_query(client, joined_cache, dname_context).await {
                         QueryResponse::Error(rcode) => return QueryResponse::Error(rcode),
@@ -217,12 +244,13 @@ async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
                     }
                 },
                 Err(error) => {
-                    println!("DName Lookup Error: {error}");
+                    trace!(context:?; "Recursive search new cname error: {error}");
                     return QueryResponse::Error(RCode::ServFail);
                 },
             };
         }
     }
 
+    trace!(context:?; "Recursive search new cname error: no dname record in records '{records:?}'");
     return QueryResponse::Error(RCode::ServFail);
 }

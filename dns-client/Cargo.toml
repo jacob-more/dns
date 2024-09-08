@@ -14,6 +14,7 @@ network = { path = "../network" }
 async-recursion = "1.1"
 async-trait = "0.1"
 futures = "0.3"
+log = { version = "0.4", features = ["std", "kv"] }
 pin-project = "1.1"
 rand = "0.8"
 tokio = { version = "1.40", features = ["full"] }
