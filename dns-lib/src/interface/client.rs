@@ -53,27 +53,27 @@ pub trait AsyncClient: Sync + Send {
 pub enum ContextErr {
     IllegalSearch {
         parent: String,
-        child: CDomainName,
+        child: Question,
     },
     IllegalCName {
         parent: String,
-        child: CDomainName,
+        child: Question,
     },
     CNameWillLoop {
         parent: String,
-        child: CDomainName,
+        child: Question,
     },
     IllegalDName {
         parent: String,
-        child: CDomainName,
+        child: Question,
     },
     DNameWillLoop {
         parent: String,
-        child: CDomainName,
+        child: Question,
     },
     NSWillLoop {
         parent: String,
-        child: CDomainName,
+        child: Question,
     },
 }
 
@@ -91,7 +91,7 @@ impl Display for ContextErr {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Context {
     Root { query: Question },
     RootSearch {
@@ -151,19 +151,20 @@ impl Context {
           | Context::DNameSearch { query: _, parent: _ }
           | Context::NSAddressSearch { query: _, parent: _ }
           | Context::SubNSAddressSearch { query: _, parent: _ } => {
-                Err(ContextErr::IllegalSearch { parent: self.short_name(), child: query.qname().clone() })
+                Err(ContextErr::IllegalSearch { parent: self.short_name(), child: query })
             },
         }
     }
 
     #[inline]
     pub fn new_cname(self: Arc<Self>, qname: CDomainName) -> Result<Context, ContextErr> {
-        match (self.is_cname_allowed(&qname), self.as_ref()) {
+        let query = Question::new(qname, self.qtype(), self.qclass());
+        match (self.is_cname_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
             (Ok(()), Context::Root { query: _ })
           | (Ok(()), Context::CName { query: _, parent: _ })
           | (Ok(()), Context::DName { query: _, parent: _ }) => {
-                Ok(Self::CName { query: Question::new(qname, self.qtype(), self.qclass()), parent: self })
+                Ok(Self::CName { query, parent: self})
             },
             (Ok(()), Context::RootSearch { query: _, parent: _ })
           | (Ok(()), Context::CNameSearch { query: _, parent: _ })
@@ -172,19 +173,20 @@ impl Context {
           | (Ok(()), Context::NSAddressSearch { query: _, parent: _ })
           | (Ok(()), Context::SubNSAddress { query: _, parent: _ })
           | (Ok(()), Context::SubNSAddressSearch { query: _, parent: _ }) => {
-                Err(ContextErr::IllegalCName { parent: self.short_name(), child: qname })
+                Err(ContextErr::IllegalCName { parent: self.short_name(), child: query })
             },
         }
     }
 
     #[inline]
     pub fn new_dname(self: Arc<Self>, qname: CDomainName) -> Result<Context, ContextErr> {
-        match (self.is_dname_allowed(&qname), self.as_ref()) {
+        let query = Question::new(qname, self.qtype(), self.qclass());
+        match (self.is_dname_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
             (Ok(()), Context::Root { query: _ })
           | (Ok(()), Context::CName { query: _, parent: _ })
           | (Ok(()), Context::DName { query: _, parent: _ }) => {
-                Ok(Self::DName { query: Question::new(qname, self.qtype(), self.qclass()), parent: self })
+                Ok(Self::DName { query, parent: self })
             },
             (Ok(()), Context::RootSearch { query: _, parent: _ })
           | (Ok(()), Context::CNameSearch { query: _, parent: _ })
@@ -193,14 +195,14 @@ impl Context {
           | (Ok(()), Context::NSAddressSearch { query: _, parent: _ })
           | (Ok(()), Context::SubNSAddress { query: _, parent: _ })
           | (Ok(()), Context::SubNSAddressSearch { query: _, parent: _ }) => {
-                Err(ContextErr::IllegalDName { parent: self.short_name(), child: qname })
+                Err(ContextErr::IllegalDName { parent: self.short_name(), child: query })
             },
         }
     }
 
     #[inline]
     pub fn new_ns_address(self: Arc<Self>, query: Question) -> Result<Context, ContextErr> {
-        match (self.is_ns_allowed(query.qname()), self.as_ref()) {
+        match (self.is_ns_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
             (Ok(()), Context::Root { query: _ })
           | (Ok(()), Context::RootSearch { query: _, parent: _ })
@@ -251,10 +253,42 @@ impl Context {
     }
 
     #[inline]
-    pub fn is_cname_allowed(&self, child: &CDomainName) -> Result<(), ContextErr> {
+    pub const fn parent(&self) -> Option<&Arc<Context>> {
+        match self {
+            Context::Root { query: _ } => None,
+            Context::RootSearch { query: _, parent } => Some(parent),
+            Context::CName { query: _, parent } => Some(parent),
+            Context::CNameSearch { query: _, parent } => Some(parent),
+            Context::DName { query: _, parent } => Some(parent),
+            Context::DNameSearch { query: _, parent } => Some(parent),
+            Context::NSAddress { query: _, parent } => Some(parent),
+            Context::NSAddressSearch { query: _, parent } => Some(parent),
+            Context::SubNSAddress { query: _, parent } => Some(parent),
+            Context::SubNSAddressSearch { query: _, parent } => Some(parent),
+        }
+    }
+
+    #[inline]
+    pub fn root(self: &Arc<Self>) -> &Arc<Context> {
+        match self.as_ref() {
+            Context::Root { query: _ } => self,
+            Context::RootSearch { query: _, parent } => parent.root(),
+            Context::CName { query: _, parent } => parent.root(),
+            Context::CNameSearch { query: _, parent } => parent.root(),
+            Context::DName { query: _, parent } => parent.root(),
+            Context::DNameSearch { query: _, parent } => parent.root(),
+            Context::NSAddress { query: _, parent } => parent.root(),
+            Context::NSAddressSearch { query: _, parent } => parent.root(),
+            Context::SubNSAddress { query: _, parent } => parent.root(),
+            Context::SubNSAddressSearch { query: _, parent } => parent.root(),
+        }
+    }
+
+    #[inline]
+    pub fn is_cname_allowed(&self, child: &Question) -> Result<(), ContextErr> {
         match &self {
             Context::Root { query } => {
-                if query.qname().is_subdomain(child) {
+                if query.qname().is_subdomain(child.qname()) {
                     Err(ContextErr::CNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     Ok(())
@@ -265,7 +299,7 @@ impl Context {
           | Context::CNameSearch { query, parent }
           | Context::DName { query, parent }
           | Context::DNameSearch { query, parent } => {
-                if query.qname().is_subdomain(child) {
+                if query.qname().is_subdomain(child.qname()) {
                     Err(ContextErr::CNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     parent.is_cname_allowed(child)
@@ -281,10 +315,10 @@ impl Context {
     }
 
     #[inline]
-    pub fn is_dname_allowed(&self, child: &CDomainName) -> Result<(), ContextErr> {
+    pub fn is_dname_allowed(&self, child: &Question) -> Result<(), ContextErr> {
         match &self {
             Context::Root { query } => {
-                if query.qname().is_subdomain(child) {
+                if query.qname().is_subdomain(child.qname()) {
                     Err(ContextErr::DNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     Ok(())
@@ -295,7 +329,7 @@ impl Context {
           | Context::CNameSearch { query, parent }
           | Context::DName { query, parent }
           | Context::DNameSearch { query, parent } => {
-                if query.qname().is_subdomain(child) {
+                if query.qname().is_subdomain(child.qname()) {
                     Err(ContextErr::DNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     parent.is_dname_allowed(child)
@@ -311,35 +345,31 @@ impl Context {
     }
 
     #[inline]
-    pub fn is_ns_allowed(&self, child: &CDomainName) -> Result<(), ContextErr> {
+    pub fn is_ns_allowed(&self, child: &Question) -> Result<(), ContextErr> {
         match &self {
             Context::Root { query } => {
-                if query.qname().is_subdomain(child) {
+                if query.eq(child) {
                     Err(ContextErr::NSWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     Ok(())
                 }
             },
-            Context::RootSearch { query, parent }
-          | Context::CName { query, parent }
-          | Context::CNameSearch { query, parent }
+            Context::CName { query, parent }
           | Context::DName { query, parent }
-          | Context::DNameSearch { query, parent } => {
-                if query.qname().is_subdomain(child) {
+          | Context::NSAddress { query, parent }
+          | Context::SubNSAddress { query, parent } => {
+                if query.eq(child) {
                     Err(ContextErr::NSWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     parent.is_ns_allowed(child)
                 }
             },
-            Context::NSAddress { query, parent }
-          | Context::NSAddressSearch { query, parent }
-          | Context::SubNSAddress { query, parent }
-          | Context::SubNSAddressSearch { query, parent } => {
-                if query.qname().eq(child) {
-                    Err(ContextErr::NSWillLoop { parent: self.short_name(), child: child.clone() })
-                } else {
-                    parent.is_ns_allowed(child)
-                }
+            Context::RootSearch { query: _, parent }
+          | Context::CNameSearch { query: _, parent }
+          | Context::DNameSearch { query: _, parent }
+          | Context::NSAddressSearch { query: _, parent }
+          | Context::SubNSAddressSearch { query: _, parent } => {
+                parent.is_ns_allowed(child)
             },
         }
     }
