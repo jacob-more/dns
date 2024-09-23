@@ -1,17 +1,19 @@
-use std::{collections::HashMap, io::ErrorKind, net::SocketAddr, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, time::Duration};
+use std::{borrow::{Borrow, BorrowMut}, collections::HashMap, future::Future, io::ErrorKind, net::SocketAddr, pin::Pin, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, task::Poll, time::Duration};
 
-use async_lib::awake_token::AwakeToken;
-use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
+use async_lib::awake_token::{AwakeToken, AwokenToken};
+use dns_lib::{query::{message::Message, question::Question}, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
+use futures::{future::BoxFuture, FutureExt};
+use log::trace;
+use pin_project::{pin_project, pinned_drop};
 use socket2::SockRef;
-use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast::{self, error::RecvError}, Mutex, RwLock}, task::{self, JoinHandle}, time};
+use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast::{self, error::RecvError}, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time::{self, Sleep}};
 
 const MAX_MESSAGE_SIZE: usize = 8192;
 const UDP_RETRANSMIT_MS: u64 = 125;
 const TCP_TIMEOUT_MS: u64 = 500;
 
 
-const TCP_INIT_ESTABLISHING_WAIT_MS: u64 = 5000;
-const TCP_INIT_CONNECTING_WAIT_MS: u64 = 5000;
+const TCP_INIT_TIMEOUT_MS: u64 = 5000;
 const TCP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
 
 const UDP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
@@ -37,222 +39,1030 @@ enum TcpState {
     Blocked,
 }
 
-// Implement TCP functions on MixedSocket
-impl MixedSocket {
-    #[inline]
-    async fn init_tcp_handle_foreign_establishing(self: Arc<Self>, mut receiver: broadcast::Receiver<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>, sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>, kill_init_tcp: Arc<AwakeToken>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)> {
-        select! {
-            biased;
-            received = receiver.recv() => match received {
-                Ok(socket) => {
-                    // Ignore send errors. They just indicate that all receivers have been dropped.
-                    let _ = sender.send(socket.clone());
-                    Ok(socket.clone())
-                },
-                Err(_) => Err(io::Error::from(io::ErrorKind::Interrupted)),
-            },
-            () = tokio::time::sleep(Duration::from_millis(TCP_INIT_ESTABLISHING_WAIT_MS)) => Err(io::Error::from(io::ErrorKind::TimedOut)),
-            () = kill_init_tcp.awoken() => Err(io::Error::from(io::ErrorKind::Interrupted)),
+#[pin_project(PinnedDrop)]
+struct InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm>
+where
+    'a: 'c + 'f + 'h + 'j + 'l
+{
+    socket: &'a Arc<MixedSocket>,
+    kill_tcp_token: Arc<AwakeToken>,
+    #[pin]
+    kill_tcp: AwokenToken,
+    tcp_socket_sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>,
+    #[pin]
+    timeout: Sleep,
+    inner: InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm>,
+}
+
+enum InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm>
+where
+    'c: 'b,
+    'f: 'e,
+    'h: 'g,
+    'j: 'i,
+    'l: 'k,
+{
+    Fresh,
+    WriteEstablishing(BoxFuture<'b, RwLockWriteGuard<'c, TcpState>>),
+    Connecting(BoxFuture<'d, io::Result<TcpStream>>),
+    ConnectionErrorWriteNone {
+        error: io::Error,
+        w_tcp_state: BoxFuture<'e, RwLockWriteGuard<'f, TcpState>>,
+    },
+    TimeoutWriteNone(BoxFuture<'g, RwLockWriteGuard<'h, TcpState>>),
+    KilledWriteNone(BoxFuture<'i, RwLockWriteGuard<'j, TcpState>>),
+    WriteManaged {
+        w_tcp_state: BoxFuture<'k, RwLockWriteGuard<'l, TcpState>>,
+        tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
+    },
+    GetEstablishing {
+        receive_tcp_socket: BoxFuture<'m, Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>), RecvError>>,
+    },
+    Complete,
+}
+
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> {
+    pub fn new(socket: &'a Arc<MixedSocket>, timeout: Option<Duration>) -> Self {
+        let kill_tcp_token = Arc::new(AwakeToken::new());
+        let (tcp_socket_sender, _) = broadcast::channel(1);
+        let timeout = timeout.unwrap_or(Duration::from_millis(TCP_INIT_TIMEOUT_MS));
+
+        Self {
+            socket,
+            kill_tcp_token: kill_tcp_token.clone(),
+            kill_tcp: kill_tcp_token.awoken(),
+            tcp_socket_sender,
+            timeout: tokio::time::sleep(timeout),
+            inner: InnerInitTcp::Fresh,
         }
     }
+}
 
-    #[inline]
-    async fn init_tcp(self: Arc<Self>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)> {
-        // Initially, verify if the connection has already been established.
-        let r_state = self.tcp.read().await;
-        match &*r_state {
-            TcpState::Managed { socket, kill } => return Ok((socket.clone(), kill.clone())),
-            TcpState::Establishing { sender, kill } => {
-                let mut receiver = sender.subscribe();
-                let kill_establishing = kill.clone();
-                drop(r_state);
-                select! {
-                    biased;
-                    received = receiver.recv() => match received {
-                        Ok(socket) => return Ok(socket.clone()),
-                        Err(_) => return Err(io::Error::from(io::ErrorKind::Interrupted)),
-                    },
-                    () = tokio::time::sleep(Duration::from_millis(TCP_INIT_ESTABLISHING_WAIT_MS)) => return Err(io::Error::from(io::ErrorKind::TimedOut)),
-                    () = kill_establishing.awoken() => return Err(io::Error::from(io::ErrorKind::Interrupted)),
-                };
-            },
-            TcpState::None => (),
-            TcpState::Blocked => {
-                drop(r_state);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
-            },
-        }
-        drop(r_state);
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> {
+    type Output = io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>;
 
-        // Setup for once the write lock is obtained.
-        let (tcp_socket_sender, _) = broadcast::channel(1);
-        let kill_init_tcp = Arc::new(AwakeToken::new());
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let mut this = self.as_mut().project();
+        match this.inner.borrow() {
+            InnerInitTcp::Fresh
+          | InnerInitTcp::WriteEstablishing(_) => {
+                if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
+                    *this.inner = InnerInitTcp::Complete;
 
-        // Need to re-verify state with new lock. State could have changed in between.
-        let mut w_state = self.tcp.write().await;
-        match &*w_state {
-            TcpState::Managed { socket, kill } => return Ok((socket.clone(), kill.clone())),
-            TcpState::Establishing { sender, kill } => {
-                let mut receiver = sender.subscribe();
-                let kill_establishing = kill.clone();
-                drop(w_state);
-                select! {
-                    biased;
-                    received = receiver.recv() => match received {
-                        Ok(socket) => return Ok(socket.clone()),
-                        Err(_) => return Err(io::Error::from(io::ErrorKind::Interrupted)),
-                    },
-                    () = tokio::time::sleep(Duration::from_millis(TCP_INIT_ESTABLISHING_WAIT_MS)) => return Err(io::Error::from(io::ErrorKind::TimedOut)),
-                    () = kill_establishing.awoken() => return Err(io::Error::from(io::ErrorKind::Interrupted)),
-                };
+                    // Exit loop: query killed.
+                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                }
+
+                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    *this.inner = InnerInitTcp::Complete;
+
+                    // Exit loop: query timed out.
+                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                }
             },
-            TcpState::None => {
-                *w_state = TcpState::Establishing {
-                    sender: tcp_socket_sender.clone(),
-                    kill: kill_init_tcp.clone()
-                };
-                drop(w_state);
+            InnerInitTcp::Connecting(_) => {
+                if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
+                    let w_tcp_state = this.socket.tcp.write().boxed();
+
+                    *this.inner = InnerInitTcp::TimeoutWriteNone(w_tcp_state);
+
+                    // First loop: poll the write lock.
+                } else if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    let w_tcp_state = this.socket.tcp.write().boxed();
+
+                    *this.inner = InnerInitTcp::KilledWriteNone(w_tcp_state);
+
+                    // First loop: poll the write lock.
+                }
             },
-            TcpState::Blocked => {
-                drop(w_state);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
+            InnerInitTcp::GetEstablishing { receive_tcp_socket: _ } => {
+                // Does not poll `kill_tcp` because that gets awoken to kill
+                // the listener (if it is set up).
+                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    *this.inner = InnerInitTcp::Complete;
+
+                    // Exit loop: query timed out.
+                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                }
+            },
+            InnerInitTcp::ConnectionErrorWriteNone { error: _, w_tcp_state: _ }
+          | InnerInitTcp::TimeoutWriteNone(_)
+          | InnerInitTcp::KilledWriteNone(_)
+          | InnerInitTcp::WriteManaged { w_tcp_state: _, tcp_socket: _ }
+          | InnerInitTcp::Complete => {
+                // Not allowed to timeout or be killed. These are cleanup
+                // states.
             },
         }
 
-        // Establish a TCP connection
-        let socket = select! {
-            biased;
-            () = kill_init_tcp.clone().awoken() => {
-                // Notify all of the waiters by dropping the sender. This causes the receivers to receiver an error.
-                drop(tcp_socket_sender);
-                println!("Failed to establish TCP connection to {} (Canceled)", self.upstream_socket);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
-            },
-            () = tokio::time::sleep(Duration::from_millis(TCP_INIT_CONNECTING_WAIT_MS)) => {
-                drop(tcp_socket_sender);
-                println!("Failed to establish TCP connection to {} (Timeout)", self.upstream_socket);
-                return Err(io::Error::from(io::ErrorKind::TimedOut));
-            },
-            socket = TcpStream::connect(self.upstream_socket) => match socket {
-                Ok(socket) => socket,
-                Err(error) => {
-                    println!("Failed to establish TCP connection to {} ({error})", self.upstream_socket);
+        loop {
+            match this.inner.borrow_mut() {
+                InnerInitTcp::Fresh => {
+                    let w_tcp_state = this.socket.tcp.write().boxed();
 
-                    // Before returning, we must ensure that the "Establishing" status gets cleared
-                    // since we failed to establish the connection.
-                    let mut w_state = self.tcp.write().await;
-                    match &*w_state {
-                        TcpState::Managed { socket, kill } => {
-                            let socket = socket.clone();
-                            let kill = kill.clone();
-                            drop(w_state);
-                            println!("Warning: TCP Establishing State was set to Managed state before Establishing was completed for socket {}", self.upstream_socket);
-                            // Ignore send errors. They just indicate that all receivers have been dropped.
-                            let _ = tcp_socket_sender.send((socket.clone(), kill.clone()));
-                            return Ok((socket, kill));
-                        },
-                        TcpState::Establishing { sender: est_sender, kill: est_kill_init_tcp } => {
-                            // If we are the one who set the state to Establishing...
-                            if Arc::ptr_eq(&kill_init_tcp, est_kill_init_tcp) {
-                                // Notify all of the waiters by dropping the sender. This causes the receivers to receiver an error.
-                                drop(tcp_socket_sender);
+                    *this.inner = InnerInitTcp::WriteEstablishing(w_tcp_state);
 
-                                *w_state = TcpState::None;
-                                drop(w_state);
-                                return Err(error);
-                            // If some other process set the state to Establishing...
-                            } else {
-                                let kill_init_tcp = est_kill_init_tcp.clone();
-                                let receiver = est_sender.subscribe();
-                                drop(w_state);
-                                println!("Warning: TCP Establishing State was set to Establishing state (by another process) before Establishing was completed for socket {}", self.upstream_socket);
-                                return self.init_tcp_handle_foreign_establishing(receiver, tcp_socket_sender, kill_init_tcp).await;
+                    // Next loop: poll the write lock to get the TCP state
+                    continue;
+                }
+                InnerInitTcp::WriteEstablishing(w_tcp_state) => {
+                    match w_tcp_state.as_mut().poll(cx) {
+                        Poll::Ready(mut tcp_state) => {
+                            match &*tcp_state {
+                                TcpState::Managed { socket, kill } => {
+                                    let tcp_socket = socket.clone();
+                                    let kill_tcp_token = kill.clone();
+
+                                    // Ignore send errors. They just indicate that all receivers have been dropped.
+                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
+
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection already setup.
+                                    // Nothing to do.
+                                    return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
+                                },
+                                TcpState::Establishing { sender: active_sender, kill: _ } => {
+                                    let receive_tcp_socket = active_sender.subscribe();
+                                    let receive_tcp_socket = async move {
+                                        let mut receive_tcp_socket = receive_tcp_socket;
+                                        receive_tcp_socket.recv().await
+                                    }.boxed();
+
+                                    *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
+
+                                    // Next loop: poll the receiver. Another
+                                    // process is setting up the connection.
+                                    continue;
+                                },
+                                TcpState::None => {
+                                    let (tcp_socket_sender, _) = broadcast::channel(1);
+                                    let kill_init_tcp = Arc::new(AwakeToken::new());
+                                    let init_connection = TcpStream::connect(this.socket.upstream_socket).boxed();
+
+                                    *tcp_state = TcpState::Establishing {
+                                        sender: tcp_socket_sender.clone(),
+                                        kill: kill_init_tcp.clone()
+                                    };
+
+                                    *this.inner = InnerInitTcp::Connecting(init_connection);
+
+                                    // Next loop: poll the TCP stream and start
+                                    // connecting.
+                                    continue;
+                                },
+                                TcpState::Blocked => {
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection not allowed.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                },
                             }
-                        },
-                        TcpState::None => {
-                            drop(w_state);
-                            println!("Warning: TCP Establishing State was set to None state before Establishing was completed for socket {}", self.upstream_socket);
-                            // Notify all of the waiters by dropping the sender. This causes the receivers to receiver an error.
-                            drop(tcp_socket_sender);
-                            return Err(error);
-                        },
-                        TcpState::Blocked => {
-                            drop(w_state);
-                            println!("Warning: TCP Establishing State was set to Blocked state before Establishing was completed for socket {}", self.upstream_socket);
-                            // Notify all of the waiters by dropping the sender. This causes the receivers to receiver an error.
-                            drop(tcp_socket_sender);
-                            return Err(error);
+                        }
+                        Poll::Pending => {
+                            // Exit loop. Will be woken up once the TcpState
+                            // write lock is available, the timeout condition
+                            // occurs, or the connection is killed.
+                            return Poll::Pending;
                         },
                     }
                 },
+                InnerInitTcp::Connecting(init_connection) => {
+                    match init_connection.as_mut().poll(cx) {
+                        Poll::Ready(Ok(socket)) => {
+                            let (tcp_reader, tcp_writer) = socket.into_split();
+                            let tcp_socket = Arc::new(Mutex::new(tcp_writer));
+                            let w_tcp_state = this.socket.tcp.write().boxed();
+                            task::spawn(this.socket.clone().listen_tcp(tcp_reader, this.kill_tcp_token.clone()));
+
+                            *this.inner = InnerInitTcp::WriteManaged { w_tcp_state, tcp_socket };
+
+                            // Next loop: poll the write lock.
+                            continue;
+                        },
+                        Poll::Ready(Err(error)) => {
+                            let w_tcp_state = this.socket.tcp.write().boxed();
+
+                            *this.inner = InnerInitTcp::ConnectionErrorWriteNone { error, w_tcp_state };
+
+                            // Next loop: poll the write lock.
+                            continue;
+                        },
+                        Poll::Pending => {
+                            // Exit loop. Will be woken up once TCP is
+                            // connected, the timeout condition occurs, or the
+                            // connection is killed.
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerInitTcp::ConnectionErrorWriteNone { error, w_tcp_state } => {
+                    match w_tcp_state.as_mut().poll(cx) {
+                        Poll::Ready(mut w_tcp_state) => {
+                            match &*w_tcp_state {
+                                TcpState::Managed { socket, kill } => {
+                                    let tcp_socket = socket.clone();
+                                    let kill_tcp_token = kill.clone();
+
+                                    // Ignore send errors. They just indicate that all receivers have been dropped.
+                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
+
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection already setup.
+                                    // Nothing to do.
+                                    return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
+                                },
+                                TcpState::Establishing { sender, kill: active_kill_tcp_token } => {
+                                    // If we are the one who set the state to Establishing...
+                                    if Arc::ptr_eq(this.kill_tcp_token, active_kill_tcp_token) {
+                                        *w_tcp_state = TcpState::None;
+                                        drop(w_tcp_state);
+                                        let error = io::Error::from(error.kind());
+
+                                        *this.inner = InnerInitTcp::Complete;
+
+                                        // Exit loop: we received a connection
+                                        // error.
+                                        return Poll::Ready(Err(error));
+                                    // If some other process set the state to Establishing...
+                                    } else {
+                                        let receiver = sender.subscribe();
+                                        let receive_tcp_socket = async move {
+                                            let mut receiver = receiver;
+                                            receiver.recv().await
+                                        }.boxed();
+
+                                        *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
+
+                                        // Next loop: poll the receiver.
+                                        continue;
+                                    }
+                                },
+                                TcpState::None
+                              | TcpState::Blocked => {
+                                    drop(w_tcp_state);
+                                    let error = io::Error::from(error.kind());
+
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: we received a connection
+                                    // error.
+                                    return Poll::Ready(Err(error));
+                                },
+                            }
+                        },
+                        Poll::Pending => {
+                            // Exit loop. Will be woken up once the TcpState
+                            // write lock is available. Cannot time out or be
+                            // killed.
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerInitTcp::TimeoutWriteNone(w_tcp_state) => {
+                    match w_tcp_state.as_mut().poll(cx) {
+                        Poll::Ready(mut w_tcp_state) => {
+                            match &*w_tcp_state {
+                                TcpState::Managed { socket, kill } => {
+                                    let tcp_socket = socket.clone();
+                                    let kill_tcp_token = kill.clone();
+
+                                    // Ignore send errors. They just indicate that all receivers have been dropped.
+                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
+
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection already setup.
+                                    // Nothing to do.
+                                    return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
+                                },
+                                TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
+                                    // If we are the one who set the state to Establishing...
+                                    if Arc::ptr_eq(this.kill_tcp_token, active_kill_tcp_token) {
+                                        *w_tcp_state = TcpState::None;
+                                    }
+                                    drop(w_tcp_state);
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection timed out.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                                },
+                                TcpState::None
+                              | TcpState::Blocked => {
+                                    drop(w_tcp_state);
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection timed out.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                                },
+                            }
+                        },
+                        Poll::Pending => {
+                            // Exit loop. Will be woken up once the TcpState
+                            // write lock is available. Cannot time out or be
+                            // killed.
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerInitTcp::KilledWriteNone(w_tcp_state) => {
+                    match w_tcp_state.as_mut().poll(cx) {
+                        Poll::Ready(mut w_tcp_state) => {
+                            match &*w_tcp_state {
+                                TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
+                                    // If we are the one who set the state to Establishing...
+                                    if Arc::ptr_eq(this.kill_tcp_token, active_kill_tcp_token) {
+                                        *w_tcp_state = TcpState::None;
+                                    }
+                                    drop(w_tcp_state);
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection killed.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                },
+                                TcpState::Managed { socket: _, kill: _ }
+                              | TcpState::None
+                              | TcpState::Blocked => {
+                                    drop(w_tcp_state);
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection killed.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                },
+                            }
+                        },
+                        Poll::Pending => {
+                            // Exit loop. Will be woken up once the TcpState
+                            // write lock is available. Cannot time out or be
+                            // killed.
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerInitTcp::WriteManaged { w_tcp_state, tcp_socket } => {
+                    match w_tcp_state.as_mut().poll(cx) {
+                        Poll::Ready(mut w_tcp_state) => {
+                            match &*w_tcp_state {
+                                TcpState::Establishing { sender: active_sender, kill: active_kill_tcp_token } => {
+                                    // If we are the one who set the state to Establishing...
+                                    if Arc::ptr_eq(this.kill_tcp_token, active_kill_tcp_token) {
+                                        *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: this.kill_tcp_token.clone() };
+                                        drop(w_tcp_state);
+
+                                        // Ignore send errors. They just indicate that all receivers have been dropped.
+                                        let _ = this.tcp_socket_sender.send((tcp_socket.clone(), this.kill_tcp_token.clone()));
+
+                                        let tcp_socket = tcp_socket.clone();
+                                        let kill_tcp_token = this.kill_tcp_token.clone();
+
+                                        *this.inner = InnerInitTcp::Complete;
+
+                                        // Exit loop: connection setup
+                                        // completed and registered.
+                                        return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
+                                    // If some other process set the state to Establishing...
+                                    } else {
+                                        let receive_tcp_socket = active_sender.subscribe();
+                                        drop(w_tcp_state);
+                                        let receive_tcp_socket = async move {
+                                            let mut receive_tcp_socket = receive_tcp_socket;
+                                            receive_tcp_socket.recv().await
+                                        }.boxed();
+
+                                        // Shutdown the listener we started.
+                                        this.kill_tcp_token.awake();
+
+                                        *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
+
+                                        // Next loop: poll the receiver.
+                                        continue;
+                                    }
+                                },
+                                TcpState::Managed { socket, kill } => {
+                                    let tcp_socket = socket.clone();
+                                    let kill_tcp_token = kill.clone();
+                                    drop(w_tcp_state);
+
+                                    // Shutdown the listener we started.
+                                    this.kill_tcp_token.awake();
+
+                                    // Ignore send errors. They just indicate that all receivers have been dropped.
+                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
+
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: connection already setup.
+                                    // Nothing to do.
+                                    return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
+                                },
+                                TcpState::None
+                              | TcpState::Blocked => {
+                                    drop(w_tcp_state);
+
+                                    // Shutdown the listener we started.
+                                    this.kill_tcp_token.awake();
+
+                                    *this.inner = InnerInitTcp::Complete;
+
+                                    // Exit loop: state changed after this task
+                                    // set it to Establishing. Indicates that
+                                    // this task is no longer in charge.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                },
+                            }
+                        },
+                        Poll::Pending => {
+                            // Exit loop. Will be woken up once the TcpState
+                            // write lock is available. Cannot time out or be
+                            // killed.
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerInitTcp::GetEstablishing { receive_tcp_socket } => {
+                    match receive_tcp_socket.as_mut().poll(cx) {
+                        Poll::Ready(Ok((tcp_socket, tcp_kill))) => {
+                            let tcp_socket = tcp_socket.clone();
+                            let kill_tcp_token = tcp_kill.clone();
+
+                            *this.inner = InnerInitTcp::Complete;
+
+                            // Exit loop: connection setup completed and
+                            // registered by a different init process.
+                            return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
+                        },
+                        Poll::Ready(Err(RecvError::Closed)) => {
+                            *this.inner = InnerInitTcp::Complete;
+
+                            // Exit loop: all senders were dropped so it is not
+                            // possible to receive a connection.
+                            return Poll::Ready(Err(io::Error::from(ErrorKind::Interrupted)));
+                        },
+                        Poll::Ready(Err(RecvError::Lagged(num_sockets))) => {
+                            trace!("Channel lagged. Skipping {num_sockets} sockets. Will poll again");
+
+                            // Next loop: will poll the receiver again.
+                            continue;
+                        },
+                        Poll::Pending => {
+                            // Exit loop. Will be woken up once a TCP write
+                            // handle is received or the timeout condition
+                            // occurs. Cannot be killed because it may have
+                            // already been killed by self.
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerInitTcp::Complete => panic!("InitTcp was polled after completion"),
+            }
+        }
+    }
+}
+
+#[pinned_drop]
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> {
+    fn drop(self: Pin<&mut Self>) {
+        match &self.inner {
+            InnerInitTcp::Fresh
+          | InnerInitTcp::WriteEstablishing(_)
+          | InnerInitTcp::GetEstablishing { receive_tcp_socket: _ }
+          | InnerInitTcp::Complete => {
+                // Nothing to do.
             },
-        };
-
-        let (tcp_reader, tcp_writer) = socket.into_split();
-        let tcp_writer = Arc::new(Mutex::new(tcp_writer));
-        // Reuse the awake token. This also means that if the socket is killed while establishing,
-        // it will remember that once it is established and can shut down without being told again.
-        let kill_tcp = kill_init_tcp;
-
-        // Start socket management
-        let mut w_state = self.tcp.write().await;
-        match &*w_state {
-            TcpState::Managed { socket, kill } => {
-                let socket = socket.clone();
-                let kill = kill.clone();
-                drop(w_state);
-                println!("Warning: TCP Establishing State was set to Managed state before Establishing was completed for socket {}", self.upstream_socket);
-                drop(tcp_reader);
-                drop(tcp_writer);
-                // Ignore send errors. They just indicate that all receivers have been dropped.
-                let _ = tcp_socket_sender.send((socket.clone(), kill.clone()));
-                return Ok((socket, kill));
+            InnerInitTcp::Connecting(_)
+          | InnerInitTcp::ConnectionErrorWriteNone { error: _, w_tcp_state: _ }
+          | InnerInitTcp::TimeoutWriteNone(_)
+          | InnerInitTcp::KilledWriteNone(_) => {
+                let tcp_socket = self.socket.clone();
+                let kill_tcp_token = self.kill_tcp_token.clone();
+                tokio::spawn(async move {
+                    let mut w_tcp_state = tcp_socket.tcp.write().await;
+                    match &*w_tcp_state {
+                        TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
+                            // If we are the one who set the state to Establishing...
+                            if Arc::ptr_eq(&kill_tcp_token, active_kill_tcp_token) {
+                                *w_tcp_state = TcpState::None;
+                            }
+                            drop(w_tcp_state);
+                        },
+                        TcpState::Managed { socket: _, kill: _ }
+                      | TcpState::None
+                      | TcpState::Blocked => {
+                            drop(w_tcp_state);
+                        },
+                    }
+                });
             },
-            TcpState::Establishing { sender: est_sender, kill: est_kill_init_tcp } => {
-                // If we are the one who set the state to Establishing...
-                if Arc::ptr_eq(&kill_tcp, est_kill_init_tcp) {
-                    *w_state = TcpState::Managed {
-                        socket: tcp_writer.clone(),
-                        kill: kill_tcp.clone()
-                    };
-                    drop(w_state);
+            // If this struct is dropped while it is trying to write the
+            // connection to the TcpState, we will spawn a task to complete
+            // this operation. This way, those that depend on receiving this
+            // the connection don't unexpectedly receive errors and try to
+            // re-initialize the connection.
+            InnerInitTcp::WriteManaged { w_tcp_state: _, tcp_socket } => {
+                let tcp_socket = tcp_socket.clone();
+                let socket = self.socket.clone();
+                let tcp_socket_sender = self.tcp_socket_sender.clone();
+                let kill_tcp_token = self.kill_tcp_token.clone();
+                tokio::spawn(async move {
+                    let mut w_tcp_state = socket.tcp.write().await;
+                    match &*w_tcp_state {
+                        TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
+                            // If we are the one who set the state to Establishing...
+                            if Arc::ptr_eq(&kill_tcp_token, active_kill_tcp_token) {
+                                *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: kill_tcp_token.clone() };
+                                drop(w_tcp_state);
 
-                    task::spawn(self.clone().listen_tcp(tcp_reader, kill_tcp.clone()));
+                                // Ignore send errors. They just indicate that all receivers have been dropped.
+                                let _ = tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token));
+                            // If some other process set the state to Establishing...
+                            } else {
+                                drop(w_tcp_state);
 
-                    // Ignore send errors. They just indicate that all receivers have been dropped.
-                    let _ = tcp_socket_sender.send((tcp_writer.clone(), kill_tcp.clone()));
-                    return Ok((tcp_writer, kill_tcp));
-                // If some other process set the state to Establishing...
-                } else {
-                    let kill_init_tcp = est_kill_init_tcp.clone();
-                    let receiver = est_sender.subscribe();
-                    drop(w_state);
+                                // Shutdown the listener we started.
+                                kill_tcp_token.awake();
+                            }
+                        },
+                        TcpState::Managed { socket: _, kill: _ }
+                      | TcpState::None
+                      | TcpState::Blocked => {
+                            drop(w_tcp_state);
 
-                    println!("Warning: TCP Establishing State was set to Establishing state (by another process) before Establishing was completed for socket {}", self.upstream_socket);
+                            // Shutdown the listener we started.
+                            kill_tcp_token.awake();
+                        },
+                    }
+                });
+            },
+        }
+    }
+}
 
-                    drop(tcp_reader);
-                    drop(tcp_writer);
+#[pin_project(PinnedDrop)]
+struct TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v>
+where
+    'a: 'd + 'r + 'u + 'v
+{
+    socket: &'a Arc<MixedSocket>,
+    query: &'b mut Message,
+    #[pin]
+    timeout: Sleep,
+    #[pin]
+    inner: InnerTQ<'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v>,
+}
 
-                    // Although this task is no longer allowed to use the TCP socket that it initialized, it can wait
-                    // for the process that set the state to Establishing to establish its own TCP connection.
-                    return self.init_tcp_handle_foreign_establishing(receiver, tcp_socket_sender, kill_init_tcp).await;
+#[pin_project(project = InnerTQProj)]
+enum InnerTQ<'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v> {
+    Fresh,
+    TQSocket(#[pin] TQSocket<'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v>),
+    Complete,
+}
+
+#[pin_project(project = TQSocketProj)]
+enum TQSocket<'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v>
+where
+    'd: 'c,
+{
+    GetTcpState(BoxFuture<'c, RwLockReadGuard<'d, TcpState>>),
+    GetTcpEstablishing {
+        receive_tcp_socket: BoxFuture<'e, Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>), RecvError>>,
+    },
+    InitTcp {
+        #[pin]
+        join_handle: JoinHandle<io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>>,
+    },
+    Acquired {
+        tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
+        #[pin]
+        kill_tcp: AwokenToken,
+        #[pin]
+        in_flight: TQInFlight<'q, 'r, 's, 't, 'u, 'v>,
+    }
+}
+
+#[pin_project(project = TQInFlightProj)]
+enum TQInFlight<'q, 'r, 's, 't, 'u, 'v>
+where
+    'r: 'q,
+    'v: 'u,
+{
+    WriteInFlight(BoxFuture<'q, RwLockWriteGuard<'r, HashMap<u16, InFlight>>>),
+    InFlight {
+        result_receiver: BoxFuture<'s, Result<Message, RecvError>>,
+        send_query: TQSendQuery<'t>,
+    },
+    RemoveInFlight {
+        w_in_flight: BoxFuture<'u, RwLockWriteGuard<'v, HashMap<u16, InFlight>>>,
+        response: Option<io::Result<Message>>,
+    },
+}
+
+enum TQSendQuery<'t> {
+    SendQuery(BoxFuture<'t, io::Result<()>>),
+    Complete,
+}
+
+impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v> TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v> {
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, timeout: Option<Duration>) -> Self {
+        let timeout = timeout.unwrap_or(Duration::from_millis(TCP_TIMEOUT_MS));
+
+        Self {
+            socket,
+            query,
+            timeout: tokio::time::sleep(timeout),
+            inner: InnerTQ::Fresh,
+        }
+    }
+}
+
+impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v> Future for TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v> {
+    type Output = io::Result<Message>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        let mut this = self.as_mut().project();
+        match this.inner.as_mut().project() {
+            InnerTQProj::Fresh => {
+                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    this.inner.set(InnerTQ::Complete);
+
+                    // Exit loop: query timed out.
+                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
                 }
             },
-            TcpState::None => {
-                drop(w_state);
-                // Notify all of the waiters by dropping the sender. This causes the receivers to receiver an error.
-                drop(tcp_socket_sender);
-                println!("Warning: TCP Establishing State was set to None state before Establishing was completed for socket {}", self.upstream_socket);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
+            InnerTQProj::TQSocket(mut tq_socket) => {
+                let tq_socket_projection = tq_socket.as_mut().project();
+                match tq_socket_projection {
+                    TQSocketProj::GetTcpState(_)
+                  | TQSocketProj::GetTcpEstablishing { receive_tcp_socket: _ }
+                  | TQSocketProj::InitTcp { join_handle: _ } => {
+                        if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            this.inner.set(InnerTQ::Complete);
+
+                            // Exit loop: query timed out.
+                            return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                        }
+                    },
+                    TQSocketProj::Acquired { tcp_socket: _, mut kill_tcp, mut in_flight } => {
+                        let in_flight_projection = in_flight.as_mut().project();
+                        match in_flight_projection {
+                            TQInFlightProj::WriteInFlight(_) => {
+                                if let Poll::Ready(()) = kill_tcp.as_mut().poll(cx) {
+                                    this.inner.set(InnerTQ::Complete);
+
+                                    // Exit loop: query killed.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                }
+
+                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                                    this.inner.set(InnerTQ::Complete);
+
+                                    // Exit loop: query timed out.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                                }
+                            },
+                            TQInFlightProj::InFlight { result_receiver: _, send_query: _ } => {
+                                if let Poll::Ready(()) = kill_tcp.as_mut().poll(cx) {
+                                    this.inner.set(InnerTQ::Complete);
+
+                                    // Exit loop: query killed.
+                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                }
+
+                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                                    let w_in_flight = this.socket.in_flight.write().boxed();
+
+                                    in_flight.set(TQInFlight::RemoveInFlight { w_in_flight, response: Some(Err(io::Error::from(io::ErrorKind::TimedOut))) });
+
+                                    // First loop: poll the write lock.
+                                }
+                            },
+                            TQInFlightProj::RemoveInFlight { w_in_flight: _, response: _ } => {
+                                // Not allowed to timeout or be killed. This is
+                                // a cleanup state.
+                            },
+                        }
+                    },
+                }
             },
-            TcpState::Blocked => {
-                drop(w_state);
-                // Notify all of the waiters by dropping the sender. This causes the receivers to receiver an error.
-                drop(tcp_socket_sender);
-                println!("Warning: TCP Establishing State was set to Blocked state before Establishing was completed for socket {}", self.upstream_socket);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
+            InnerTQProj::Complete => {
+                // Not allowed to timeout. This is a cleanup state.
             },
-        };
+        }
+
+        loop {
+            match this.inner.as_mut().project() {
+                InnerTQProj::Fresh => {
+                    let r_tcp_state = this.socket.tcp.read().boxed();
+
+                    this.inner.set(InnerTQ::TQSocket(TQSocket::GetTcpState(r_tcp_state)));
+
+                    // TODO
+                    continue;
+                },
+                InnerTQProj::TQSocket(mut tq_socket) => {
+                    let tq_socket_projection = tq_socket.as_mut().project();
+                    match tq_socket_projection {
+                        TQSocketProj::GetTcpState(r_tcp_state) => {
+                            match r_tcp_state.as_mut().poll(cx) {
+                                Poll::Ready(tcp_state) => {
+                                    match &*tcp_state {
+                                        TcpState::Managed { socket, kill } => {
+                                            let tcp_socket = socket.clone();
+                                            let kill_tcp_token = kill.clone();
+                                            let w_in_flight = this.socket.in_flight.write().boxed();
+
+                                            tq_socket.set(TQSocket::Acquired {
+                                                tcp_socket,
+                                                kill_tcp: kill_tcp_token.awoken(),
+                                                in_flight: TQInFlight::WriteInFlight(w_in_flight)
+                                            });
+
+                                            // TODO
+                                            continue;
+                                        },
+                                        TcpState::Establishing { sender, kill: _ } => {
+                                            let receiver = sender.subscribe();
+                                            let receive_tcp_socket = async move {
+                                                let mut receiver = receiver;
+                                                receiver.recv().await
+                                            }.boxed();
+
+                                            tq_socket.set(TQSocket::GetTcpEstablishing { receive_tcp_socket });
+
+                                            // TODO
+                                            continue;
+                                        },
+                                        TcpState::None => {
+                                            let init_tcp = tokio::spawn(this.socket.clone().init_tcp());
+
+                                            tq_socket.set(TQSocket::InitTcp { join_handle: init_tcp });
+
+                                            // TODO
+                                            continue;
+                                        },
+                                        TcpState::Blocked => {
+                                            this.inner.set(InnerTQ::Complete);
+
+                                            // TODO
+                                            return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                        },
+                                    }
+                                },
+                                Poll::Pending => {
+                                    // TODO
+                                    return Poll::Pending;
+                                },
+                            }
+                        },
+                        TQSocketProj::GetTcpEstablishing { receive_tcp_socket } => {
+                            match receive_tcp_socket.as_mut().poll(cx) {
+                                Poll::Ready(Ok((tcp_socket, tcp_kill))) => {
+                                    let tcp_socket = tcp_socket.clone();
+                                    let kill_tcp_token = tcp_kill.clone();
+                                    let w_in_flight = this.socket.in_flight.write().boxed();
+
+                                    tq_socket.set(TQSocket::Acquired {
+                                        tcp_socket,
+                                        kill_tcp: kill_tcp_token.awoken(),
+                                        in_flight: TQInFlight::WriteInFlight(w_in_flight)
+                                    });
+
+                                    // TODO
+                                    continue;
+                                },
+                                Poll::Ready(Err(RecvError::Closed)) => {
+                                    this.inner.set(InnerTQ::Complete);
+
+                                    // TODO
+                                    return Poll::Ready(Err(io::Error::from(ErrorKind::Interrupted)));
+                                },
+                                Poll::Ready(Err(RecvError::Lagged(num_sockets))) => {
+                                    trace!("Channel lagged. Skipping {num_sockets} sockets. Will poll again");
+
+                                    // TODO
+                                    continue;
+                                },
+                                Poll::Pending => {
+                                    // TODO
+                                    return Poll::Pending;
+                                },
+                            }
+                        },
+                        TQSocketProj::InitTcp { mut join_handle } => {
+                            match join_handle.as_mut().poll(cx) {
+                                Poll::Ready(Ok(Ok((tcp_socket, kill_tcp_token)))) => {
+                                    let tcp_socket = tcp_socket.clone();
+                                    let kill_tcp_token = kill_tcp_token.clone();
+                                    let w_in_flight = this.socket.in_flight.write().boxed();
+
+                                    tq_socket.set(TQSocket::Acquired {
+                                        tcp_socket,
+                                        kill_tcp: kill_tcp_token.awoken(),
+                                        in_flight: TQInFlight::WriteInFlight(w_in_flight)
+                                    });
+
+                                    // TODO
+                                    continue;
+                                },
+                                Poll::Ready(Ok(Err(io_error))) => {
+                                    let io_error = io_error;
+
+                                    this.inner.set(InnerTQ::Complete);
+
+                                    // TODO
+                                    return Poll::Ready(Err(io_error));
+                                },
+                                Poll::Ready(Err(join_error)) => {
+                                    let io_error = io::Error::from(join_error);
+
+                                    this.inner.set(InnerTQ::Complete);
+
+                                    // TODO
+                                    return Poll::Ready(Err(io_error));
+                                },
+                                Poll::Pending => {
+                                    // TODO
+                                    return Poll::Pending;
+                                },
+                            }
+                        },
+                        TQSocketProj::Acquired { tcp_socket, kill_tcp: _, mut in_flight } => {
+                            let in_flight_projection = in_flight.as_mut().project();
+                            match in_flight_projection {
+                                TQInFlightProj::WriteInFlight(w_in_flight) => {
+                                    match w_in_flight.as_mut().poll(cx) {
+                                        Poll::Ready(mut w_in_flight) => {
+                                            let (sender, result_receiver) = broadcast::channel(1);
+                                            let result_receiver = async move {
+                                                let mut result_receiver = result_receiver;
+                                                result_receiver.recv().await
+                                            }.boxed();
+
+                                            // This is the initial query ID. However, it could change if it is already in use.
+                                            this.query.id = rand::random();
+
+                                            // verify that ID is unique.
+                                            while w_in_flight.contains_key(&this.query.id) {
+                                                this.query.id = rand::random();
+                                                // FIXME: should this fail after some number of non-unique keys? May want to verify that the list isn't full.
+                                            }
+                                            w_in_flight.insert(this.query.id, InFlight { send_response: sender });
+                                            drop(w_in_flight);
+
+                                            let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
+                                            let mut write_wire = WriteWire::from_bytes(&mut raw_message);
+                                            if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
+                                                let w_in_flight = this.socket.in_flight.write().boxed();
+
+                                                in_flight.set(TQInFlight::RemoveInFlight { w_in_flight, response: Some(Err(io::Error::new(io::ErrorKind::InvalidData, wire_error))) });
+
+                                                // TODO
+                                                continue;
+                                            };
+                                            let wire_length = write_wire.current_len();
+
+                                            println!("Sending on TCP socket {} :: {:?}", this.socket.upstream_socket, this.query);
+
+                                            let socket = this.socket.clone();
+                                            let tcp_socket = tcp_socket.clone();
+                                            let send_query = async move {
+                                                let socket = socket;
+                                                let tcp_socket = tcp_socket;
+                                                let wire_length = wire_length;
+
+                                                socket.recent_messages_sent.store(true, Ordering::Release);
+                                                let mut w_tcp_stream = tcp_socket.lock().await;
+                                                let bytes_written = w_tcp_stream.write(&raw_message[..wire_length]).await?;
+                                                drop(w_tcp_stream);
+                                                // Verify that the correct number of bytes were written.
+                                                if bytes_written != wire_length {
+                                                    return Err(io::Error::new(
+                                                        io::ErrorKind::InvalidData,
+                                                        format!("Incorrect number of bytes sent to TCP stream; expected {wire_length} bytes but sent {bytes_written} bytes"),
+                                                    ));
+                                                }
+
+                                                return Ok(());
+                                            }.boxed();
+
+                                            in_flight.set(TQInFlight::InFlight { result_receiver, send_query: TQSendQuery::SendQuery(send_query) });
+
+                                            // TODO
+                                            continue;
+                                        },
+                                        Poll::Pending => {
+                                            // TODO
+                                            return Poll::Pending;
+                                        },
+                                    }
+                                },
+                                TQInFlightProj::InFlight { result_receiver, send_query } => {
+                                    if let TQSendQuery::SendQuery(send_query_future) = send_query {
+                                        match send_query_future.as_mut().poll(cx) {
+                                            Poll::Ready(Ok(())) => {
+                                                *send_query = TQSendQuery::Complete
+                                            },
+                                            Poll::Ready(Err(error)) => {
+                                                let w_in_flight = this.socket.in_flight.write().boxed();
+
+                                                in_flight.set(TQInFlight::RemoveInFlight { w_in_flight, response: Some(Err(error)) });
+
+                                                // TODO
+                                                continue;
+                                            },
+                                            Poll::Pending => (),
+                                        }
+                                    }
+
+                                    match result_receiver.as_mut().poll(cx) {
+                                        Poll::Ready(Ok(result)) => {
+                                            let w_in_flight = this.socket.in_flight.write().boxed();
+
+                                            in_flight.set(TQInFlight::RemoveInFlight { w_in_flight, response: Some(Ok(result)) });
+
+                                            // TODO
+                                            continue;
+                                        },
+                                        Poll::Ready(Err(RecvError::Closed)) => {
+                                            let w_in_flight = this.socket.in_flight.write().boxed();
+
+                                            in_flight.set(TQInFlight::RemoveInFlight { w_in_flight, response: Some(Err(io::Error::from(io::ErrorKind::Other))) });
+
+                                            // TODO
+                                            continue;
+                                        },
+                                        Poll::Ready(Err(RecvError::Lagged(_skipped_messages))) => {
+                                            // TODO
+                                            continue;
+                                        },
+                                        Poll::Pending => (),
+                                    }
+
+                                    // TODO
+                                    return Poll::Pending;
+                                },
+                                TQInFlightProj::RemoveInFlight { w_in_flight, response } => {
+                                    match w_in_flight.as_mut().poll(cx) {
+                                        Poll::Ready(mut w_in_flight) => {
+                                            w_in_flight.remove(&this.query.id);
+                                            drop(w_in_flight);
+                                            let response = response.take();
+
+                                            this.inner.set(InnerTQ::Complete);
+
+                                            // TODO
+                                            match response {
+                                                Some(response) => return Poll::Ready(response),
+                                                None => panic!("Inconsistent state reached. response is only supposed to be None so the value can be taken out of it"),
+                                            }
+                                        },
+                                        Poll::Pending => {
+                                            // TODO
+                                            return Poll::Pending;
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+                InnerTQProj::Complete => panic!("TcpQuery was polled after completion"),
+            }
+        }
+    }
+}
+
+#[pinned_drop]
+impl<'a, 'b, 'c, 'd, 'e, 'h, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 's, 't, 'u, 'v> PinnedDrop for TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 's, 't, 'u, 'v> {
+    fn drop(self: Pin<&mut Self>) {
+        match &self.inner {
+            InnerTQ::Fresh => (),
+          | InnerTQ::TQSocket(TQSocket::GetTcpState(_))
+          | InnerTQ::TQSocket(TQSocket::GetTcpEstablishing { receive_tcp_socket: _ })
+          | InnerTQ::TQSocket(TQSocket::InitTcp { join_handle: _ })
+          | InnerTQ::TQSocket(TQSocket::Acquired { tcp_socket: _, kill_tcp: _, in_flight: TQInFlight::WriteInFlight(_) }) => {
+                // Nothing to do.
+            },
+            InnerTQ::TQSocket(TQSocket::Acquired { tcp_socket: _, kill_tcp: _, in_flight: TQInFlight::InFlight { result_receiver: _, send_query: _ } })
+          | InnerTQ::TQSocket(TQSocket::Acquired { tcp_socket: _, kill_tcp: _, in_flight: TQInFlight::RemoveInFlight { w_in_flight: _, response: _ } }) => {
+                let tcp_socket = self.socket.clone();
+                let query_id = self.query.id;
+                tokio::spawn(async move {
+                    let mut w_in_flight = tcp_socket.in_flight.write().await;
+                    w_in_flight.remove(&query_id);
+                    drop(w_in_flight);
+                });
+            },
+            InnerTQ::Complete => (),
+        }
+    }
+}
+
+// Implement TCP functions on MixedSocket
+impl MixedSocket {
+    #[inline]
+    async fn init_tcp(self: Arc<Self>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)> {
+        InitTcp::new(&self, None).await
     }
 
     #[inline]
@@ -443,7 +1253,7 @@ impl MixedSocket {
                     let socket = socket.clone();
                     *w_state = TcpState::None;
                     drop(w_state);
-    
+
                     kill_tcp.awake();
 
                     let w_tcp_socket = socket.lock().await;
@@ -461,147 +1271,6 @@ impl MixedSocket {
             TcpState::None => drop(w_state),               //< Not our socket to clean up
             TcpState::Blocked => drop(w_state),            //< Not our socket to clean up
         }
-    }
-
-    #[inline]
-    async fn manage_tcp_query(self: Arc<Self>, cancel_query: Arc<AwakeToken>, kill_tcp: Arc<AwakeToken>, in_flight_sender: broadcast::Sender<Message>, query: Message) {
-        let mut in_flight_receiver = in_flight_sender.subscribe();
-        drop(in_flight_sender);
-
-        // Once TCP is used, no more retransmissions will be done via this
-        // manager. Its last job is to clean up after the message is received.
-        select! {
-            biased;
-            response = in_flight_receiver.recv() => {
-                match response {
-                    Ok(_) => println!("TCP Cleanup: Response received with ID {}", query.id),
-                    Err(broadcast::error::RecvError::Closed) => println!("TCP Cleanup: Channel closed for query with ID {}", query.id),
-                    Err(broadcast::error::RecvError::Lagged(skipped_messages)) => println!("TCP Cleanup: Channel lagged for query with ID {}, skipping {skipped_messages} messages", query.id),
-                }
-            },
-            () = kill_tcp.awoken() => println!("TCP Cleanup: TCP canceled while waiting to receive message with ID {}", query.id),
-            () = cancel_query.awoken() => println!("TCP Cleanup: Query canceled while waiting to receive message with ID {}", query.id),
-            () = time::sleep(self.tcp_timeout) => println!("TCP Timeout: TCP query with ID {} took too long to respond", query.id),
-        }
-        self.cleanup_query(query.id).await;
-        return;
-    }
-
-    #[inline]
-    async fn query_tcp<'a>(self: Arc<Self>, query: Message, cancel: Arc<AwakeToken>) -> io::Result<broadcast::Receiver<Message>> {
-        let r_tcp_state = self.tcp.read().await;
-        match &*r_tcp_state {
-            TcpState::Managed { socket, kill: kill_tcp } => {
-                let tcp_socket = socket.clone();
-                let kill_tcp = kill_tcp.clone();
-                drop(r_tcp_state);
-
-                return self.query_tcp_socket(tcp_socket, cancel, kill_tcp, query).await;
-            },
-            TcpState::Establishing { sender, kill: _ } => {
-                let mut tcp_socket_receiver = sender.subscribe();
-                drop(r_tcp_state);
-
-                match tcp_socket_receiver.recv().await {
-                    Ok((tcp_socket, tcp_kill)) => {
-                        if cancel.try_awoken() {
-                            return Err(io::Error::from(ErrorKind::Interrupted));
-                        }
-                        return self.query_tcp_socket(tcp_socket, cancel, tcp_kill, query).await
-                    },
-                    Err(RecvError::Closed) => return Err(io::Error::from(ErrorKind::Interrupted)),
-                    Err(RecvError::Lagged(num_sockets)) => println!("TCP Query: Channel lagged skipping {num_sockets} sockets. Will try again"),
-                };
-
-                // Will only try 1 extra time if the receiver lags.
-                // 
-                // This really should not happen since a socket should only
-                // ever be sent once so we will only retry once.
-                match tcp_socket_receiver.recv().await {
-                    Ok((tcp_socket, tcp_kill)) => {
-                        if cancel.try_awoken() {
-                            return Err(io::Error::from(ErrorKind::Interrupted));
-                        }
-                        return self.query_tcp_socket(tcp_socket, cancel, tcp_kill, query).await
-                    },
-                    Err(RecvError::Closed) => return Err(io::Error::from(ErrorKind::Interrupted)),
-                    Err(RecvError::Lagged(num_sockets)) => {
-                        println!("TCP Query: Channel lagged skipping {num_sockets} sockets. Will not try again");
-                        return Err(io::Error::from(ErrorKind::Interrupted));
-                    },
-                };
-            },
-            TcpState::None => {
-                drop(r_tcp_state);
-
-                let (tcp_socket, tcp_kill) = self.clone().init_tcp().await?;
-                return self.query_tcp_socket(tcp_socket, cancel, tcp_kill, query).await;
-            },
-            TcpState::Blocked => {
-                drop(r_tcp_state);
-
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
-            },
-        }
-    }
-
-    #[inline]
-    async fn query_tcp_socket(self: Arc<Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, cancel_query: Arc<AwakeToken>, tcp_kill: Arc<AwakeToken>, mut query: Message) -> io::Result<broadcast::Receiver<Message>> {
-        // Step 1: Register the query as an in-flight message.
-        let (sender, receiver) = broadcast::channel(1);
-
-        // This is the initial query ID. However, it could change if it is already in use.
-        query.id = rand::random();
-
-        let mut w_in_flight = self.in_flight.write().await;
-        // verify that ID is unique.
-        while w_in_flight.contains_key(&query.id) {
-            query.id = rand::random();
-            // FIXME: should this fail after some number of non-unique keys? May want to verify that the list isn't full.
-        }
-        w_in_flight.insert(query.id, InFlight{ send_response: sender.clone() });
-        drop(w_in_flight);
-
-        // IMPORTANT: Between inserting the query ID (above) and starting the
-        //            management process (later), if there is a return, it is
-        //            responsible for cleaning up the entry in `in_flight`
-
-        // Step 2: Serialize Data
-        let raw_message = &mut [0_u8; MAX_MESSAGE_SIZE];
-        let mut raw_message = WriteWire::from_bytes(raw_message);
-        if let Err(wire_error) = query.to_wire_format_with_two_octet_length(&mut raw_message, &mut Some(CompressionMap::new())) {
-            drop(sender);
-            self.cleanup_query(query.id).await;
-            return Err(io::Error::new(io::ErrorKind::InvalidData, wire_error));
-        };
-        let wire_length = raw_message.current_len();
-
-        // Step 3: Bounds check against the configurations.
-        //  TODO: No configuration options have been defined yet.
-
-        // Now that the message is registered, set up a task to ensure the
-        // message is retransmitted as needed and cleaned up once done.
-        let query_id = query.id;
-        task::spawn(self.clone().manage_tcp_query(tcp_kill, cancel_query, sender, query.clone()));
-
-        // Step 4: Send the message via TCP.
-        self.recent_messages_sent.store(true, Ordering::Release);
-        let mut w_tcp_stream = tcp_socket.lock().await;
-        println!("Sending on TCP socket {} :: {:?}", self.upstream_socket, query);
-        let bytes_written = w_tcp_stream.write(raw_message.current()).await?;
-        drop(w_tcp_stream);
-        // Verify that the correct number of bytes were written.
-        if bytes_written != wire_length {
-            // Although cleanup is not required at this point, it should cause
-            // all receivers to receive an error sooner.
-            self.cleanup_query(query_id).await;
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Incorrect number of bytes sent to TCP stream; expected {wire_length} bytes but sent {bytes_written} bytes"),
-            ));
-        }
-
-        return Ok(receiver);
     }
 
     #[inline]
@@ -1271,11 +1940,11 @@ impl MixedSocket {
             },
             // Too many UDP timeouts.
             (QueryOptions::Both, 5..) => {
-                task::spawn(self.query_tcp(query, cancel_token.clone()))
+                todo!()
             },
             // Only TCP is allowed
             (QueryOptions::TcpOnly, _) => {
-                task::spawn(self.query_tcp(query, cancel_token.clone()))
+                todo!()
             },
         };
 
