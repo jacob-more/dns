@@ -73,6 +73,13 @@ where
 }
 
 
+#[derive(Debug)]
+enum CleanupReason {
+    Timeout,
+    Killed,
+    ConnectionError(io::Error),
+}
+
 enum TcpState {
     Managed {
         socket: Arc<Mutex<OwnedWriteHalf>>,
@@ -87,9 +94,9 @@ enum TcpState {
 }
 
 #[pin_project(PinnedDrop)]
-struct InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm>
+struct InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm>
 where
-    'a: 'c + 'f + 'h + 'j + 'l
+    'a: 'c + 'f + 'l
 {
     socket: &'a Arc<MixedSocket>,
     kill_tcp_token: Arc<AwakeToken>,
@@ -98,26 +105,22 @@ where
     tcp_socket_sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>,
     #[pin]
     timeout: Sleep,
-    inner: InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm>,
+    inner: InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm>,
 }
 
-enum InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm>
+enum InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm>
 where
     'c: 'b,
     'f: 'e,
-    'h: 'g,
-    'j: 'i,
     'l: 'k,
 {
     Fresh,
     WriteEstablishing(BoxFuture<'b, RwLockWriteGuard<'c, TcpState>>),
     Connecting(BoxFuture<'d, io::Result<TcpStream>>),
-    ConnectionErrorWriteNone {
-        error: io::Error,
+    WriteNone {
+        reason: CleanupReason,
         w_tcp_state: BoxFuture<'e, RwLockWriteGuard<'f, TcpState>>,
     },
-    TimeoutWriteNone(BoxFuture<'g, RwLockWriteGuard<'h, TcpState>>),
-    KilledWriteNone(BoxFuture<'i, RwLockWriteGuard<'j, TcpState>>),
     WriteManaged {
         w_tcp_state: BoxFuture<'k, RwLockWriteGuard<'l, TcpState>>,
         tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
@@ -128,7 +131,7 @@ where
     Complete,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> {
     pub fn new(socket: &'a Arc<MixedSocket>, timeout: Option<Duration>) -> Self {
         let kill_tcp_token = Arc::new(AwakeToken::new());
         let (tcp_socket_sender, _) = broadcast::channel(1);
@@ -145,7 +148,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> InitTcp<'a, 'b, 'c, 'd,
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> {
     type Output = io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -171,13 +174,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 
                 if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
                     let w_tcp_state = this.socket.tcp.write().boxed();
 
-                    *this.inner = InnerInitTcp::TimeoutWriteNone(w_tcp_state);
+                    *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::Timeout, w_tcp_state };
 
                     // First loop: poll the write lock.
                 } else if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                     let w_tcp_state = this.socket.tcp.write().boxed();
 
-                    *this.inner = InnerInitTcp::KilledWriteNone(w_tcp_state);
+                    *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::Killed, w_tcp_state };
 
                     // First loop: poll the write lock.
                 }
@@ -192,9 +195,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 
                     return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
                 }
             },
-            InnerInitTcp::ConnectionErrorWriteNone { error: _, w_tcp_state: _ }
-          | InnerInitTcp::TimeoutWriteNone(_)
-          | InnerInitTcp::KilledWriteNone(_)
+            InnerInitTcp::WriteNone { reason: _, w_tcp_state: _ }
           | InnerInitTcp::WriteManaged { w_tcp_state: _, tcp_socket: _ }
           | InnerInitTcp::Complete => {
                 // Not allowed to timeout or be killed. These are cleanup
@@ -290,7 +291,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 
                         Poll::Ready(Err(error)) => {
                             let w_tcp_state = this.socket.tcp.write().boxed();
 
-                            *this.inner = InnerInitTcp::ConnectionErrorWriteNone { error, w_tcp_state };
+                            *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::ConnectionError(error), w_tcp_state };
 
                             // Next loop: poll the write lock.
                             continue;
@@ -303,7 +304,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 
                         },
                     }
                 },
-                InnerInitTcp::ConnectionErrorWriteNone { error, w_tcp_state } => {
+                InnerInitTcp::WriteNone { reason: CleanupReason::ConnectionError(error), w_tcp_state } => {
                     match w_tcp_state.as_mut().poll(cx) {
                         Poll::Ready(mut w_tcp_state) => {
                             match &*w_tcp_state {
@@ -367,7 +368,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 
                         },
                     }
                 },
-                InnerInitTcp::TimeoutWriteNone(w_tcp_state) => {
+                InnerInitTcp::WriteNone { reason: CleanupReason::Timeout, w_tcp_state } => {
                     match w_tcp_state.as_mut().poll(cx) {
                         Poll::Ready(mut w_tcp_state) => {
                             match &*w_tcp_state {
@@ -413,7 +414,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 
                         },
                     }
                 },
-                InnerInitTcp::KilledWriteNone(w_tcp_state) => {
+                InnerInitTcp::WriteNone { reason: CleanupReason::Killed, w_tcp_state } => {
                     match w_tcp_state.as_mut().poll(cx) {
                         Poll::Ready(mut w_tcp_state) => {
                             match &*w_tcp_state {
@@ -568,7 +569,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> Future for InitTcp<'a, 
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> {
     fn drop(self: Pin<&mut Self>) {
         match &self.inner {
             InnerInitTcp::Fresh
@@ -578,9 +579,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, 'k, 'l, 'm> PinnedDrop for InitTcp<
                 // Nothing to do.
             },
             InnerInitTcp::Connecting(_)
-          | InnerInitTcp::ConnectionErrorWriteNone { error: _, w_tcp_state: _ }
-          | InnerInitTcp::TimeoutWriteNone(_)
-          | InnerInitTcp::KilledWriteNone(_) => {
+          | InnerInitTcp::WriteNone { reason: _, w_tcp_state: _ } => {
                 let tcp_socket = self.socket.clone();
                 let kill_tcp_token = self.kill_tcp_token.clone();
                 tokio::spawn(async move {
