@@ -4,7 +4,7 @@
 <registry xmlns="http://www.iana.org/assignments" id="service-names-port-numbers">
   <title>Service Name and Transport Protocol Port Number Registry</title>
   <category>Service Names and Transport Protocol Port Numbers</category>
-  <updated>2024-09-12</updated>
+  <updated>2024-10-15</updated>
   <xref type="rfc" data="rfc6335"/>
   <expert>TCP/UDP: Joe Touch; Eliot Lear, Kumiko Ono, Wes Eddy, Brian Trammell, 
 Jana Iyengar, and Michael Scharf
@@ -74544,19 +74544,25 @@ common service discovery mechanisms.</note>
     <description>Unassigned</description>
     <number>7729-7733</number>
   </record>
-  <record date="2007-04">
+  <record date="2007-04" updated="2024-10-08">
     <name>smip</name>
     <protocol>tcp</protocol>
-    <xref type="person" data="Jim_Pettinato"/>
+    <assignee>
+      <xref type="person" data="Guidant_Measurement"/>
+    </assignee>
     <description>Smith Protocol over IP</description>
     <number>7734</number>
+    <xref type="person" data="Jim_Pettinato"/>
   </record>
-  <record date="2007-04">
+  <record date="2007-04" updated="2024-10-08">
     <name>smip</name>
     <protocol>udp</protocol>
-    <xref type="person" data="Jim_Pettinato"/>
+    <assignee>
+      <xref type="person" data="Guidant_Measurement"/>
+    </assignee>
     <description>Smith Protocol over IP</description>
     <number>7734</number>
+    <xref type="person" data="Jim_Pettinato"/>
   </record>
   <record>
     <description>Unassigned</description>
@@ -88703,7 +88709,22 @@ common service discovery mechanisms.</note>
   </record>
   <record>
     <description>Unassigned</description>
-    <number>27011-27016</number>
+    <number>27011-27015</number>
+  </record>
+  <record date="2024-09-23">
+    <name>chlenix</name>
+    <protocol>tcp</protocol>
+    <assignee>
+      <xref type="person" data="Vlad_Bondarenko"/>
+    </assignee>
+    <description>Cloud hosting environment network</description>
+    <number>27016</number>
+    <xref type="person" data="Vlad_Bondarenko"/>
+  </record>
+  <record>
+    <protocol>udp</protocol>
+    <description>Reserved</description>
+    <number>27016</number>
   </record>
   <record date="2019-02-21">
     <name>mongodb</name>
@@ -93830,6 +93851,19 @@ common service discovery mechanisms.</note>
     <note>Defined TXT keys: None</note>
     <xref type="person" data="IETF_Chair"/>
   </record>
+  <record date="2024-09-23">
+    <name>brski-reg-cmp</name>
+    <protocol>tcp</protocol>
+    <assignee>
+      <xref type="person" data="IESG"/>
+    </assignee>
+    <description>Bootstrapping Remote Secure Key Infrastructure registrar with CMP
+      capabilities according to the Lightweight CMP Profile (LCMPP,
+      <xref type="rfc" data="rfc9483"/>)</description>
+	<xref type="draft" data="RFC-ietf-anima-brski-ae-13"/>
+    <note>Defined TXT keys: None</note>
+    <xref type="person" data="IETF_Chair"/>
+  </record>
   <record date="2020-04-29">
     <name>brski-registrar</name>
     <protocol>tcp</protocol>
@@ -97353,6 +97387,16 @@ There is no possibility of name conflict because (by definition) GUIDs are globa
     <description>oprofile server protocol</description>
     <note>Defined TXT keys: None</note>
     <xref type="person" data="Rob_Bradford"/>
+  </record>
+  <record>
+    <name>oro</name>
+    <protocol>tcp</protocol>
+    <assignee>
+        <xref type="person" data="ORO"/>
+      </assignee>
+    <description>ORO Core server REST configuration and control API</description>
+    <note>Defined TXT keys: serial, pid, model, vers, subt, dspn, cfgs, gui</note>
+    <xref type="person" data="Oz_Andrews_2"/>
   </record>
   <record>
     <name>oscit</name>
@@ -109260,6 +109304,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <uri>mailto:guhans&amp;microsoft.com</uri>
       <updated>2006-03</updated>
     </person>
+    <person id="Guidant_Measurement">
+      <org>Guidant Measurement</org>
+      <uri>mailto:james.pettinato&amp;guidantmeasurement.com</uri>
+      <updated>2024-10-08</updated>
+    </person>
     <person id="Guidewire_Software_Inc">
       <org>Guidewire Software, Inc</org>
       <uri>mailto:info&amp;guidewire.com</uri>
@@ -111638,8 +111687,8 @@ implementations.  See RFC 3692 for details.</footnote>
     </person>
     <person id="Jim_Pettinato">
       <name>Jim Pettinato</name>
-      <uri>mailto:jim_pettinato&amp;fmcti.com</uri>
-      <updated>2007-04</updated>
+      <uri>mailto:james.pettinato&amp;guidantmeasurement.com</uri>
+      <updated>2024-10-08</updated>
     </person>
     <person id="Jim_Philippou">
       <name>Jim Philippou</name>
@@ -116014,10 +116063,6 @@ implementations.  See RFC 3692 for details.</footnote>
       <name>Michael Mester</name>
       <uri>mailto:mmester&amp;cymtec.com</uri>
     </person>
-    <person id="Michael_Monasterio">
-      <name>Michael Monasterio</name>
-      <uri>mailto:michael&amp;wmsoftware.com</uri>
-    </person>
     <person id="Michael_Muth">
       <name>Michael Muth</name>
       <uri>mailto:m.muth&amp;tec5.com</uri>
@@ -117816,11 +117861,21 @@ implementations.  See RFC 3692 for details.</footnote>
       <uri>mailto:paul&amp;octopusdeploy.com</uri>
       <updated>2015-01-28</updated>
     </person>
+    <person id="ORO">
+        <org>ORO</org>
+        <uri>mailto:support&amp;oro.cc</uri>
+        <updated>2024-10-08</updated>
+    </person>
     <person id="Oz_Andrews">
       <name>Oz Andrews</name>
       <org>Tyba Design Limited</org>
       <uri>mailto:oz&amp;tyba.co.uk</uri>
       <updated>2018-08-24</updated>
+    </person>
+    <person id="Oz_Andrews_2">
+        <name>Oz Andrews</name>
+        <uri>mailto:oz&amp;ideaworks.co.uk</uri>
+        <updated>2024-10-08</updated>
     </person>
     <person id="Ozz_Nixon">
       <name>Ozz Nixon</name>
@@ -121934,6 +121989,8 @@ implementations.  See RFC 3692 for details.</footnote>
     </person>
     <person id="Simon_Edwards">
       <name>Simon Edwards</name>
+      <uri>mailto:sedwards&amp;rocketsoftware.com</uri>
+      <updated>2024-10-11</updated>
     </person>
     <person id="Simon_Ensslen">
       <name>Simon Ensslen</name>
@@ -124966,10 +125023,10 @@ implementations.  See RFC 3692 for details.</footnote>
       <name>Vitaly Revsin</name>
       <uri>mailto:vitaly&amp;netapp.com</uri>
     </person>
-    <person id="Volodymyr_Bykov">
-      <name>Volodymyr_Bykov</name>
-      <uri>mailto:vbickov&amp;gmail.com</uri>
-      <updated>2016-11-23</updated>
+    <person id="Vlad_Bondarenko">
+      <name>Vlad Bondarenko</name>
+      <uri>mailto:bondarenko.vlad.univ&amp;gmail.com</uri>
+      <updated>2024-09-23</updated>
     </person>
     <person id="Vladimir_Legalov">
       <name>Vladimir Legalov</name>
@@ -125004,6 +125061,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <name>Volker Wiegand</name>
       <uri>mailto:volker&amp;railduino.de</uri>
       <updated>2018-01-08</updated>
+    </person>
+    <person id="Volodymyr_Bykov">
+      <name>Volodymyr_Bykov</name>
+      <uri>mailto:vbickov&amp;gmail.com</uri>
+      <updated>2016-11-23</updated>
     </person>
     <person id="Volodymyr_Pavliuk">
       <name>Volodymyr Pavliuk</name>

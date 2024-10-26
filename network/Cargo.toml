@@ -19,7 +19,7 @@ quinn = "0.11"
 rand = "0.8"
 socket2 = "0.5"
 tinyvec = { version = "1.8", features = ["alloc"] }
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.41", features = ["full"] }
 
 [dev-dependencies]
 ux = "0.1"
