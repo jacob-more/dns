@@ -11,8 +11,15 @@ dns-lib = { path = "../dns-lib" }
 
 async-recursion = "1.1"
 async-trait = "0.1"
+futures = "0.3"
 lazy_static = "1.5"
+log = { version = "0.4", features = ["std", "kv"] }
+pin-project = "1.1"
 quinn = "0.11"
 rand = "0.8"
 socket2 = "0.5"
 tokio = { version = "1.40", features = ["full"] }
+
+[dev-dependencies]
+tinyvec = { version = "1.8", features = ["alloc"] }
+ux = "0.1"

@@ -1,6 +1,5 @@
 use std::{borrow::BorrowMut, future::Future, io, net::IpAddr, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
-use async_lib::awake_token::AwakeToken;
 use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
@@ -11,7 +10,7 @@ use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
 use super::{network_query::query_network, recursive_query::{query_cache, QueryResponse}};
 
 
-async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, address_rtype: RType, context: Arc<Context>, kill_token: Option<Arc<AwakeToken>>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
+async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, address_rtype: RType, context: Arc<Context>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
     let ns_question = context.query().with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
 
     fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
@@ -34,7 +33,6 @@ async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, ad
         ns_address_rtype: address_rtype,
         context,
 
-        kill_token,
         client,
         joined_cache,
 
@@ -70,7 +68,6 @@ struct NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
     ns_address_rtype: RType,
     context: Arc<Context>,
 
-    kill_token: Option<Arc<AwakeToken>>,
     client: Arc<DNSAsyncClient>,
     joined_cache: Arc<CCache>,
 
@@ -85,8 +82,8 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
             recursive_query(client, joined_cache, context).await
         }
 
-        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, name_server_address: IpAddr, kill_token: Option<Arc<AwakeToken>>) -> io::Result<Message> where CCache: AsyncCache + Send + Sync {
-            query_network(&client, joined_cache, context.query(), &name_server_address, kill_token).await
+        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, name_server_address: IpAddr) -> io::Result<Message> where CCache: AsyncCache + Send + Sync {
+            query_network(&client, joined_cache, context.query(), &name_server_address).await
         }
 
         fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
@@ -134,8 +131,7 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
                                     let client = this.client.clone();
                                     let cache = this.joined_cache.clone();
                                     let context = this.context.clone();
-                                    let kill_token = self.kill_token.clone();
-                                    let query = query_network_owned_args(client, cache, context, first_ns_address, kill_token).boxed();
+                                    let query = query_network_owned_args(client, cache, context, first_ns_address).boxed();
                                     self.state = NSQueryState::QueryingNetwork { query: Some(query), remaining_ns_addresses: ns_addresses };
                                     // Next loop will poll the query for the question.
                                     continue;
@@ -180,9 +176,8 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
                             let client = this.client.clone();
                             let cache = this.joined_cache.clone();
                             let context = this.context.clone();
-                            let kill_token = this.kill_token.clone();
                             let remaining_ns_addresses = ns_addresses.drain(..).collect();
-                            let query = query_network_owned_args(client, cache, context, first_ns_address, kill_token).boxed();
+                            let query = query_network_owned_args(client, cache, context, first_ns_address).boxed();
                             self.state = NSQueryState::QueryingNetwork { query: Some(query), remaining_ns_addresses };
                             // Next loop will poll the query for the question.
                             continue;
@@ -234,8 +229,7 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
                                     let client = this.client.clone();
                                     let cache = this.joined_cache.clone();
                                     let context = this.context.clone();
-                                    let kill_token = this.kill_token.clone();
-                                    let query = query_network_owned_args(client, cache, context, next_ns_address, kill_token).boxed();
+                                    let query = query_network_owned_args(client, cache, context, next_ns_address).boxed();
                                     *optional_query = Some(query);
                                     // Next loop will poll the query for the question.
                                     continue;
@@ -467,13 +461,11 @@ where
         name_servers: &'a [CDomainName],
     },
     GetCachedNSAddresses {
-        kill_token: Arc<AwakeToken>,
         name_server_address_queries: Vec<BoxFuture<'b, NSQuery<'c, 'd, CCache>>>,
         name_server_non_cached_queries: Vec<Pin<Box<NSQuery<'c, 'd, CCache>>>>,
         name_server_cached_queries: Vec<Pin<Box<NSQuery<'c, 'd, CCache>>>>,
     },
     QueryNameServers {
-        kill_token: Arc<AwakeToken>,
         ns_query_select: Pin<Box<NSSelectQuery<NSQuery<'c, 'd, CCache>>>>,
     },
     Complete,
@@ -493,17 +485,15 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
             let this = self.as_mut().project();
             match this.inner.borrow_mut() {
                 InnerNSRoundRobin::Fresh { name_servers } => {
-                    let kill_token = Arc::new(AwakeToken::new());
-
                     let name_server_address_queries = name_servers.iter()
                         .flat_map(|ns_domain| [
-                            query_cache_for_ns_addresses(ns_domain.clone(), RType::A, this.context.clone(), Some(kill_token.clone()), this.client.clone(), this.joined_cache.clone()).boxed(),
-                            query_cache_for_ns_addresses(ns_domain.clone(), RType::AAAA, this.context.clone(), Some(kill_token.clone()), this.client.clone(), this.joined_cache.clone()).boxed(),
+                            query_cache_for_ns_addresses(ns_domain.clone(), RType::A, this.context.clone(), this.client.clone(), this.joined_cache.clone()).boxed(),
+                            query_cache_for_ns_addresses(ns_domain.clone(), RType::AAAA, this.context.clone(), this.client.clone(), this.joined_cache.clone()).boxed(),
                         ])
                         .collect::<Vec<_>>();
                     let capacity = name_server_address_queries.len();
 
-                    *this.inner = InnerNSRoundRobin::GetCachedNSAddresses { kill_token, name_server_address_queries, name_server_cached_queries: Vec::with_capacity(capacity), name_server_non_cached_queries: Vec::with_capacity(capacity) };
+                    *this.inner = InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries, name_server_cached_queries: Vec::with_capacity(capacity), name_server_non_cached_queries: Vec::with_capacity(capacity) };
 
                     let context = self.context.as_ref();
                     trace!(context:?; "NSRoundRobin::Fresh -> NSRoundRobin::GetCachedNSAddresses: Getting cached ns addresses");
@@ -511,10 +501,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
                     // Next loop will poll all the NS address queries
                     continue;
                 },
-                InnerNSRoundRobin::GetCachedNSAddresses { kill_token, name_server_address_queries, name_server_non_cached_queries, name_server_cached_queries } => {
+                InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries, name_server_non_cached_queries, name_server_cached_queries } => {
                     name_server_address_queries.retain_mut(|ns_address_query| {
                         match ns_address_query.as_mut().poll(cx) {
-                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, context: _, kill_token: _, client: _, joined_cache: _, state: NSQueryState::CacheHit { ns_addresses: _ } }) => {
+                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, context: _, client: _, joined_cache: _, state: NSQueryState::CacheHit { ns_addresses: _ } }) => {
                                 name_server_cached_queries.push(Box::pin(ns_query));
                                 false
                             },
@@ -537,8 +527,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
                         ns_queries.extend(name_server_cached_queries.drain(..));
                         let ns_query_select = Box::pin(NSSelectQuery::new(ns_queries, 3, Duration::from_millis(200)));
 
-                        let kill_token = kill_token.clone();
-                        *this.inner = InnerNSRoundRobin::QueryNameServers { kill_token, ns_query_select };
+                        *this.inner = InnerNSRoundRobin::QueryNameServers { ns_query_select };
 
                         // Next loop will select the first query from the list and start it
                         continue;
@@ -550,7 +539,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
                         return Poll::Pending;
                     }
                 },
-                InnerNSRoundRobin::QueryNameServers { kill_token, ns_query_select } => {
+                InnerNSRoundRobin::QueryNameServers { ns_query_select } => {
                     match ns_query_select.as_mut().poll(cx) {
                         // No error. Valid response.
                         Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))))
@@ -558,8 +547,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
                         // TODO: verify that this is a valid assumption. Should we return NotImpl?
                       | Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })))) => {
                             let result = query_response(response);
-
-                            kill_token.awake();
 
                             let context = this.context.as_ref();
                             trace!(context:?; "NSRoundRobin::QueryNameServers -> NSRoundRobin::Complete: Received result {result:?}");
@@ -572,8 +559,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
                         // Only authoritative servers can indicate that a name does not exist.
                         Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })))) => {
                             let result = QueryResponse::Error(RCode::NXDomain);
-
-                            kill_token.awake();
 
                             let context = this.context.as_ref();
                             trace!(context:?; "NSRoundRobin::QueryNameServers -> NSRoundRobin::Cleanup: Received error NXDomain in message '{response:?}'");
@@ -615,8 +600,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
                       | Poll::Ready(response @ None) => {
                             let result = QueryResponse::Error(RCode::ServFail);
 
-                            kill_token.awake();
-
                             *this.inner = InnerNSRoundRobin::Complete;
 
                             let context = this.context.as_ref();
@@ -643,15 +626,11 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> PinnedDrop for NSRoundRobin<'a, 'b, 'c,
         let this = self.project();
         match this.inner {
             InnerNSRoundRobin::Fresh { name_servers: _ } => (),
-            InnerNSRoundRobin::GetCachedNSAddresses { kill_token, name_server_address_queries: _, name_server_non_cached_queries: _, name_server_cached_queries: _ } => {
-                kill_token.awake();
-
+            InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries: _, name_server_non_cached_queries: _, name_server_cached_queries: _ } => {
                 let context = this.context.as_ref();
                 trace!(context:?; "InnerNSRoundRobin::GetCachedNSAddresses -> NSRoundRobin::(drop): Cleaning up query {}", this.context.query());
             },
-            InnerNSRoundRobin::QueryNameServers { kill_token, ns_query_select: _ } => {
-                kill_token.awake();
-
+            InnerNSRoundRobin::QueryNameServers { ns_query_select: _ } => {
                 let context = this.context.as_ref();
                 trace!(context:?; "InnerNSRoundRobin::QueryNameServers -> NSRoundRobin::(drop): Cleaning up query {}", this.context.query());
             },
