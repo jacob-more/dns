@@ -6,7 +6,7 @@ use tokio::pin;
 
 
 fn append_no_contention_benchmark(c: &mut Criterion) {
-    let awake_token = Arc::new(AwakeToken::new());
+    let awake_token = AwakeToken::new();
 
     c.bench_function("Append No Contention", |b| 
         b.iter_with_large_drop(|| {
@@ -24,7 +24,7 @@ fn append_with_heavy_contention_benchmark(c: &mut Criterion) {
     let mut benchmark_group = c.benchmark_group("Append With Heavy Contention");
 
     for thread_count in 1_usize..64_usize {
-        let awake_token = Arc::new(AwakeToken::new());
+        let awake_token = AwakeToken::new();
 
         // Start a separate thread that just appends and removes from the list
         // until the benchmark is done running.
@@ -76,7 +76,7 @@ fn append_with_heavy_contention_multiadd_benchmark(c: &mut Criterion) {
     let mut benchmark_group = c.benchmark_group("Append With Heavy Contention Multi-Add");
 
     for thread_count in 1_usize..64_usize {
-        let awake_token = Arc::new(AwakeToken::new());
+        let awake_token = AwakeToken::new();
 
         // Start a separate thread that just appends and removes from the list
         // until the benchmark is done running.
@@ -138,7 +138,7 @@ fn append_with_light_contention_benchmark(c: &mut Criterion) {
     let mut benchmark_group = c.benchmark_group("Append With Light Contention");
 
     for thread_count in (1_usize..128_usize).into_iter().filter(|x| x % 2 == 1) {
-        let awake_token = Arc::new(AwakeToken::new());
+        let awake_token = AwakeToken::new();
 
         // Start a separate thread that just appends and removes from the list
         // until the benchmark is done running.
@@ -192,7 +192,7 @@ fn append_with_light_contention_multiadd_benchmark(c: &mut Criterion) {
     let mut benchmark_group = c.benchmark_group("Append With Light Contention Multi-Add");
 
     for thread_count in (1_usize..128_usize).into_iter().filter(|x| x % 2 == 1) {
-        let awake_token = Arc::new(AwakeToken::new());
+        let awake_token = AwakeToken::new();
 
         // Start a separate thread that just appends and removes from the list
         // until the benchmark is done running.

@@ -13,8 +13,8 @@ const LOCAL_V6_SOCKET: SocketAddr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::n
 
 
 enum QuicState {
-    Connected(Connection, Arc<AwakeToken>),
-    Establishing(broadcast::Sender<(Connection, Arc<AwakeToken>)>),
+    Connected(Connection, AwakeToken),
+    Establishing(broadcast::Sender<(Connection, AwakeToken)>),
     None,
     Blocked,
 }
@@ -169,7 +169,7 @@ impl QuicSocket {
     }
 
     #[inline]
-    async fn init_quic(self: Arc<Self>) -> io::Result<(Connection, Arc<AwakeToken>)> {
+    async fn init_quic(self: Arc<Self>) -> io::Result<(Connection, AwakeToken)> {
         // Initially, verify if the connection has already been established.
         let r_quic = self.quic_shared.read().await;
         match &r_quic.state {
@@ -300,7 +300,7 @@ impl QuicSocket {
             },
         };
 
-        let quic_kill = Arc::new(AwakeToken::new());
+        let quic_kill = AwakeToken::new();
         let mut w_quic = self.quic_shared.write().await;
         w_quic.state = QuicState::Connected(quic_connection.clone(), quic_kill.clone());
         drop(w_quic);
@@ -347,7 +347,7 @@ impl QuicSocket {
     }
 
     #[inline]
-    async fn query_quic(self: Arc<Self>, quic_connection: Connection, quic_kill: Arc<AwakeToken>, mut query: Message) -> io::Result<Message> {
+    async fn query_quic(self: Arc<Self>, quic_connection: Connection, quic_kill: AwakeToken, mut query: Message) -> io::Result<Message> {
         pin!(
             let quic_kill_awoken = quic_kill.awoken();
         );

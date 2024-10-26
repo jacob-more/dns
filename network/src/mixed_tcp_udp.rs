@@ -306,11 +306,11 @@ where
     Fresh,
     GetTcpState(BoxFuture<'c, RwLockReadGuard<'d, TcpState>>),
     GetTcpEstablishing {
-        receive_tcp_socket: BoxFuture<'e, Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>), RecvError>>,
+        receive_tcp_socket: BoxFuture<'e, Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), RecvError>>,
     },
     InitTcp {
         #[pin]
-        join_handle: JoinHandle<io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>>,
+        join_handle: JoinHandle<io::Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>>,
     },
     Acquired {
         tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
@@ -331,7 +331,7 @@ where
         self.set(TQSocket::GetTcpState(r_tcp_state));
     }
 
-    fn set_get_tcp_establishing(mut self: std::pin::Pin<&mut Self>, receiver: broadcast::Receiver<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>) {
+    fn set_get_tcp_establishing(mut self: std::pin::Pin<&mut Self>, receiver: broadcast::Receiver<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>) {
         let receive_tcp_socket = async move {
             let mut receiver = receiver;
             receiver.recv().await
@@ -346,7 +346,7 @@ where
         self.set(TQSocket::InitTcp { join_handle: init_tcp });
     }
 
-    fn set_acquired(mut self: std::pin::Pin<&mut Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, kill_tcp_token: Arc<AwakeToken>) {
+    fn set_acquired(mut self: std::pin::Pin<&mut Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, kill_tcp_token: AwakeToken) {
         self.set(TQSocket::Acquired { tcp_socket, kill_tcp: kill_tcp_token.awoken() });
     }
 
@@ -485,8 +485,8 @@ where
 {
     Fresh,
     GetReadUdpState(BoxFuture<'c, RwLockReadGuard<'d, UdpState>>),
-    InitUdp(BoxFuture<'e, io::Result<(Arc<UdpSocket>, Arc<AwakeToken>)>>),
-    GetWriteUdpState(BoxFuture<'c, RwLockWriteGuard<'d, UdpState>>, Arc<UdpSocket>, Arc<AwakeToken>),
+    InitUdp(BoxFuture<'e, io::Result<(Arc<UdpSocket>, AwakeToken)>>),
+    GetWriteUdpState(BoxFuture<'c, RwLockWriteGuard<'d, UdpState>>, Arc<UdpSocket>, AwakeToken),
     Acquired {
         udp_socket: Arc<UdpSocket>,
         #[pin]
@@ -511,18 +511,18 @@ where
         let init_udp = async move {
             let udp_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
             udp_socket.connect(upstream_socket).await?;
-            return Ok((udp_socket, Arc::new(AwakeToken::new())));
+            return Ok((udp_socket, AwakeToken::new()));
         }.boxed();
 
         self.set(UQSocket::InitUdp(init_udp));
     }
-    fn set_get_write_udp_state(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>, udp_socket: Arc<UdpSocket>, kill_udp: Arc<AwakeToken>) {
+    fn set_get_write_udp_state(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>, udp_socket: Arc<UdpSocket>, kill_udp: AwakeToken) {
         let w_udp_state = socket.udp.write().boxed();
 
         self.set(UQSocket::GetWriteUdpState(w_udp_state, udp_socket, kill_udp));
     }
 
-    fn set_acquired(mut self: std::pin::Pin<&mut Self>, udp_socket: Arc<UdpSocket>, kill_udp_token: Arc<AwakeToken>) {
+    fn set_acquired(mut self: std::pin::Pin<&mut Self>, udp_socket: Arc<UdpSocket>, kill_udp_token: AwakeToken) {
         self.set(UQSocket::Acquired { udp_socket, kill_udp: kill_udp_token.awoken() });
     }
 
@@ -571,7 +571,7 @@ impl<'c, 'd, 'e> FutureSocket<'d> for UQSocket<'c, 'd, 'e> {
             UQSocketProj::InitUdp(init_udp) => {
                 match init_udp.as_mut().poll(cx) {
                     Poll::Ready(Ok((udp_socket, kill_udp_token))) => {
-                        let kill_udp = Arc::new(AwakeToken::new());
+                        let kill_udp = AwakeToken::new();
                         task::spawn(socket.clone().listen_udp(udp_socket.clone(), kill_udp.clone()));
                         self.as_mut().set_get_write_udp_state(socket, udp_socket.clone(), kill_udp_token.clone());
 
@@ -683,11 +683,11 @@ enum CleanupReason {
 enum TcpState {
     Managed {
         socket: Arc<Mutex<OwnedWriteHalf>>,
-        kill: Arc<AwakeToken>
+        kill: AwakeToken
     },
     Establishing {
-        sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>,
-        kill: Arc<AwakeToken>
+        sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
+        kill: AwakeToken
     },
     None,
     Blocked,
@@ -699,10 +699,10 @@ where
     'a: 'c + 'f + 'l
 {
     socket: &'a Arc<MixedSocket>,
-    kill_tcp_token: Arc<AwakeToken>,
+    kill_tcp_token: AwakeToken,
     #[pin]
     kill_tcp: AwokenToken,
-    tcp_socket_sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>,
+    tcp_socket_sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
     #[pin]
     timeout: Sleep,
     inner: InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm>,
@@ -726,14 +726,14 @@ where
         tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
     },
     GetEstablishing {
-        receive_tcp_socket: BoxFuture<'m, Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>), RecvError>>,
+        receive_tcp_socket: BoxFuture<'m, Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), RecvError>>,
     },
     Complete,
 }
 
 impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> {
     pub fn new(socket: &'a Arc<MixedSocket>, timeout: Option<Duration>) -> Self {
-        let kill_tcp_token = Arc::new(AwakeToken::new());
+        let kill_tcp_token = AwakeToken::new();
         let tcp_socket_sender = broadcast::Sender::new(1);
         let timeout = timeout.unwrap_or(Duration::from_millis(TCP_INIT_TIMEOUT_MS));
 
@@ -749,7 +749,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l,
 }
 
 impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> {
-    type Output = io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)>;
+    type Output = io::Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         let mut this = self.as_mut().project();
@@ -845,7 +845,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                 },
                                 TcpState::None => {
                                     let tcp_socket_sender = broadcast::Sender::new(1);
-                                    let kill_init_tcp = Arc::new(AwakeToken::new());
+                                    let kill_init_tcp = AwakeToken::new();
                                     let init_connection = TcpStream::connect(this.socket.upstream_socket).boxed();
 
                                     *tcp_state = TcpState::Establishing {
@@ -923,7 +923,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                 },
                                 TcpState::Establishing { sender, kill: active_kill_tcp_token } => {
                                     // If we are the one who set the state to Establishing...
-                                    if Arc::ptr_eq(this.kill_tcp_token, active_kill_tcp_token) {
+                                    if this.kill_tcp_token == active_kill_tcp_token {
                                         *w_tcp_state = TcpState::None;
                                         drop(w_tcp_state);
                                         let error = io::Error::from(error.kind());
@@ -987,7 +987,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                 },
                                 TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
                                     // If we are the one who set the state to Establishing...
-                                    if Arc::ptr_eq(this.kill_tcp_token, active_kill_tcp_token) {
+                                    if this.kill_tcp_token == active_kill_tcp_token {
                                         *w_tcp_state = TcpState::None;
                                     }
                                     drop(w_tcp_state);
@@ -1020,7 +1020,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                             match &*w_tcp_state {
                                 TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
                                     // If we are the one who set the state to Establishing...
-                                    if Arc::ptr_eq(this.kill_tcp_token, active_kill_tcp_token) {
+                                    if this.kill_tcp_token == active_kill_tcp_token {
                                         *w_tcp_state = TcpState::None;
                                     }
                                     drop(w_tcp_state);
@@ -1054,7 +1054,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                             match &*w_tcp_state {
                                 TcpState::Establishing { sender: active_sender, kill: active_kill_tcp_token } => {
                                     // If we are the one who set the state to Establishing...
-                                    if Arc::ptr_eq(this.kill_tcp_token, active_kill_tcp_token) {
+                                    if this.kill_tcp_token == active_kill_tcp_token {
                                         *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: this.kill_tcp_token.clone() };
                                         drop(w_tcp_state);
 
@@ -1187,7 +1187,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 
                     match &*w_tcp_state {
                         TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
                             // If we are the one who set the state to Establishing...
-                            if Arc::ptr_eq(&kill_tcp_token, active_kill_tcp_token) {
+                            if &kill_tcp_token == active_kill_tcp_token {
                                 *w_tcp_state = TcpState::None;
                             }
                             drop(w_tcp_state);
@@ -1215,7 +1215,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 
                     match &*w_tcp_state {
                         TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
                             // If we are the one who set the state to Establishing...
-                            if Arc::ptr_eq(&kill_tcp_token, active_kill_tcp_token) {
+                            if &kill_tcp_token == active_kill_tcp_token {
                                 *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: kill_tcp_token.clone() };
                                 drop(w_tcp_state);
 
@@ -1794,7 +1794,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'h, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v,
 // Implement TCP functions on MixedSocket
 impl MixedSocket {
     #[inline]
-    async fn init_tcp(self: Arc<Self>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, Arc<AwakeToken>)> {
+    async fn init_tcp(self: Arc<Self>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)> {
         InitTcp::new(&self, None).await
     }
 
@@ -1921,7 +1921,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn listen_tcp(self: Arc<Self>, mut tcp_reader: OwnedReadHalf, kill_tcp: Arc<AwakeToken>) {
+    async fn listen_tcp(self: Arc<Self>, mut tcp_reader: OwnedReadHalf, kill_tcp: AwakeToken) {
         pin!(let kill_tcp_awoken = kill_tcp.clone().awoken(););
         loop {
             select! {
@@ -1974,14 +1974,14 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn listen_tcp_cleanup(self: Arc<Self>, kill_tcp: Arc<AwakeToken>) {
+    async fn listen_tcp_cleanup(self: Arc<Self>, kill_tcp: AwakeToken) {
         println!("Cleaning up TCP socket {}", self.upstream_socket);
 
         let mut w_state = self.tcp.write().await;
         match &*w_state {
             TcpState::Managed { socket, kill: managed_kill_tcp } => {
                 // If the managed socket is the one that we are cleaning up...
-                if Arc::ptr_eq(&kill_tcp, managed_kill_tcp) {
+                if &kill_tcp == managed_kill_tcp {
                     // We are responsible for cleanup.
                     let socket = socket.clone();
                     *w_state = TcpState::None;
@@ -2008,7 +2008,7 @@ impl MixedSocket {
 }
 
 enum UdpState {
-    Managed(Arc<UdpSocket>, Arc<AwakeToken>),
+    Managed(Arc<UdpSocket>, AwakeToken),
     None,
     Blocked,
 }
@@ -2755,7 +2755,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v, 'w,
 // Implement UDP functions on MixedSocket
 impl MixedSocket {
     #[inline]
-    async fn init_udp(self: Arc<Self>) -> io::Result<(Arc<UdpSocket>, Arc<AwakeToken>)> {
+    async fn init_udp(self: Arc<Self>) -> io::Result<(Arc<UdpSocket>, AwakeToken)> {
         // Initially, verify if the connection has already been established.
         let r_state = self.udp.read().await;
         match &*r_state {
@@ -2772,7 +2772,7 @@ impl MixedSocket {
         udp_socket.connect(self.upstream_socket).await?;
         let udp_reader = udp_socket.clone();
         let udp_writer = udp_socket;
-        let kill_udp = Arc::new(AwakeToken::new());
+        let kill_udp = AwakeToken::new();
 
         // Since there is no intermediate state while the UDP socket is being
         // set up and the lock is dropped, it is possible that another process
@@ -2875,7 +2875,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    async fn listen_udp(self: Arc<Self>, udp_reader: Arc<UdpSocket>, kill_udp: Arc<AwakeToken>) {
+    async fn listen_udp(self: Arc<Self>, udp_reader: Arc<UdpSocket>, kill_udp: AwakeToken) {
         pin!(let kill_udp_awoken = kill_udp.awoken(););
         loop {
             select! {
