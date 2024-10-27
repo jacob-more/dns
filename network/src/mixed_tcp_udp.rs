@@ -1,12 +1,12 @@
-use std::{borrow::{Borrow, BorrowMut}, collections::HashMap, fmt::Display, future::Future, io::ErrorKind, net::SocketAddr, pin::Pin, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, task::Poll, time::Duration};
+use std::{collections::HashMap, fmt::Display, future::Future, io::ErrorKind, net::SocketAddr, pin::Pin, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, task::Poll, time::Duration};
 
-use async_lib::awake_token::{AwakeToken, AwokenToken};
+use async_lib::{awake_token::{AwakeToken, AwokenToken, SameAwakeToken}, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
 use dns_lib::{query::{message::Message, question::Question}, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
 use futures::{future::BoxFuture, FutureExt};
 use log::trace;
 use pin_project::{pin_project, pinned_drop};
 use tinyvec::TinyVec;
-use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{broadcast::{self, error::RecvError}, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
+use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
 
 const MAX_MESSAGE_SIZE: usize = 8192;
 const UDP_RETRANSMIT_MS: u64 = 125;
@@ -26,85 +26,15 @@ pub enum QueryOptions {
     Both,
 }
 
-struct InFlight { send_response: broadcast::Sender<Message> }
-
-
-enum PollReceive<T> {
-    Ok(T),
-    Closed,
-}
-
-#[pin_project(project = RecvProj)]
-enum Receive<T> {
-    Fresh(Option<broadcast::Receiver<T>>),
-    Active(Pin<Box<dyn Future<Output = PollReceive<T>> + Send>>),
-    Complete,
-}
-
-impl<T> Receive<T> {
-    pub fn new(receiver: broadcast::Receiver<T>) -> Self {
-        Self::Fresh(Some(receiver))
-    }
-}
-
-impl<T: Send + Clone + 'static> Future for Receive<T> {
-    type Output = PollReceive<T>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        loop {
-            match self.as_mut().project() {
-                RecvProj::Fresh(receiver) => {
-                    match receiver.take() {
-                        Some(mut receiver) => {
-                            self.set(Self::Active(async move {
-                                loop {
-                                    match receiver.recv().await {
-                                        Ok(result) => return PollReceive::Ok(result),
-                                        Err(broadcast::error::RecvError::Lagged(num_messages)) => {
-                                            trace!("Channel lagged. Skipping {num_messages} messages. Will poll again");
-                                            continue;
-                                        },
-                                        Err(broadcast::error::RecvError::Closed) => return PollReceive::Closed,
-                                    }
-                                }
-                            }.boxed()));
-
-                            // Next loop will poll the join handle.
-                            continue;
-                        },
-                        None => {
-                            panic!("The receiver should only be None briefly while the join handle is being set up. It should not be possible to poll it while it is None");
-                        },
-                    }
-                },
-                RecvProj::Active(receiver_result) => {
-                    match receiver_result.as_mut().poll(cx) {
-                        Poll::Ready(result) => {
-                            self.set(Self::Complete);
-
-                            return Poll::Ready(result);
-                        },
-                        Poll::Pending => {
-                            return Poll::Pending
-                        },
-                    }
-                },
-                RecvProj::Complete => {
-                    return Poll::Ready(PollReceive::Closed);
-                },
-            }
-        }
-    }
-}
-
+struct InFlight { send_response: once_watch::Sender<Message> }
 
 #[pin_project(project = QInitQueryProj)]
 enum QInitQuery<'w, 'x, T> where 'x: 'w {
     Fresh,
     ReadActiveQuery(BoxFuture<'w, RwLockReadGuard<'x, ActiveQueries>>),
     WriteActiveQuery(BoxFuture<'w, RwLockWriteGuard<'x, ActiveQueries>>),
-    Registered(#[pin] T, broadcast::Sender<Message>, #[pin] Receive<Message>),
-    Following(#[pin] Receive<Message>),
+    Registered(#[pin] T, #[pin] once_watch::Receiver<Message>),
+    Following(#[pin] once_watch::Receiver<Message>),
     RemoveActiveQuery {
         w_active_queries: BoxFuture<'w, RwLockWriteGuard<'x, ActiveQueries>>,
         response: Option<io::Result<Message>>,
@@ -125,12 +55,12 @@ impl<'a, 'w, 'x, T> QInitQuery<'w, 'x, T> where 'a: 'x {
         self.set(QInitQuery::WriteActiveQuery(w_active_queries));
     }
 
-    fn set_registered(mut self: std::pin::Pin<&mut Self>, registered: T, sender: broadcast::Sender<Message>, receiver: broadcast::Receiver<Message>) {
-        self.set(QInitQuery::Registered(registered, sender, Receive::new(receiver)));
+    fn set_registered(mut self: std::pin::Pin<&mut Self>, registered: T, receiver: once_watch::Receiver<Message>) {
+        self.set(QInitQuery::Registered(registered, receiver));
     }
 
-    fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: broadcast::Receiver<Message>) {
-        self.set(QInitQuery::Following(Receive::new(receiver)));
+    fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<Message>) {
+        self.set(QInitQuery::Following(receiver));
     }
 
     fn set_remove_active_query(mut self: std::pin::Pin<&mut Self>, response: io::Result<Message>, socket: &'a Arc<MixedSocket>) {
@@ -181,19 +111,19 @@ impl<'a, 'q, 'r, 't, 'u, 'v> QInFlight<'q, 'r, 't, 'u, 'v> where 'a: 'r + 'v {
     }
 }
 
-fn handle_poll_result_receiver<'a, 'q, 'r, 't, 'u, 'v>(result_receiver_polled: Poll<PollReceive<Message>>, in_flight: Pin<&mut QInFlight<'q, 'r, 't, 'u, 'v>>, socket: &'a Arc<MixedSocket>) -> LoopPoll
+fn handle_poll_result_receiver<'a, 'q, 'r, 't, 'u, 'v>(result_receiver_polled: Poll<Result<Message, once_watch::RecvError>>, in_flight: Pin<&mut QInFlight<'q, 'r, 't, 'u, 'v>>, socket: &'a Arc<MixedSocket>) -> LoopPoll
 where
     'a: 'r + 'v,
 {
     match result_receiver_polled {
-        Poll::Ready(PollReceive::Ok(response)) => {
+        Poll::Ready(Ok(response)) => {
             in_flight.set_remove_in_flight(socket, Ok(response));
 
             // Next loop will poll for the in-flight map lock to clean
             // up the query ID before returning the response.
             return LoopPoll::Continue;
         },
-        Poll::Ready(PollReceive::Closed) => {
+        Poll::Ready(Err(once_watch::RecvError::Closed)) => {
             in_flight.set_remove_in_flight(socket, Err(io::Error::from(io::ErrorKind::Interrupted)));
 
             // Next loop will poll for the in-flight map lock to clean
@@ -253,7 +183,7 @@ impl<'t> QSendQuery<'t> {
 
 #[pin_project(project = MixedQueryProj)]
 pub enum MixedQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
-    Tcp(#[pin] TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x>),
+    Tcp(#[pin] TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x>),
     Udp(#[pin] UdpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x>),
 }
 
@@ -299,14 +229,15 @@ enum TQClosedReason {
 }
 
 #[pin_project(project = TQSocketProj)]
-enum TQSocket<'c, 'd, 'e>
+enum TQSocket<'c, 'd>
 where
     'd: 'c,
 {
     Fresh,
     GetTcpState(BoxFuture<'c, RwLockReadGuard<'d, TcpState>>),
     GetTcpEstablishing {
-        receive_tcp_socket: BoxFuture<'e, Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), RecvError>>,
+        #[pin]
+        receive_tcp_socket: once_watch::Receiver<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
     },
     InitTcp {
         #[pin]
@@ -320,7 +251,7 @@ where
     Closed(TQClosedReason),
 }
 
-impl<'a, 'c, 'd, 'e> TQSocket<'c, 'd, 'e>
+impl<'a, 'c, 'd, 'e> TQSocket<'c, 'd>
 where
     'a: 'd,
     'd: 'c,
@@ -331,13 +262,8 @@ where
         self.set(TQSocket::GetTcpState(r_tcp_state));
     }
 
-    fn set_get_tcp_establishing(mut self: std::pin::Pin<&mut Self>, receiver: broadcast::Receiver<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>) {
-        let receive_tcp_socket = async move {
-            let mut receiver = receiver;
-            receiver.recv().await
-        }.boxed();
-
-        self.set(TQSocket::GetTcpEstablishing { receive_tcp_socket });
+    fn set_get_tcp_establishing(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>) {
+        self.set(TQSocket::GetTcpEstablishing { receive_tcp_socket: receiver });
     }
 
     fn set_init_tcp(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
@@ -355,7 +281,7 @@ where
     }
 }
 
-impl<'c, 'd, 'e> FutureSocket<'d> for TQSocket<'c, 'd, 'e> {
+impl<'c, 'd> FutureSocket<'d> for TQSocket<'c, 'd> {
     fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket where 'a: 'd {
         match self.as_mut().project() {
             TQSocketProj::Fresh => {
@@ -398,24 +324,18 @@ impl<'c, 'd, 'e> FutureSocket<'d> for TQSocket<'c, 'd, 'e> {
                     },
                 }
             },
-            TQSocketProj::GetTcpEstablishing { receive_tcp_socket } => {
+            TQSocketProj::GetTcpEstablishing { mut receive_tcp_socket } => {
                 match receive_tcp_socket.as_mut().poll(cx) {
                     Poll::Ready(Ok((tcp_socket, tcp_kill))) => {
-                        self.as_mut().set_acquired(tcp_socket.clone(), tcp_kill.clone());
+                        self.as_mut().set_acquired(tcp_socket, tcp_kill);
 
                         // Next loop should poll `kill_tcp`
                         return PollSocket::Continue;
                     },
-                    Poll::Ready(Err(RecvError::Closed)) => {
+                    Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                         self.as_mut().set_closed(TQClosedReason::GetTcpEstablishingReceiverClosed);
 
                         return PollSocket::Error(io::Error::from(io::ErrorKind::Interrupted));
-                    },
-                    Poll::Ready(Err(RecvError::Lagged(num_sockets))) => {
-                        trace!("Channel lagged. Skipping {num_sockets} sockets. Will poll again");
-
-                        // Next loop should re-poll `receive_tcp_socket`
-                        return PollSocket::Continue;
                     },
                     Poll::Pending => {
                         return PollSocket::Pending;
@@ -425,7 +345,7 @@ impl<'c, 'd, 'e> FutureSocket<'d> for TQSocket<'c, 'd, 'e> {
             TQSocketProj::InitTcp { mut join_handle } => {
                 match join_handle.as_mut().poll(cx) {
                     Poll::Ready(Ok(Ok((tcp_socket, kill_tcp_token)))) => {
-                        self.as_mut().set_acquired(tcp_socket.clone(), kill_tcp_token.clone());
+                        self.as_mut().set_acquired(tcp_socket, kill_tcp_token);
 
                         // Next loop should poll `kill_tcp`
                         return PollSocket::Continue;
@@ -571,9 +491,8 @@ impl<'c, 'd, 'e> FutureSocket<'d> for UQSocket<'c, 'd, 'e> {
             UQSocketProj::InitUdp(init_udp) => {
                 match init_udp.as_mut().poll(cx) {
                     Poll::Ready(Ok((udp_socket, kill_udp_token))) => {
-                        let kill_udp = AwakeToken::new();
-                        task::spawn(socket.clone().listen_udp(udp_socket.clone(), kill_udp.clone()));
-                        self.as_mut().set_get_write_udp_state(socket, udp_socket.clone(), kill_udp_token.clone());
+                        task::spawn(socket.clone().listen_udp(udp_socket.clone(), kill_udp_token.clone()));
+                        self.as_mut().set_get_write_udp_state(socket, udp_socket, kill_udp_token);
 
                         // Next loop should poll `kill_udp`
                         return PollSocket::Continue;
@@ -660,7 +579,7 @@ enum EitherSocket<'c, 'd, 'e> {
     },
     Tcp {
         #[pin]
-        tq_socket: TQSocket<'c, 'd, 'e>,
+        tq_socket: TQSocket<'c, 'd>,
     },
 }
 
@@ -686,7 +605,7 @@ enum TcpState {
         kill: AwakeToken
     },
     Establishing {
-        sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
+        sender: once_watch::Sender<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
         kill: AwakeToken
     },
     None,
@@ -694,21 +613,22 @@ enum TcpState {
 }
 
 #[pin_project(PinnedDrop)]
-struct InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm>
+struct InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l>
 where
     'a: 'c + 'f + 'l
 {
     socket: &'a Arc<MixedSocket>,
-    kill_tcp_token: AwakeToken,
     #[pin]
     kill_tcp: AwokenToken,
-    tcp_socket_sender: broadcast::Sender<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
+    tcp_socket_sender: once_watch::Sender<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
     #[pin]
     timeout: Sleep,
-    inner: InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm>,
+    #[pin]
+    inner: InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l>,
 }
 
-enum InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm>
+#[pin_project(project = InnerInitTcpProj)]
+enum InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l>
 where
     'c: 'b,
     'f: 'e,
@@ -726,20 +646,20 @@ where
         tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
     },
     GetEstablishing {
-        receive_tcp_socket: BoxFuture<'m, Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), RecvError>>,
+        #[pin]
+        receive_tcp_socket: once_watch::Receiver<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
     },
     Complete,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
     pub fn new(socket: &'a Arc<MixedSocket>, timeout: Option<Duration>) -> Self {
         let kill_tcp_token = AwakeToken::new();
-        let tcp_socket_sender = broadcast::Sender::new(1);
+        let tcp_socket_sender = once_watch::Sender::new();
         let timeout = timeout.unwrap_or(Duration::from_millis(TCP_INIT_TIMEOUT_MS));
 
         Self {
             socket,
-            kill_tcp_token: kill_tcp_token.clone(),
             kill_tcp: kill_tcp_token.awoken(),
             tcp_socket_sender,
             timeout: tokio::time::sleep(timeout),
@@ -748,14 +668,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l,
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
     type Output = io::Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         let mut this = self.as_mut().project();
-        match this.inner.borrow() {
-            InnerInitTcp::Fresh
-          | InnerInitTcp::WriteEstablishing(_) => {
+        match this.inner.as_mut().project() {
+            InnerInitTcpProj::Fresh
+          | InnerInitTcpProj::WriteEstablishing(_) => {
                 if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
                     *this.inner = InnerInitTcp::Complete;
 
@@ -770,7 +690,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                     return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
                 }
             },
-            InnerInitTcp::Connecting(_) => {
+            InnerInitTcpProj::Connecting(_) => {
                 if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
                     let w_tcp_state = this.socket.tcp.write().boxed();
 
@@ -785,7 +705,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                     // First loop: poll the write lock.
                 }
             },
-            InnerInitTcp::GetEstablishing { receive_tcp_socket: _ } => {
+            InnerInitTcpProj::GetEstablishing { receive_tcp_socket: _ } => {
                 // Does not poll `kill_tcp` because that gets awoken to kill
                 // the listener (if it is set up).
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
@@ -795,17 +715,17 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                     return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
                 }
             },
-            InnerInitTcp::WriteNone { reason: _, w_tcp_state: _ }
-          | InnerInitTcp::WriteManaged { w_tcp_state: _, tcp_socket: _ }
-          | InnerInitTcp::Complete => {
+            InnerInitTcpProj::WriteNone { reason: _, w_tcp_state: _ }
+          | InnerInitTcpProj::WriteManaged { w_tcp_state: _, tcp_socket: _ }
+          | InnerInitTcpProj::Complete => {
                 // Not allowed to timeout or be killed. These are cleanup
                 // states.
             },
         }
 
         loop {
-            match this.inner.borrow_mut() {
-                InnerInitTcp::Fresh => {
+            match this.inner.as_mut().project() {
+                InnerInitTcpProj::Fresh => {
                     let w_tcp_state = this.socket.tcp.write().boxed();
 
                     *this.inner = InnerInitTcp::WriteEstablishing(w_tcp_state);
@@ -813,7 +733,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                     // Next loop: poll the write lock to get the TCP state
                     continue;
                 }
-                InnerInitTcp::WriteEstablishing(w_tcp_state) => {
+                InnerInitTcpProj::WriteEstablishing(w_tcp_state) => {
                     match w_tcp_state.as_mut().poll(cx) {
                         Poll::Ready(mut tcp_state) => {
                             match &*tcp_state {
@@ -832,10 +752,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                 },
                                 TcpState::Establishing { sender: active_sender, kill: _ } => {
                                     let receive_tcp_socket = active_sender.subscribe();
-                                    let receive_tcp_socket = async move {
-                                        let mut receive_tcp_socket = receive_tcp_socket;
-                                        receive_tcp_socket.recv().await
-                                    }.boxed();
 
                                     *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
 
@@ -844,13 +760,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                     continue;
                                 },
                                 TcpState::None => {
-                                    let tcp_socket_sender = broadcast::Sender::new(1);
+                                    let tcp_socket_sender = once_watch::Sender::new();
                                     let kill_init_tcp = AwakeToken::new();
                                     let init_connection = TcpStream::connect(this.socket.upstream_socket).boxed();
 
                                     *tcp_state = TcpState::Establishing {
-                                        sender: tcp_socket_sender.clone(),
-                                        kill: kill_init_tcp.clone()
+                                        sender: tcp_socket_sender,
+                                        kill: kill_init_tcp,
                                     };
 
                                     *this.inner = InnerInitTcp::Connecting(init_connection);
@@ -875,13 +791,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                         },
                     }
                 },
-                InnerInitTcp::Connecting(init_connection) => {
+                InnerInitTcpProj::Connecting(init_connection) => {
                     match init_connection.as_mut().poll(cx) {
                         Poll::Ready(Ok(socket)) => {
                             let (tcp_reader, tcp_writer) = socket.into_split();
                             let tcp_socket = Arc::new(Mutex::new(tcp_writer));
                             let w_tcp_state = this.socket.tcp.write().boxed();
-                            task::spawn(this.socket.clone().listen_tcp(tcp_reader, this.kill_tcp_token.clone()));
+                            task::spawn(this.socket.clone().listen_tcp(tcp_reader, this.kill_tcp.get_awake_token()));
 
                             *this.inner = InnerInitTcp::WriteManaged { w_tcp_state, tcp_socket };
 
@@ -904,7 +820,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                         },
                     }
                 },
-                InnerInitTcp::WriteNone { reason: CleanupReason::ConnectionError(error), w_tcp_state } => {
+                InnerInitTcpProj::WriteNone { reason: CleanupReason::ConnectionError(error), w_tcp_state } => {
                     match w_tcp_state.as_mut().poll(cx) {
                         Poll::Ready(mut w_tcp_state) => {
                             match &*w_tcp_state {
@@ -923,7 +839,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                 },
                                 TcpState::Establishing { sender, kill: active_kill_tcp_token } => {
                                     // If we are the one who set the state to Establishing...
-                                    if this.kill_tcp_token == active_kill_tcp_token {
+                                    if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
                                         *w_tcp_state = TcpState::None;
                                         drop(w_tcp_state);
                                         let error = io::Error::from(error.kind());
@@ -935,11 +851,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                         return Poll::Ready(Err(error));
                                     // If some other process set the state to Establishing...
                                     } else {
-                                        let receiver = sender.subscribe();
-                                        let receive_tcp_socket = async move {
-                                            let mut receiver = receiver;
-                                            receiver.recv().await
-                                        }.boxed();
+                                        let receive_tcp_socket = sender.subscribe();
 
                                         *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
 
@@ -968,7 +880,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                         },
                     }
                 },
-                InnerInitTcp::WriteNone { reason: CleanupReason::Timeout, w_tcp_state } => {
+                InnerInitTcpProj::WriteNone { reason: CleanupReason::Timeout, w_tcp_state } => {
                     match w_tcp_state.as_mut().poll(cx) {
                         Poll::Ready(mut w_tcp_state) => {
                             match &*w_tcp_state {
@@ -987,7 +899,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                 },
                                 TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
                                     // If we are the one who set the state to Establishing...
-                                    if this.kill_tcp_token == active_kill_tcp_token {
+                                    if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
                                         *w_tcp_state = TcpState::None;
                                     }
                                     drop(w_tcp_state);
@@ -1014,13 +926,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                         },
                     }
                 },
-                InnerInitTcp::WriteNone { reason: CleanupReason::Killed, w_tcp_state } => {
+                InnerInitTcpProj::WriteNone { reason: CleanupReason::Killed, w_tcp_state } => {
                     match w_tcp_state.as_mut().poll(cx) {
                         Poll::Ready(mut w_tcp_state) => {
                             match &*w_tcp_state {
                                 TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
                                     // If we are the one who set the state to Establishing...
-                                    if this.kill_tcp_token == active_kill_tcp_token {
+                                    if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
                                         *w_tcp_state = TcpState::None;
                                     }
                                     drop(w_tcp_state);
@@ -1048,21 +960,21 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                         },
                     }
                 },
-                InnerInitTcp::WriteManaged { w_tcp_state, tcp_socket } => {
+                InnerInitTcpProj::WriteManaged { w_tcp_state, tcp_socket } => {
                     match w_tcp_state.as_mut().poll(cx) {
                         Poll::Ready(mut w_tcp_state) => {
                             match &*w_tcp_state {
                                 TcpState::Establishing { sender: active_sender, kill: active_kill_tcp_token } => {
                                     // If we are the one who set the state to Establishing...
-                                    if this.kill_tcp_token == active_kill_tcp_token {
-                                        *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: this.kill_tcp_token.clone() };
+                                    if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
+                                        *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: this.kill_tcp.get_awake_token() };
                                         drop(w_tcp_state);
 
                                         // Ignore send errors. They just indicate that all receivers have been dropped.
-                                        let _ = this.tcp_socket_sender.send((tcp_socket.clone(), this.kill_tcp_token.clone()));
+                                        let _ = this.tcp_socket_sender.send((tcp_socket.clone(), this.kill_tcp.get_awake_token()));
 
                                         let tcp_socket = tcp_socket.clone();
-                                        let kill_tcp_token = this.kill_tcp_token.clone();
+                                        let kill_tcp_token = this.kill_tcp.get_awake_token();
 
                                         *this.inner = InnerInitTcp::Complete;
 
@@ -1073,13 +985,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                     } else {
                                         let receive_tcp_socket = active_sender.subscribe();
                                         drop(w_tcp_state);
-                                        let receive_tcp_socket = async move {
-                                            let mut receive_tcp_socket = receive_tcp_socket;
-                                            receive_tcp_socket.recv().await
-                                        }.boxed();
 
                                         // Shutdown the listener we started.
-                                        this.kill_tcp_token.awake();
+                                        this.kill_tcp.awake();
 
                                         *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
 
@@ -1093,7 +1001,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                     drop(w_tcp_state);
 
                                     // Shutdown the listener we started.
-                                    this.kill_tcp_token.awake();
+                                    this.kill_tcp.awake();
 
                                     // Ignore send errors. They just indicate that all receivers have been dropped.
                                     let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
@@ -1109,7 +1017,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                                     drop(w_tcp_state);
 
                                     // Shutdown the listener we started.
-                                    this.kill_tcp_token.awake();
+                                    this.kill_tcp.awake();
 
                                     *this.inner = InnerInitTcp::Complete;
 
@@ -1128,30 +1036,21 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                         },
                     }
                 },
-                InnerInitTcp::GetEstablishing { receive_tcp_socket } => {
+                InnerInitTcpProj::GetEstablishing { mut receive_tcp_socket } => {
                     match receive_tcp_socket.as_mut().poll(cx) {
-                        Poll::Ready(Ok((tcp_socket, tcp_kill))) => {
-                            let tcp_socket = tcp_socket.clone();
-                            let kill_tcp_token = tcp_kill.clone();
-
+                        Poll::Ready(Ok((tcp_socket, kill_tcp_token))) => {
                             *this.inner = InnerInitTcp::Complete;
 
                             // Exit loop: connection setup completed and
                             // registered by a different init process.
                             return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
                         },
-                        Poll::Ready(Err(RecvError::Closed)) => {
+                        Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                             *this.inner = InnerInitTcp::Complete;
 
                             // Exit loop: all senders were dropped so it is not
                             // possible to receive a connection.
                             return Poll::Ready(Err(io::Error::from(ErrorKind::Interrupted)));
-                        },
-                        Poll::Ready(Err(RecvError::Lagged(num_sockets))) => {
-                            trace!("Channel lagged. Skipping {num_sockets} sockets. Will poll again");
-
-                            // Next loop: will poll the receiver again.
-                            continue;
                         },
                         Poll::Pending => {
                             // Exit loop. Will be woken up once a TCP write
@@ -1162,14 +1061,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 
                         },
                     }
                 },
-                InnerInitTcp::Complete => panic!("InitTcp was polled after completion"),
+                InnerInitTcpProj::Complete => panic!("InitTcp was polled after completion"),
             }
         }
     }
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
     fn drop(self: Pin<&mut Self>) {
         match &self.inner {
             InnerInitTcp::Fresh
@@ -1181,7 +1080,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 
             InnerInitTcp::Connecting(_)
           | InnerInitTcp::WriteNone { reason: _, w_tcp_state: _ } => {
                 let tcp_socket = self.socket.clone();
-                let kill_tcp_token = self.kill_tcp_token.clone();
+                let kill_tcp_token = self.kill_tcp.get_awake_token();
                 tokio::spawn(async move {
                     let mut w_tcp_state = tcp_socket.tcp.write().await;
                     match &*w_tcp_state {
@@ -1209,7 +1108,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 
                 let tcp_socket = tcp_socket.clone();
                 let socket = self.socket.clone();
                 let tcp_socket_sender = self.tcp_socket_sender.clone();
-                let kill_tcp_token = self.kill_tcp_token.clone();
+                let kill_tcp_token = self.kill_tcp.get_awake_token();
                 tokio::spawn(async move {
                     let mut w_tcp_state = socket.tcp.write().await;
                     match &*w_tcp_state {
@@ -1220,7 +1119,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 
                                 drop(w_tcp_state);
 
                                 // Ignore send errors. They just indicate that all receivers have been dropped.
-                                let _ = tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token));
+                                let _ = tcp_socket_sender.send((tcp_socket, kill_tcp_token));
                             // If some other process set the state to Establishing...
                             } else {
                                 drop(w_tcp_state);
@@ -1245,7 +1144,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, 'm> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 
 }
 
 #[pin_project(PinnedDrop)]
-struct TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x>
+struct TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x>
 where
     'a: 'd + 'r + 'u + 'v + 'x
 {
@@ -1254,21 +1153,21 @@ where
     #[pin]
     timeout: Sleep,
     #[pin]
-    inner: QInitQuery<'w, 'x, InnerTQ<'c, 'd, 'e, 'q, 'r, 't, 'u, 'v>>,
+    inner: QInitQuery<'w, 'x, InnerTQ<'c, 'd, 'q, 'r, 't, 'u, 'v>>,
 }
 
 #[pin_project(project = InnerTQProj)]
-enum InnerTQ<'c, 'd, 'e, 'q, 'r, 't, 'u, 'v> {
+enum InnerTQ<'c, 'd, 'q, 'r, 't, 'u, 'v> {
     Fresh,
     Running {
         #[pin]
-        tq_socket: TQSocket<'c, 'd, 'e>,
+        tq_socket: TQSocket<'c, 'd>,
         #[pin]
         in_flight: QInFlight<'q, 'r, 't, 'u, 'v>,
     },
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
+impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, timeout: Option<Duration>) -> Self {
         let timeout = timeout.unwrap_or(Duration::from_millis(TCP_TIMEOUT_MS));
 
@@ -1281,7 +1180,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> TcpQuery<'a, 'b, 'c, 'd, 'e
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
+impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
     type Output = io::Result<Message>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -1298,7 +1197,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b,
                     return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
                 }
             },
-            QInitQueryProj::Registered(mut this_inner, _, _) => {
+            QInitQueryProj::Registered(mut this_inner, _) => {
                 match this_inner.as_mut().project() {
                     InnerTQProj::Fresh => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
@@ -1395,11 +1294,11 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b,
                                     continue;
                                 },
                                 None => {
-                                    let (sender, result_receiver) = broadcast::channel(1);
+                                    let (sender, result_receiver) = once_watch::channel();
                                     w_active_queries.tcp_only.insert(this.query.question.clone(), result_receiver.resubscribe());
                                     drop(w_active_queries);
 
-                                    this.inner.set_registered(InnerTQ::Fresh, sender, result_receiver);
+                                    this.inner.set_registered(InnerTQ::Fresh, result_receiver);
 
                                     // TODO
                                     continue;                
@@ -1412,7 +1311,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b,
                         },
                     }
                 },
-                QInitQueryProj::Registered(mut this_inner, sender, mut result_receiver) => {
+                QInitQueryProj::Registered(mut this_inner, mut result_receiver) => {
                     match this_inner.as_mut().project() {
                         InnerTQProj::Fresh => {
                             let r_tcp_state = this.socket.tcp.read().boxed();
@@ -1484,7 +1383,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b,
                                                 // FIXME: should this fail after some number of non-unique
                                                 // keys? May want to verify that the list isn't full.
                                             }
-                                            w_in_flight.insert(this.query.id, InFlight { send_response: sender.clone() });
+                                            w_in_flight.insert(this.query.id, InFlight { send_response: result_receiver.get_sender() });
                                             drop(w_in_flight);
         
                                             in_flight.set_in_flight();
@@ -1658,6 +1557,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b,
                                         Poll::Ready(mut w_in_flight) => {
                                             w_in_flight.remove(&this.query.id);
                                             drop(w_in_flight);
+                                            result_receiver.close();
                                             let response = response.take();
 
                                             // Cleanup is done. We can pull the response out of the Option
@@ -1685,13 +1585,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b,
                 },
                 QInitQueryProj::Following(mut result_receiver) => {
                     match result_receiver.as_mut().poll(cx) {
-                        Poll::Ready(PollReceive::Ok(response)) => {
+                        Poll::Ready(Ok(response)) => {
                             this.inner.set_complete();
 
                             // TODO
                             return Poll::Ready(Ok(response));
                         },
-                        Poll::Ready(PollReceive::Closed) => {
+                        Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                             this.inner.set_complete();
 
                             // TODO
@@ -1733,7 +1633,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b,
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'h, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v, 'w, 'x> PinnedDrop for TcpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
+impl<'a, 'b, 'c, 'd, 'h, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v, 'w, 'x> PinnedDrop for TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
     fn drop(mut self: Pin<&mut Self>) {
         match self.as_mut().project().inner.as_mut().project() {
             QInitQueryProj::Fresh
@@ -1741,7 +1641,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'h, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v,
           | QInitQueryProj::WriteActiveQuery(_) => {
                 // Nothing to do.
             },
-            QInitQueryProj::Registered(mut this_inner, _, _) => {
+            QInitQueryProj::Registered(mut this_inner, result_receiver) => {
                 match this_inner.as_mut().project() {
                     InnerTQProj::Fresh => (),
                     InnerTQProj::Running { tq_socket: _, mut in_flight } => {
@@ -1752,12 +1652,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'h, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v,
                             },
                             QInFlightProj::InFlight { send_query: _ }
                           | QInFlightProj::RemoveInFlight { w_in_flight: _, response: _ } => {
+                                let result_receiver = result_receiver.clone();
                                 let tcp_socket = self.socket.clone();
                                 let query_id = self.query.id;
                                 tokio::spawn(async move {
                                     let mut w_in_flight = tcp_socket.in_flight.write().await;
                                     w_in_flight.remove(&query_id);
                                     drop(w_in_flight);
+                                    result_receiver.close();
                                 });
                             },
                         }
@@ -1828,16 +1730,18 @@ impl MixedSocket {
                 // will kill any active queries and change the TcpState.
             },
             TcpState::Establishing { sender, kill } => {
-                let mut receiver = sender.subscribe();
+                let sender = sender.clone();
                 let kill_init_tcp = kill.clone();
                 *w_state = TcpState::None;
                 drop(w_state);
 
                 // Try to prevent the socket from being initialized.
                 kill_init_tcp.awake();
+                sender.close();
+                let receiver = sender.subscribe();
 
                 // If the socket still initialized, shut it down immediately.
-                match receiver.recv().await {
+                match receiver.await {
                     Ok((socket, tcp_kill)) => {
                         tcp_kill.awake();
 
@@ -1891,16 +1795,18 @@ impl MixedSocket {
                 // will kill any active queries and change the TcpState.
             },
             TcpState::Establishing { sender, kill }=> {
-                let mut receiver = sender.subscribe();
+                let sender = sender.clone();
                 let kill_init_tcp = kill.clone();
                 *w_state = TcpState::Blocked;
                 drop(w_state);
 
                 // Try to prevent the socket from being initialized.
                 kill_init_tcp.awake();
+                sender.close();
+                let receiver = sender.subscribe();
 
                 // If the socket still initialized, shut it down immediately.
-                match receiver.recv().await {
+                match receiver.await {
                     Ok((socket, kill_tcp)) => {
                         kill_tcp.awake();
 
@@ -1922,7 +1828,7 @@ impl MixedSocket {
 
     #[inline]
     async fn listen_tcp(self: Arc<Self>, mut tcp_reader: OwnedReadHalf, kill_tcp: AwakeToken) {
-        pin!(let kill_tcp_awoken = kill_tcp.clone().awoken(););
+        pin!(let kill_tcp_awoken = kill_tcp.awoken(););
         loop {
             select! {
                 biased;
@@ -1941,10 +1847,7 @@ impl MixedSocket {
                             let response_id = response.id;
                             let r_in_flight = self.in_flight.read().await;
                             if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
-                                match sender.send(response) {
-                                    Ok(_) => (),
-                                    Err(_) => println!("No processes are waiting for message {}", response_id),
-                                };
+                                sender.send(response);
                             };
                             drop(r_in_flight);
                             // Cleanup is handled by the management processes. This
@@ -2092,7 +1995,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                     // TODO
                 }
             },
-            QInitQueryProj::Registered(mut this_inner, _, _) => {
+            QInitQueryProj::Registered(mut this_inner, _) => {
                 match this_inner.as_mut().project() {
                     InnerUQProj::Fresh { udp_retransmissions: 0 } => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
@@ -2227,7 +2130,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                                     drop(r_active_queries);
 
                                     this.inner.set_following(result_receiver);
-                                    println!("{} Following(1) active query '{}'", this.socket.upstream_socket, this.query.question);
+                                    // println!("{} Following(1) active query '{}'", this.socket.upstream_socket, this.query.question);
                                     self.as_mut().reset_timeout(Duration::from_millis((UDP_RETRANSMISSIONS as u64 * UDP_RETRANSMIT_MS) + UDP_TIMEOUT_MS + TCP_TIMEOUT_MS));
 
                                     // TODO
@@ -2258,18 +2161,18 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                                     drop(w_active_queries);
 
                                     this.inner.set_following(result_receiver);
-                                    println!("{} Following(2) active query '{}'", this.socket.upstream_socket, this.query.question);
+                                    // println!("{} Following(2) active query '{}'", this.socket.upstream_socket, this.query.question);
                                     self.as_mut().reset_timeout(Duration::from_millis((UDP_RETRANSMISSIONS as u64 * UDP_RETRANSMIT_MS) + UDP_TIMEOUT_MS + TCP_TIMEOUT_MS));
 
                                     // TODO
                                     continue;
                                 },
                                 (None, None) => {
-                                    let (sender, result_receiver) = broadcast::channel(1);
-                                    w_active_queries.tcp_or_udp.insert(this.query.question.clone(), result_receiver.resubscribe());
+                                    let result_receiver = once_watch::Receiver::new();
+                                    w_active_queries.tcp_or_udp.insert(this.query.question.clone(), result_receiver.clone());
                                     drop(w_active_queries);
 
-                                    this.inner.set_registered(InnerUQ::Fresh { udp_retransmissions: UDP_RETRANSMISSIONS }, sender, result_receiver);
+                                    this.inner.set_registered(InnerUQ::Fresh { udp_retransmissions: UDP_RETRANSMISSIONS }, result_receiver);
 
                                     // TODO
                                     continue;                
@@ -2282,7 +2185,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                         },
                     }
                 },
-                QInitQueryProj::Registered(mut this_inner, sender, mut result_receiver) => {
+                QInitQueryProj::Registered(mut this_inner, mut result_receiver) => {
                     match this_inner.as_mut().project() {
                         InnerUQProj::Fresh { udp_retransmissions } => {
                             let retransmissions = *udp_retransmissions;
@@ -2339,7 +2242,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                                                 // FIXME: should this fail after some number of non-unique
                                                 // keys? May want to verify that the list isn't full.
                                             }
-                                            w_in_flight.insert(this.query.id, InFlight { send_response: sender.clone() });
+                                            w_in_flight.insert(this.query.id, InFlight { send_response: result_receiver.get_sender() });
                                             drop(w_in_flight);
 
                                             in_flight.set_in_flight();
@@ -2366,14 +2269,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                                     match send_query_state.query_type() {
                                         Query::Initial => (),
                                         Query::Retransmit => match result_receiver.as_mut().poll(cx) {
-                                            Poll::Ready(PollReceive::Ok(response)) => {
+                                            Poll::Ready(Ok(response)) => {
                                                 in_flight.set_remove_in_flight(this.socket, Ok(response));
             
                                                 // Next loop will poll for the in-flight map lock to clean
                                                 // up the query ID before returning the response.
                                                 continue;
                                             },
-                                            Poll::Ready(PollReceive::Closed) => {
+                                            Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                                                 in_flight.set_remove_in_flight(this.socket, Err(io::Error::from(io::ErrorKind::Interrupted)));
             
                                                 // Next loop will poll for the in-flight map lock to clean
@@ -2447,14 +2350,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                                     match send_query_state.query_type() {
                                         Query::Initial => (),
                                         Query::Retransmit => match result_receiver.as_mut().poll(cx) {
-                                            Poll::Ready(PollReceive::Ok(response)) => {
+                                            Poll::Ready(Ok(response)) => {
                                                 in_flight.set_remove_in_flight(this.socket, Ok(response));
             
                                                 // Next loop will poll for the in-flight map lock to clean
                                                 // up the query ID before returning the response.
                                                 continue;
                                             },
-                                            Poll::Ready(PollReceive::Closed) => {
+                                            Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                                                 in_flight.set_remove_in_flight(this.socket, Err(io::Error::from(io::ErrorKind::Interrupted)));
             
                                                 // Next loop will poll for the in-flight map lock to clean
@@ -2489,7 +2392,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                                         };
                                         let wire_length = write_wire.current_len();
 
-                                        let query_type = *send_query_state.query_type();
                                         let socket = this.socket.clone();
                                         let tcp_socket = tcp_socket.clone();
             
@@ -2537,14 +2439,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                                     match query_type {
                                         Query::Initial => (),
                                         Query::Retransmit => match result_receiver.as_mut().poll(cx) {
-                                            Poll::Ready(PollReceive::Ok(response)) => {
+                                            Poll::Ready(Ok(response)) => {
                                                 in_flight.set_remove_in_flight(this.socket, Ok(response));
             
                                                 // Next loop will poll for the in-flight map lock to clean
                                                 // up the query ID before returning the response.
                                                 continue;
                                             },
-                                            Poll::Ready(PollReceive::Closed) => {
+                                            Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                                                 in_flight.set_remove_in_flight(this.socket, Err(io::Error::from(io::ErrorKind::Interrupted)));
             
                                                 // Next loop will poll for the in-flight map lock to clean
@@ -2619,6 +2521,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                                         Poll::Ready(mut w_in_flight) => {
                                             w_in_flight.remove(&this.query.id);
                                             drop(w_in_flight);
+                                            result_receiver.close();
                                             let response = response.take();
 
                                             // Cleanup is done. We can pull the response out of the Option
@@ -2646,13 +2549,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                 },
                 QInitQueryProj::Following(mut result_receiver) => {
                     match result_receiver.as_mut().poll(cx) {
-                        Poll::Ready(PollReceive::Ok(response)) => {
+                        Poll::Ready(Ok(response)) => {
                             this.inner.set_complete();
 
                             // TODO
                             return Poll::Ready(Ok(response));
                         },
-                        Poll::Ready(PollReceive::Closed) => {
+                        Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                             this.inner.set_complete();
 
                             // TODO
@@ -2702,7 +2605,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v, 'w,
           | QInitQueryProj::WriteActiveQuery(_) => {
                 // Nothing to do.
             },
-            QInitQueryProj::Registered(mut this_inner, _, _) => {
+            QInitQueryProj::Registered(mut this_inner, result_receiver) => {
                 match this_inner.as_mut().project() {
                     InnerUQProj::Fresh { udp_retransmissions: _ } => (),
                     InnerUQProj::Running { socket: _, mut in_flight } => {
@@ -2713,12 +2616,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v, 'w,
                             },
                             QInFlightProj::InFlight { send_query: _ }
                           | QInFlightProj::RemoveInFlight { w_in_flight: _, response: _ } => {
+                                let result_receiver = result_receiver.clone();
                                 let tcp_socket = self.socket.clone();
                                 let query_id = self.query.id;
                                 tokio::spawn(async move {
                                     let mut w_in_flight = tcp_socket.in_flight.write().await;
                                     w_in_flight.remove(&query_id);
                                     drop(w_in_flight);
+                                    result_receiver.close();
                                 });
                             },
                         }
@@ -2781,13 +2686,13 @@ impl MixedSocket {
         let mut w_state = self.udp.write().await;
         match &*w_state {
             UdpState::Managed(existing_udp_socket, _) => {
-                return Ok((existing_udp_socket.clone(), kill_udp.clone()));
+                return Ok((existing_udp_socket.clone(), kill_udp));
             },
             UdpState::None => {
                 *w_state = UdpState::Managed(udp_writer.clone(), kill_udp.clone());
                 drop(w_state);
 
-                task::spawn(self.clone().listen_udp(udp_reader, kill_udp.clone()));
+                task::spawn(self.listen_udp(udp_reader, kill_udp.clone()));
 
                 return Ok((udp_writer, kill_udp));
             },
@@ -2888,7 +2793,7 @@ impl MixedSocket {
                     println!("UDP Socket {} Timed Out. Shutting down UDP Listener.", self.upstream_socket);
                     break;
                 },
-                response = read_udp_message(udp_reader.clone()) => {
+                response = read_udp_message(&udp_reader) => {
                     match response {
                         Ok(response) => {
                             // Note: if truncation flag is set, that will be dealt with by the caller.
@@ -2896,10 +2801,7 @@ impl MixedSocket {
                             let response_id = response.id;
                             let r_in_flight = self.in_flight.read().await;
                             if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
-                                match sender.send(response) {
-                                    Ok(_) => (),
-                                    Err(_) => println!("No processes are waiting for message {}", response_id),
-                                };
+                                sender.send(response);
                             };
                             drop(r_in_flight);
                             // Cleanup is handled by the management processes. This
@@ -2925,21 +2827,29 @@ impl MixedSocket {
             }
         }
 
-        self.listen_udp_cleanup().await;
+        self.listen_udp_cleanup(kill_udp).await;
     }
 
     #[inline]
-    async fn listen_udp_cleanup(self: Arc<Self>) {
+    async fn listen_udp_cleanup(self: Arc<Self>,  kill_udp: AwakeToken) {
         println!("Cleaning up UDP socket {}", self.upstream_socket);
 
         let mut w_state = self.udp.write().await;
         match &*w_state {
-            UdpState::Managed(_, kill_udp) => {
-                let kill_udp = kill_udp.clone();
-                *w_state = UdpState::None;
-                drop(w_state);
+            UdpState::Managed(_, managed_kill_udp) => {
+                // If the managed socket is the one that we are cleaning up...
+                if &kill_udp == managed_kill_udp {
+                    // We are responsible for cleanup.
+                    *w_state = UdpState::None;
+                    drop(w_state);
 
-                kill_udp.awake();
+                    kill_udp.awake();
+
+                // If the managed socket isn't the one that we are cleaning up...
+                } else {
+                    // This is not our socket to clean up.
+                    drop(w_state);
+                }
             },
             UdpState::None => (),
             UdpState::Blocked => (),
@@ -2948,8 +2858,8 @@ impl MixedSocket {
 }
 
 struct ActiveQueries {
-    tcp_only: HashMap<TinyVec<[Question; 1]>, broadcast::Receiver<Message>>,
-    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, broadcast::Receiver<Message>>,
+    tcp_only: HashMap<TinyVec<[Question; 1]>, once_watch::Receiver<Message>>,
+    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, once_watch::Receiver<Message>>,
 }
 
 impl ActiveQueries {
@@ -3100,15 +3010,6 @@ impl MixedSocket {
         }
     }
 
-    #[inline]
-    async fn cleanup_query(self: Arc<Self>, query_id: u16) {
-        let mut w_in_flight = self.in_flight.write().await;
-        // Removing the message will cause the sender to be dropped. If there
-        // was no response, tasks still awaiting a response will receive an error.
-        w_in_flight.remove(&query_id);
-        drop(w_in_flight);
-    }
-
     pub fn query<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOptions, timeout: Option<Duration>) -> MixedQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
         let udp_timeout_count = self.udp_timeout_count.load(Ordering::Acquire);
         let query_task = match (options, udp_timeout_count) {
@@ -3136,7 +3037,7 @@ impl MixedSocket {
 }
 
 #[inline]
-async fn read_udp_message(udp_socket: Arc<UdpSocket>) -> io::Result<Message> {
+async fn read_udp_message(udp_socket: &Arc<UdpSocket>) -> io::Result<Message> {
     // Step 1: Setup buffer. Make sure it is within the configured size.
     let mut buffer = [0; MAX_MESSAGE_SIZE];
     let mut buffer = &mut buffer[..MAX_MESSAGE_SIZE];
@@ -3206,7 +3107,7 @@ async fn read_tcp_message(tcp_stream: &mut OwnedReadHalf) -> io::Result<Message>
 mod mixed_udp_tcp_tests {
     use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, time::Duration};
 
-    use dns_lib::{query::{self, message::Message, qr::QR, question::Question}, resource_record::{opcode::OpCode, rclass::RClass, rcode::RCode, resource_record::{RRHeader, ResourceRecord}, rtype::RType, time::Time, types::a::A}, serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire}, types::c_domain_name::CDomainName};
+    use dns_lib::{query::{message::Message, qr::QR, question::Question}, resource_record::{opcode::OpCode, rclass::RClass, rcode::RCode, resource_record::{RRHeader, ResourceRecord}, rtype::RType, time::Time, types::a::A}, serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire}, types::c_domain_name::CDomainName};
     use tinyvec::TinyVec;
     use tokio::{io::AsyncReadExt, select};
     use ux::u3;
