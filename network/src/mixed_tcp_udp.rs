@@ -9,10 +9,9 @@ use tinyvec::TinyVec;
 use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
 
 const MAX_MESSAGE_SIZE: usize = 8192;
-const UDP_RETRANSMIT_MS: u64 = 125;
-const UDP_TIMEOUT_MS: u64 = 375;
+const UDP_RETRANSMIT_MS: u64 = 200;
 const UDP_RETRANSMISSIONS: u8 = 1;
-const TCP_TIMEOUT_MS: u64 = 500;
+const TCP_TIMEOUT_MS: u64 = 1000;
 
 const TCP_INIT_TIMEOUT_MS: u64 = 5000;
 const TCP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
@@ -26,23 +25,16 @@ pub enum QueryOptions {
     Both,
 }
 
-struct InFlight { send_response: once_watch::Sender<Message> }
-
 #[pin_project(project = QInitQueryProj)]
-enum QInitQuery<'w, 'x, T> where 'x: 'w {
+enum QInitQuery<'w, 'x> where 'x: 'w {
     Fresh,
     ReadActiveQuery(BoxFuture<'w, RwLockReadGuard<'x, ActiveQueries>>),
     WriteActiveQuery(BoxFuture<'w, RwLockWriteGuard<'x, ActiveQueries>>),
-    Registered(#[pin] T, #[pin] once_watch::Receiver<Message>),
     Following(#[pin] once_watch::Receiver<Message>),
-    RemoveActiveQuery {
-        w_active_queries: BoxFuture<'w, RwLockWriteGuard<'x, ActiveQueries>>,
-        response: Option<io::Result<Message>>,
-    },
     Complete,
 }
 
-impl<'a, 'w, 'x, T> QInitQuery<'w, 'x, T> where 'a: 'x {
+impl<'a, 'w, 'x> QInitQuery<'w, 'x> where 'a: 'x {
     fn set_read_active_query(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
         let r_active_queries = socket.active_queries.read().boxed();
 
@@ -55,82 +47,12 @@ impl<'a, 'w, 'x, T> QInitQuery<'w, 'x, T> where 'a: 'x {
         self.set(QInitQuery::WriteActiveQuery(w_active_queries));
     }
 
-    fn set_registered(mut self: std::pin::Pin<&mut Self>, registered: T, receiver: once_watch::Receiver<Message>) {
-        self.set(QInitQuery::Registered(registered, receiver));
-    }
-
     fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<Message>) {
         self.set(QInitQuery::Following(receiver));
     }
 
-    fn set_remove_active_query(mut self: std::pin::Pin<&mut Self>, response: io::Result<Message>, socket: &'a Arc<MixedSocket>) {
-        let w_active_queries = socket.active_queries.write().boxed();
-
-        self.set(QInitQuery::RemoveActiveQuery { w_active_queries, response: Some(response) });
-    }
-
     fn set_complete(mut self: std::pin::Pin<&mut Self>) {
         self.set(QInitQuery::Complete);
-    }
-}
-
-#[pin_project(project = QInFlightProj)]
-enum QInFlight<'q, 'r, 't, 'u, 'v>
-where
-    'r: 'q,
-    'v: 'u,
-{
-    Fresh,
-    WriteInFlight(BoxFuture<'q, RwLockWriteGuard<'r, HashMap<u16, InFlight>>>),
-    InFlight {
-        send_query: QSendQuery<'t>,
-    },
-    RemoveInFlight {
-        w_in_flight: BoxFuture<'u, RwLockWriteGuard<'v, HashMap<u16, InFlight>>>,
-        response: Option<io::Result<Message>>,
-    },
-}
-
-impl<'a, 'q, 'r, 't, 'u, 'v> QInFlight<'q, 'r, 't, 'u, 'v> where 'a: 'r + 'v {
-    fn set_write_in_flight(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
-        let w_in_flight = socket.in_flight.write().boxed();
-
-        self.set(QInFlight::WriteInFlight(w_in_flight));
-    }
-
-    fn set_in_flight(mut self: std::pin::Pin<&mut Self>) {
-        self.set(QInFlight::InFlight {
-            send_query: QSendQuery::Fresh(Query::Initial)
-        });
-    }
-
-    fn set_remove_in_flight(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>, response: Result<Message, io::Error>) {
-        let w_in_flight = socket.in_flight.write().boxed();
-
-        self.set(QInFlight::RemoveInFlight { w_in_flight, response: Some(response) });
-    }
-}
-
-fn handle_poll_result_receiver<'a, 'q, 'r, 't, 'u, 'v>(result_receiver_polled: Poll<Result<Message, once_watch::RecvError>>, in_flight: Pin<&mut QInFlight<'q, 'r, 't, 'u, 'v>>, socket: &'a Arc<MixedSocket>) -> LoopPoll
-where
-    'a: 'r + 'v,
-{
-    match result_receiver_polled {
-        Poll::Ready(Ok(response)) => {
-            in_flight.set_remove_in_flight(socket, Ok(response));
-
-            // Next loop will poll for the in-flight map lock to clean
-            // up the query ID before returning the response.
-            return LoopPoll::Continue;
-        },
-        Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-            in_flight.set_remove_in_flight(socket, Err(io::Error::from(io::ErrorKind::Interrupted)));
-
-            // Next loop will poll for the in-flight map lock to clean
-            // up the query ID before returning the response.
-            return LoopPoll::Continue;
-        },
-        Poll::Pending => return LoopPoll::Pending,
     }
 }
 
@@ -149,6 +71,7 @@ impl Display for Query {
     }
 }
 
+#[pin_project(project = QSendQueryProj)]
 enum QSendQuery<'t> {
     Fresh(Query),
     SendQuery(Query, BoxFuture<'t, io::Result<()>>),
@@ -164,30 +87,30 @@ impl<'t> QSendQuery<'t> {
         }
     }
 
-    pub fn set_fresh(&mut self, query_type: Query) {
-        *self = QSendQuery::Fresh(query_type);
+    pub fn set_fresh(mut self: std::pin::Pin<&mut Self>, query_type: Query) {
+        self.set(QSendQuery::Fresh(query_type));
     }
 
-    pub fn set_send_query(&mut self, send_query: BoxFuture<'t, io::Result<()>>) {
+    pub fn set_send_query(mut self: std::pin::Pin<&mut Self>, send_query: BoxFuture<'t, io::Result<()>>) {
         let query_type = self.query_type();
 
-        *self = QSendQuery::SendQuery(*query_type, send_query);
+        self.set(QSendQuery::SendQuery(*query_type, send_query));
     }
 
-    pub fn set_complete(&mut self) {
+    pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
         let query_type = self.query_type();
 
-        *self = QSendQuery::Complete(*query_type);
+        self.set(QSendQuery::Complete(*query_type));
     }
 }
 
 #[pin_project(project = MixedQueryProj)]
-pub enum MixedQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
-    Tcp(#[pin] TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x>),
-    Udp(#[pin] UdpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x>),
+pub enum MixedQuery<'a, 'b, 'c, 'd> {
+    Tcp(#[pin] TcpQuery<'a, 'b, 'c, 'd>),
+    Udp(#[pin] UdpQuery<'a, 'b, 'c, 'd>),
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for MixedQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
+impl<'a, 'b, 'c, 'd> Future for MixedQuery<'a, 'b, 'c, 'd> {
     type Output = io::Result<Message>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -1144,110 +1067,333 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 'e, 
 }
 
 #[pin_project(PinnedDrop)]
-struct TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x>
+struct TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g>
 where
-    'a: 'd + 'r + 'u + 'v + 'x
+    'a: 'd + 'g
 {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
     #[pin]
     timeout: Sleep,
     #[pin]
-    inner: QInitQuery<'w, 'x, InnerTQ<'c, 'd, 'q, 'r, 't, 'u, 'v>>,
+    result_receiver: once_watch::Receiver<Message>,
+    #[pin]
+    inner: InnerTQ<'c, 'd, 'e, 'f, 'g>,
+}
+
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g>
+where
+    'g: 'f
+{
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Message>) -> Self {
+        Self {
+            socket,
+            query,
+            timeout: tokio::time::sleep(Duration::from_millis(TCP_TIMEOUT_MS)),
+            result_receiver,
+            inner: InnerTQ::Fresh,
+        }
+    }
 }
 
 #[pin_project(project = InnerTQProj)]
-enum InnerTQ<'c, 'd, 'q, 'r, 't, 'u, 'v> {
+enum InnerTQ<'c, 'd, 'e, 'f, 'g>
+where
+    'g: 'f
+{
     Fresh,
     Running {
         #[pin]
         tq_socket: TQSocket<'c, 'd>,
         #[pin]
-        in_flight: QInFlight<'q, 'r, 't, 'u, 'v>,
+        send_query: QSendQuery<'e>,
     },
+    Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>),
+    Complete,
 }
 
-impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
-    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, timeout: Option<Duration>) -> Self {
-        let timeout = timeout.unwrap_or(Duration::from_millis(TCP_TIMEOUT_MS));
+impl<'a, 'c, 'd, 'e, 'f, 'g> InnerTQ<'c, 'd, 'e, 'f, 'g>
+where
+    'a: 'd + 'g
+{
+    pub fn set_running(mut self: std::pin::Pin<&mut Self>, query_type: Query) {
+        self.set(Self::Running {
+            tq_socket: TQSocket::Fresh,
+            send_query: QSendQuery::Fresh(query_type),
+        });
+    }
 
-        Self {
-            socket,
-            query,
-            timeout: tokio::time::sleep(timeout),
-            inner: QInitQuery::Fresh,
-        }
+    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
+        let w_active_queries = socket.active_queries.write().boxed();
+
+        self.set(Self::Cleanup(w_active_queries));
+    }
+
+    pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
+        self.set(Self::Complete);
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
-    type Output = io::Result<Message>;
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g> {
+    type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         let mut this = self.as_mut().project();
         match this.inner.as_mut().project() {
-            QInitQueryProj::Fresh
-          | QInitQueryProj::ReadActiveQuery(_)
-          | QInitQueryProj::WriteActiveQuery(_)
-          | QInitQueryProj::Following(_) => {
+            InnerTQProj::Fresh
+          | InnerTQProj::Running { tq_socket: _, send_query: _ } => {
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    this.inner.set_complete();
+                    this.inner.set_cleanup(this.socket);
 
-                    // TODO
-                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                    // Exit loop forever: query timed out.
                 }
             },
-            QInitQueryProj::Registered(mut this_inner, _) => {
-                match this_inner.as_mut().project() {
-                    InnerTQProj::Fresh => {
-                        if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                            let result = Err(io::Error::from(io::ErrorKind::TimedOut));
-        
-                            this.inner.set_remove_active_query(result, &this.socket);
-        
-                            // Exit loop forever: query timed out.
-                        }
-                    },
-                    InnerTQProj::Running { tq_socket: _, mut in_flight } => {
-                        let in_flight_projection = in_flight.as_mut().project();
-                        match in_flight_projection {
-                            QInFlightProj::Fresh
-                          | QInFlightProj::WriteInFlight(_) => {
-                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                                    let result = Err(io::Error::from(io::ErrorKind::TimedOut));
-        
-                                    this.inner.set_remove_active_query(result, &this.socket);
-        
-                                    // Exit loop forever: query timed out.
-                                }
-                            },
-                            QInFlightProj::InFlight { send_query: _ } => {
-                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                                    in_flight.set_remove_in_flight(this.socket, Err(io::Error::from(io::ErrorKind::TimedOut)));
-        
-                                    // First loop: poll the write lock to start cleanup before returning the
-                                    // response.
-                                }
-                            },
-                            QInFlightProj::RemoveInFlight { w_in_flight: _, response: _ } => {
-                                // Not allowed to timeout. This is a cleanup state.
-                            },
-                        }
-                    },
-                }
-            },
-            QInitQueryProj::RemoveActiveQuery { w_active_queries: _, response: _ }
-          | QInitQueryProj::Complete => {
+            InnerTQProj::Cleanup(_)
+          | InnerTQProj::Complete => {
                 // Not allowed to timeout. This is a cleanup state.
             },
         }
 
         loop {
             let mut this = self.as_mut().project();
+            match this.inner.as_mut().project() {
+                InnerTQProj::Fresh => {
+                    this.inner.set_running(Query::Initial);
+            
+                    // Next loop: poll tq_socket and in_flight to start getting the TCP socket and
+                    // inserting the query ID into the in-flight map.
+                    continue;
+                },
+                InnerTQProj::Running { mut tq_socket, mut send_query } => {
+                    match (send_query.as_mut().project(), tq_socket.as_mut().project()) {
+                        (QSendQueryProj::Fresh(_), TQSocketProj::Fresh)
+                      | (QSendQueryProj::Fresh(_), TQSocketProj::GetTcpState(_))
+                      | (QSendQueryProj::Fresh(_), TQSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
+                      | (QSendQueryProj::Fresh(_), TQSocketProj::InitTcp { join_handle: _ })
+                      | (QSendQueryProj::Fresh(_), TQSocketProj::Closed(_)) => {
+                            // We don't poll the receiver until the QSendQuery state is Complete.
+            
+                            match tq_socket.poll(this.socket, cx) {
+                                PollSocket::Error(error) => {
+                                    this.inner.set_cleanup(this.socket);
+            
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                PollSocket::Continue => {
+                                    continue;
+                                },
+                                PollSocket::Pending => {
+                                    // The TQSocket is the only future that we are waiting on,
+                                    // besides the timeout. We are already registered with the
+                                    // in-flight map and cannot send or receive a query until a
+                                    // socket is established.
+                                    return Poll::Pending;
+                                },
+                            }
+                        },
+                        (QSendQueryProj::Fresh(_), TQSocketProj::Acquired { tcp_socket, kill_tcp: _ }) => {
+                            // We don't poll the receiver until the QSendQuery state is Complete.
+            
+                            let socket = this.socket.clone();
+                            let tcp_socket = tcp_socket.clone();
+            
+                            if let PollSocket::Error(error) = tq_socket.poll(this.socket, cx) {
+                                this.inner.set_cleanup(this.socket);
+            
+                                // Next loop will poll for the in-flight map lock to clean up the
+                                // query ID before returning the response.
+                                continue;
+                            }
+            
+                            let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
+                            let mut write_wire = WriteWire::from_bytes(&mut raw_message);
+                            if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
+                                this.inner.set_cleanup(this.socket);
+            
+                                // Next loop will poll for the in-flight map lock to clean up the
+                                // query ID before returning the response.
+                                continue;
+                            };
+                            let wire_length = write_wire.current_len();
+            
+                            println!("Sending on TCP socket {} :: {:?}", this.socket.upstream_socket, this.query);
+            
+                            let send_query_future = async move {
+                                let socket = socket;
+                                let tcp_socket = tcp_socket;
+                                let wire_length = wire_length;
+            
+                                socket.recent_messages_sent.store(true, Ordering::Release);
+                                let mut w_tcp_stream = tcp_socket.lock().await;
+                                let bytes_written = w_tcp_stream.write(&raw_message[..wire_length]).await?;
+                                drop(w_tcp_stream);
+                                // Verify that the correct number of bytes were written.
+                                if bytes_written != wire_length {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        format!("Incorrect number of bytes sent to TCP stream; expected {wire_length} bytes but sent {bytes_written} bytes"),
+                                    ));
+                                }
+            
+                                return Ok(());
+                            }.boxed();
+            
+                            send_query.set_send_query(send_query_future);
+            
+                            // Next loop will begin to poll SendQuery. This will get the lock and
+                            // the TcpStream and write the bytes out.
+                            continue;
+                        },
+                        (QSendQueryProj::SendQuery(_, send_query_future), _) => {
+                            // We don't poll the receiver until the QSendQuery state is Complete.
+                            match (send_query_future.as_mut().poll(cx), tq_socket.poll(this.socket, cx)) {
+                                (_, PollSocket::Error(error))
+                                | (Poll::Ready(Err(error)), _) => {
+                                    this.inner.set_cleanup(this.socket);
+            
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                (Poll::Ready(Ok(())), PollSocket::Continue | PollSocket::Pending) => {
+                                    send_query.set_complete();
+            
+                                    // Next loop will poll the receiver, now that a message has been
+                                    // sent out.
+                                    continue;
+                                },
+                                (Poll::Pending, PollSocket::Continue) => {
+                                    // If at least one of our futures needs to loop again, we should
+                                    // loop again unless an exit condition is reached.
+                                    continue;
+                                },
+                                (Poll::Pending, PollSocket::Pending) => {
+                                    // All tokens are pending. Will wake up if the TQSocket wakes
+                                    // us, the in-flight map lock becomes available, or the timeout
+                                    // occurs.
+                                    return Poll::Pending;
+                                },
+                            }
+                        },
+                        (QSendQueryProj::Complete(_), _) => {
+                            match this.result_receiver.as_mut().poll(cx) {
+                                Poll::Ready(_) => {
+                                    this.inner.set_cleanup(this.socket);
+            
+                                    // TODO
+                                    continue;
+                                },
+                                Poll::Pending => (),
+                            }
+            
+                            match tq_socket.poll(this.socket, cx) {
+                                PollSocket::Error(error) => {
+                                    this.inner.set_cleanup(this.socket);
+            
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                PollSocket::Continue => {
+                                    // If at least one of our futures needs to loop again, we should
+                                    // loop again unless an exit condition is reached.
+                                    continue;
+                                },
+                                PollSocket::Pending => {
+                                    // All tokens are pending. Will wake up if the TQSocket wakes
+                                    // us, the receiver has a response, or the timeout occurs.
+                                    return Poll::Pending;
+                                },
+                            }
+                        },
+                    }
+                },
+                InnerTQProj::Cleanup(w_active_queries) => {
+                    this.result_receiver.close();
+
+                    match w_active_queries.as_mut().poll(cx) {
+                        Poll::Ready(mut w_active_queries) => {
+                            w_active_queries.in_flight.remove(&this.query.id);
+                            w_active_queries.tcp_only.remove(&this.query.question);
+                            drop(w_active_queries);
+
+                            this.inner.set_complete();
+
+                            // TODO
+                            return Poll::Ready(());
+                        },
+                        Poll::Pending => {
+                            // TODO
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerTQProj::Complete => {
+                    panic!("TCP only query polled after completion");
+                },
+            }
+        }
+    }
+}
+
+#[pinned_drop]
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> PinnedDrop for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g> {
+    fn drop(mut self: Pin<&mut Self>) {
+        async fn cleanup(socket: Arc<MixedSocket>, query: Message) {
+            let mut w_active_queries = socket.active_queries.write().await;
+            let _ = w_active_queries.in_flight.remove(&query.id);
+            let _ = w_active_queries.tcp_only.remove(&query.question);
+            drop(w_active_queries);
+        }
+
+        match self.as_mut().project().inner.as_mut().project() {
+            InnerTQProj::Fresh
+          | InnerTQProj::Running { tq_socket: _, send_query: _ }
+          | InnerTQProj::Cleanup(_) => {
+                let socket = self.socket.clone();
+                let query = self.query.clone();
+                tokio::spawn(cleanup(socket, query));
+            },
+            InnerTQProj::Complete => {
+                // Nothing to do for active queries.
+            }
+        }
+    }
+}
+
+#[pin_project]
+struct TcpQuery<'a, 'b, 'c, 'd>
+where
+    'a: 'd + 'd
+{
+    socket: &'a Arc<MixedSocket>,
+    query: &'b mut Message,
+    #[pin]
+    inner: QInitQuery<'c, 'd>,
+}
+
+impl<'a, 'b, 'c, 'd> TcpQuery<'a, 'b, 'c, 'd> {
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message) -> Self {
+        Self {
+            socket,
+            query,
+            inner: QInitQuery::Fresh,
+        }
+    }
+}
+
+impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
+    type Output = io::Result<Message>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        loop {
+            let mut this = self.as_mut().project();
             // Poll the timeout, if the state allows for the query to time out.
             match this.inner.as_mut().project() {
                 QInitQueryProj::Fresh => {
-                    this.inner.set_read_active_query(&this.socket);
+                    this.inner.set_read_active_query(this.socket);
 
                     // TODO
                     continue;
@@ -1256,18 +1402,20 @@ impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b, 'c,
                     match r_active_queries.as_mut().poll(cx) {
                         Poll::Ready(r_active_queries) => {
                             match r_active_queries.tcp_only.get(&this.query.question) {
-                                Some(result_sender) => {
-                                    let result_receiver = result_sender.resubscribe();
+                                Some((query_id, result_sender)) => {
+                                    this.query.id = *query_id;
+                                    let result_receiver = result_sender.subscribe();
                                     drop(r_active_queries);
 
                                     this.inner.set_following(result_receiver);
+                                    // println!("{} Following(1) active query '{}'", this.socket.upstream_socket, this.query.question);
 
                                     // TODO
                                     continue;
                                 },
                                 None => {
                                     drop(r_active_queries);
-                                    this.inner.set_write_active_query(&this.socket);
+                                    this.inner.set_write_active_query(this.socket);
 
                                     // TODO
                                     continue;                
@@ -1284,21 +1432,48 @@ impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b, 'c,
                     match w_active_queries.as_mut().poll(cx) {
                         Poll::Ready(mut w_active_queries) => {
                             match w_active_queries.tcp_only.get(&this.query.question) {
-                                Some(result_sender) => {
-                                    let result_receiver = result_sender.resubscribe();
+                                Some((query_id, result_sender)) => {
+                                    this.query.id = *query_id;
+                                    let result_receiver = result_sender.subscribe();
                                     drop(w_active_queries);
 
                                     this.inner.set_following(result_receiver);
+                                    // println!("{} Following(2) active query '{}'", this.socket.upstream_socket, this.query.question);
 
                                     // TODO
                                     continue;
                                 },
                                 None => {
-                                    let (sender, result_receiver) = once_watch::channel();
-                                    w_active_queries.tcp_only.insert(this.query.question.clone(), result_receiver.resubscribe());
+                                    let (send_response, result_receiver) = once_watch::channel();
+
+                                    // This is the initial query ID. However, it could change if it
+                                    // is already in use.
+                                    this.query.id = rand::random();
+
+                                    // verify that ID is unique.
+                                    while w_active_queries.in_flight.contains_key(&this.query.id) {
+                                        this.query.id = rand::random();
+                                        // FIXME: should this fail after some number of non-unique
+                                        // keys? May want to verify that the list isn't full.
+                                    }
+
+                                    let socket = this.socket.clone();
+                                    let query = this.query.clone();
+                                    let join_handle = tokio::spawn({
+                                        let result_receiver = result_receiver.clone();
+                                        let socket = socket;
+                                        let mut query = query;
+                                        async move {
+                                            TcpQueryRunner::new(&socket, &mut query, result_receiver).await;
+                                        }
+                                    });
+
+                                    w_active_queries.in_flight.insert(this.query.id, (send_response, join_handle));
+                                    w_active_queries.tcp_only.insert(this.query.question.clone(), (this.query.id, result_receiver.subscribe()));
                                     drop(w_active_queries);
 
-                                    this.inner.set_registered(InnerTQ::Fresh, result_receiver);
+                                    this.inner.set_following(result_receiver);
+                                    // println!("{} Following(3) active query '{}'", this.socket.upstream_socket, this.query.question);
 
                                     // TODO
                                     continue;                
@@ -1311,278 +1486,6 @@ impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b, 'c,
                         },
                     }
                 },
-                QInitQueryProj::Registered(mut this_inner, mut result_receiver) => {
-                    match this_inner.as_mut().project() {
-                        InnerTQProj::Fresh => {
-                            let r_tcp_state = this.socket.tcp.read().boxed();
-                            let w_in_flight = this.socket.in_flight.write().boxed();
-        
-                            this_inner.set(InnerTQ::Running {
-                                tq_socket: TQSocket::GetTcpState(r_tcp_state),
-                                in_flight: QInFlight::WriteInFlight(w_in_flight),
-                            });
-        
-                            // Next loop: poll tq_socket and in_flight to start getting the TCP socket and
-                            // inserting the query ID into the in-flight map.
-                            continue;
-                        },
-                        InnerTQProj::Running { mut tq_socket, mut in_flight } => {
-                            let tq_socket_projection = tq_socket.as_mut().project();
-                            let in_flight_projection = in_flight.as_mut().project();
-        
-                            match (in_flight_projection, tq_socket_projection) {
-                                (QInFlightProj::Fresh, TQSocketProj::Fresh)
-                                | (QInFlightProj::Fresh, TQSocketProj::GetTcpState(_))
-                                | (QInFlightProj::Fresh, TQSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
-                                | (QInFlightProj::Fresh, TQSocketProj::InitTcp { join_handle: _ })
-                                | (QInFlightProj::Fresh, TQSocketProj::Acquired { tcp_socket: _, kill_tcp: _ })
-                                | (QInFlightProj::Fresh, TQSocketProj::Closed(_)) => {
-                                    match tq_socket.poll(this.socket, cx) {
-                                        PollSocket::Error(error) => {
-                                            let result = Err(error);
-
-                                            this.inner.set_remove_active_query(result, &this.socket);
-                        
-                                            // Nothing to clean up. Not yet in-flight map.
-                                            continue;
-                                        },
-                                        PollSocket::Continue
-                                        | PollSocket::Pending => {
-                                            in_flight.set_write_in_flight(this.socket);
-        
-                                            // Another loop is needed to poll the in-flight map, even if the
-                                            // TQSocket returned Pending.
-                                            continue;
-                                        },
-                                    }
-                                },
-                                (QInFlightProj::WriteInFlight(w_in_flight), TQSocketProj::Fresh)
-                                | (QInFlightProj::WriteInFlight(w_in_flight), TQSocketProj::GetTcpState(_))
-                                | (QInFlightProj::WriteInFlight(w_in_flight), TQSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
-                                | (QInFlightProj::WriteInFlight(w_in_flight), TQSocketProj::InitTcp { join_handle: _ })
-                                | (QInFlightProj::WriteInFlight(w_in_flight), TQSocketProj::Acquired { tcp_socket: _, kill_tcp: _ })
-                                | (QInFlightProj::WriteInFlight(w_in_flight), TQSocketProj::Closed(_)) => {
-                                    match (w_in_flight.as_mut().poll(cx), tq_socket.poll(this.socket, cx)) {
-                                        (_, PollSocket::Error(error)) => {
-                                            let result = Err(error);
-
-                                            this.inner.set_remove_active_query(result, &this.socket);
-
-                                            // Nothing to clean up. Not yet in-flight map.
-                                            continue;
-                                        },
-                                        (Poll::Ready(mut w_in_flight), PollSocket::Continue | PollSocket::Pending) => {
-        
-                                            // This is the initial query ID. However, it could change if it
-                                            // is already in use.
-                                            this.query.id = rand::random();
-        
-                                            // verify that ID is unique.
-                                            while w_in_flight.contains_key(&this.query.id) {
-                                                this.query.id = rand::random();
-                                                // FIXME: should this fail after some number of non-unique
-                                                // keys? May want to verify that the list isn't full.
-                                            }
-                                            w_in_flight.insert(this.query.id, InFlight { send_response: result_receiver.get_sender() });
-                                            drop(w_in_flight);
-        
-                                            in_flight.set_in_flight();
-        
-                                            // Next loop will either establish a QSendQuery if the TQSocket
-                                            // is already Acquired or will poll the TQSocket until it is so
-                                            // the query can be sent.
-                                            continue;
-                                        },
-                                        (Poll::Pending, PollSocket::Continue) => {
-                                            // If at least one of the futures says to loop again, we should.
-                                            continue;
-                                        },
-                                        (Poll::Pending, PollSocket::Pending) => {
-                                            // If both futures are pending, then the entire future is
-                                            // pending. This will wake up again once TQSocket wakes us, the
-                                            // in-flight map lock becomes available, or the query timeout
-                                            // occurs.
-                                            return Poll::Pending;
-                                        },
-                                    }
-                                },
-                                (QInFlightProj::InFlight { send_query: QSendQuery::Fresh(_) }, TQSocketProj::Fresh)
-                                | (QInFlightProj::InFlight { send_query: QSendQuery::Fresh(_) }, TQSocketProj::GetTcpState(_))
-                                | (QInFlightProj::InFlight { send_query: QSendQuery::Fresh(_) }, TQSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
-                                | (QInFlightProj::InFlight { send_query: QSendQuery::Fresh(_) }, TQSocketProj::InitTcp { join_handle: _ })
-                                | (QInFlightProj::InFlight { send_query: QSendQuery::Fresh(_) }, TQSocketProj::Closed(_)) => {
-                                    // We don't poll the receiver until the QSendQuery state is Complete.
-        
-                                    match tq_socket.poll(this.socket, cx) {
-                                        PollSocket::Error(error) => {
-                                            in_flight.set_remove_in_flight(this.socket, Err(error));
-        
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        },
-                                        PollSocket::Continue => {
-                                            continue;
-                                        },
-                                        PollSocket::Pending => {
-                                            // The TQSocket is the only future that we are waiting on,
-                                            // besides the timeout. We are already registered with the
-                                            // in-flight map and cannot send or receive a query until a
-                                            // socket is established.
-                                            return Poll::Pending;
-                                        },
-                                    }
-                                },
-                                (QInFlightProj::InFlight { send_query: send_query_state @ QSendQuery::Fresh(_) }, TQSocketProj::Acquired { tcp_socket, kill_tcp: _ }) => {
-                                    // We don't poll the receiver until the QSendQuery state is Complete.
-        
-                                    let socket = this.socket.clone();
-                                    let tcp_socket = tcp_socket.clone();
-        
-                                    if let PollSocket::Error(error) = tq_socket.poll(this.socket, cx) {
-                                        in_flight.set_remove_in_flight(this.socket, Err(error));
-        
-                                        // Next loop will poll for the in-flight map lock to clean up the
-                                        // query ID before returning the response.
-                                        continue;
-                                    }
-        
-                                    let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
-                                    let mut write_wire = WriteWire::from_bytes(&mut raw_message);
-                                    if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
-                                        in_flight.set_remove_in_flight(this.socket, Err(io::Error::new(io::ErrorKind::InvalidData, wire_error)));
-        
-                                        // Next loop will poll for the in-flight map lock to clean up the
-                                        // query ID before returning the response.
-                                        continue;
-                                    };
-                                    let wire_length = write_wire.current_len();
-        
-                                    println!("Sending on TCP socket {} :: {:?}", this.socket.upstream_socket, this.query);
-        
-                                    let send_query = async move {
-                                        let socket = socket;
-                                        let tcp_socket = tcp_socket;
-                                        let wire_length = wire_length;
-        
-                                        socket.recent_messages_sent.store(true, Ordering::Release);
-                                        let mut w_tcp_stream = tcp_socket.lock().await;
-                                        let bytes_written = w_tcp_stream.write(&raw_message[..wire_length]).await?;
-                                        drop(w_tcp_stream);
-                                        // Verify that the correct number of bytes were written.
-                                        if bytes_written != wire_length {
-                                            return Err(io::Error::new(
-                                                io::ErrorKind::InvalidData,
-                                                format!("Incorrect number of bytes sent to TCP stream; expected {wire_length} bytes but sent {bytes_written} bytes"),
-                                            ));
-                                        }
-        
-                                        return Ok(());
-                                    }.boxed();
-
-                                    send_query_state.set_send_query(send_query);
-        
-                                    // Next loop will begin to poll SendQuery. This will get the lock and
-                                    // the TcpStream and write the bytes out.
-                                    continue;
-                                },
-                                (QInFlightProj::InFlight { send_query: send_query_state @ QSendQuery::SendQuery(_, _) }, _) => {
-                                    // We don't poll the receiver until the QSendQuery state is Complete.
-        
-                                    let send_query = match send_query_state {
-                                        QSendQuery::Fresh(query_type) => panic!("Previous match guaranteed that send query state is QSendQuery::SendQuery but it was QSendQuery::Fresh({query_type})"),
-                                        QSendQuery::SendQuery(_, send_query) => send_query,
-                                        QSendQuery::Complete(query_type) => panic!("Previous match guaranteed that send query state is QSendQuery::SendQuery but it was QSendQuery::Complete({query_type})"),
-                                    };
-        
-                                    match (send_query.as_mut().poll(cx), tq_socket.poll(this.socket, cx)) {
-                                        (_, PollSocket::Error(error))
-                                        | (Poll::Ready(Err(error)), _) => {
-                                            in_flight.set_remove_in_flight(this.socket, Err(error));
-        
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        },
-                                        (Poll::Ready(Ok(())), PollSocket::Continue | PollSocket::Pending) => {
-                                            send_query_state.set_complete();
-        
-                                            // Next loop will poll the receiver, now that a message has been
-                                            // sent out.
-                                            continue;
-                                        },
-                                        (Poll::Pending, PollSocket::Continue) => {
-                                            // If at least one of our futures needs to loop again, we should
-                                            // loop again unless an exit condition is reached.
-                                            continue;
-                                        },
-                                        (Poll::Pending, PollSocket::Pending) => {
-                                            // All tokens are pending. Will wake up if the TQSocket wakes
-                                            // us, the in-flight map lock becomes available, or the timeout
-                                            // occurs.
-                                            return Poll::Pending;
-                                        },
-                                    }
-                                },
-                                (QInFlightProj::InFlight { send_query: QSendQuery::Complete(_) }, _) => {
-                                    if let LoopPoll::Continue = handle_poll_result_receiver(result_receiver.as_mut().poll(cx), in_flight.as_mut(), this.socket) {
-                                        continue;
-                                    }
-        
-                                    match tq_socket.poll(this.socket, cx) {
-                                        PollSocket::Error(error) => {
-                                            in_flight.set_remove_in_flight(this.socket, Err(error));
-        
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        },
-                                        PollSocket::Continue => {
-                                            // If at least one of our futures needs to loop again, we should
-                                            // loop again unless an exit condition is reached.
-                                            continue;
-                                        },
-                                        PollSocket::Pending => {
-                                            // All tokens are pending. Will wake up if the TQSocket wakes
-                                            // us, the receiver has a response, or the timeout occurs.
-                                            return Poll::Pending;
-                                        },
-                                    }
-                                },
-                                (QInFlightProj::RemoveInFlight { w_in_flight, response }, _) => {
-                                    // This is a cleanup state so we don't care about
-                                    // polling the socket.
-        
-                                    match w_in_flight.as_mut().poll(cx) {
-                                        Poll::Ready(mut w_in_flight) => {
-                                            w_in_flight.remove(&this.query.id);
-                                            drop(w_in_flight);
-                                            result_receiver.close();
-                                            let response = response.take();
-
-                                            // Cleanup is done. We can pull the response out of the Option
-                                            // and return it. It is stored this way since the Error type
-                                            // does not support Clone.
-                                            match response {
-                                                Some(response) => {
-                                                    this.inner.set_remove_active_query(response, &this.socket);
-
-                                                    continue;
-                                                },
-                                                None => panic!("Inconsistent state reached. response is only supposed to be None so the value can be taken out of it"),
-                                            }
-                                        },
-                                        Poll::Pending => {
-                                            // Exit loop. Will wake up once the in-flight map lock becomes
-                                            // available.
-                                            return Poll::Pending;
-                                        },
-                                    }
-                                },
-                            }
-                        },
-                    }
-                },
                 QInitQueryProj::Following(mut result_receiver) => {
                     match result_receiver.as_mut().poll(cx) {
                         Poll::Ready(Ok(response)) => {
@@ -1592,33 +1495,12 @@ impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b, 'c,
                             return Poll::Ready(Ok(response));
                         },
                         Poll::Ready(Err(once_watch::RecvError::Closed)) => {
+                            let error = io::Error::from(io::ErrorKind::Interrupted);
+
                             this.inner.set_complete();
 
                             // TODO
-                            return Poll::Ready(Err(io::Error::from(io::ErrorKind::Interrupted)));
-                        },
-                        Poll::Pending => {
-                            // TODO
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                QInitQueryProj::RemoveActiveQuery { w_active_queries, response } => {
-                    match w_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => {
-                            let _ = w_active_queries.tcp_only.remove(&this.query.question);
-                            drop(w_active_queries);
-
-                            // Cleanup is done. We can pull the response out of the Option and return it.
-                            // It is stored this way since the Error type does not support Clone.
-                            match response.take() {
-                                Some(response) => {
-                                    this.inner.set_complete();
-
-                                    return Poll::Ready(response);
-                                },
-                                None => panic!("Inconsistent state reached. response is only supposed to be None so the value can be taken out of it"),
-                            }
+                            return Poll::Ready(Err(error));
                         },
                         Poll::Pending => {
                             // TODO
@@ -1628,67 +1510,6 @@ impl<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for TcpQuery<'a, 'b, 'c,
                 },
                 QInitQueryProj::Complete => panic!("TcpQuery cannot be polled after completion"),
             }    
-        }
-    }
-}
-
-#[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'h, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v, 'w, 'x> PinnedDrop for TcpQuery<'a, 'b, 'c, 'd, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
-    fn drop(mut self: Pin<&mut Self>) {
-        match self.as_mut().project().inner.as_mut().project() {
-            QInitQueryProj::Fresh
-          | QInitQueryProj::ReadActiveQuery(_)
-          | QInitQueryProj::WriteActiveQuery(_) => {
-                // Nothing to do.
-            },
-            QInitQueryProj::Registered(mut this_inner, result_receiver) => {
-                match this_inner.as_mut().project() {
-                    InnerTQProj::Fresh => (),
-                    InnerTQProj::Running { tq_socket: _, mut in_flight } => {
-                        match in_flight.as_mut().project() {
-                            QInFlightProj::Fresh
-                          | QInFlightProj::WriteInFlight(_) => {
-                                // Nothing to do for in flight.
-                            },
-                            QInFlightProj::InFlight { send_query: _ }
-                          | QInFlightProj::RemoveInFlight { w_in_flight: _, response: _ } => {
-                                let result_receiver = result_receiver.clone();
-                                let tcp_socket = self.socket.clone();
-                                let query_id = self.query.id;
-                                tokio::spawn(async move {
-                                    let mut w_in_flight = tcp_socket.in_flight.write().await;
-                                    w_in_flight.remove(&query_id);
-                                    drop(w_in_flight);
-                                    result_receiver.close();
-                                });
-                            },
-                        }
-                    },
-                }
-
-                let socket = self.socket.clone();
-                let question = self.query.question.clone();
-                tokio::spawn(async move {
-                    let mut w_active_queries = socket.active_queries.write().await;
-                    w_active_queries.tcp_only.remove(&question);
-                    drop(w_active_queries);
-                });
-            },
-            QInitQueryProj::Following(_) => {
-                // Nothing to do for active queries.
-            },
-            QInitQueryProj::RemoveActiveQuery { w_active_queries: _, response: _ } => {
-                let socket = self.socket.clone();
-                let question = self.query.question.clone();
-                tokio::spawn(async move {
-                    let mut w_active_queries = socket.active_queries.write().await;
-                    w_active_queries.tcp_only.remove(&question);
-                    drop(w_active_queries);
-                });
-            },
-            QInitQueryProj::Complete => {
-                // Nothing to do for active queries.
-            },
         }
     }
 }
@@ -1722,10 +1543,6 @@ impl MixedSocket {
 
                 tcp_kill.awake();
 
-                // let w_tcp_socket = socket.lock().await;
-                // SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
-                // drop(w_tcp_socket);
-
                 // Note: this task is not responsible for actual cleanup. Once the listener closes, it
                 // will kill any active queries and change the TcpState.
             },
@@ -1742,12 +1559,8 @@ impl MixedSocket {
 
                 // If the socket still initialized, shut it down immediately.
                 match receiver.await {
-                    Ok((socket, tcp_kill)) => {
+                    Ok((_, tcp_kill)) => {
                         tcp_kill.awake();
-
-                        // let w_tcp_socket = socket.lock().await;
-                        // SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
-                        // drop(w_tcp_socket);
                     },
                     Err(_) => (), //< Successful cancellation
                 }
@@ -1779,17 +1592,12 @@ impl MixedSocket {
 
         let mut w_state = self.tcp.write().await;
         match &*w_state {
-            TcpState::Managed { socket, kill } => {
-                let socket = socket.clone();
+            TcpState::Managed { socket: _, kill } => {
                 let kill_tcp = kill.clone();
                 *w_state = TcpState::Blocked;
                 drop(w_state);
 
                 kill_tcp.awake();
-
-                // let w_tcp_socket = socket.lock().await;
-                // SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
-                // drop(w_tcp_socket);
 
                 // Note: this task is not responsible for actual cleanup. Once the listener closes, it
                 // will kill any active queries and change the TcpState.
@@ -1845,11 +1653,11 @@ impl MixedSocket {
                         Ok(response) => {
                             self.recent_messages_received.store(true, Ordering::Release);
                             let response_id = response.id;
-                            let r_in_flight = self.in_flight.read().await;
-                            if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
-                                sender.send(response);
+                            let r_active_queries = self.active_queries.read().await;
+                            if let Some((sender, _)) = r_active_queries.in_flight.get(&response_id) {
+                                let _ = sender.send(response);
                             };
-                            drop(r_in_flight);
+                            drop(r_active_queries);
                             // Cleanup is handled by the management processes. This
                             // process is free to move on.
                         },
@@ -1882,20 +1690,14 @@ impl MixedSocket {
 
         let mut w_state = self.tcp.write().await;
         match &*w_state {
-            TcpState::Managed { socket, kill: managed_kill_tcp } => {
+            TcpState::Managed { socket: _, kill: managed_kill_tcp } => {
                 // If the managed socket is the one that we are cleaning up...
                 if &kill_tcp == managed_kill_tcp {
                     // We are responsible for cleanup.
-                    let socket = socket.clone();
                     *w_state = TcpState::None;
                     drop(w_state);
 
                     kill_tcp.awake();
-
-                    // let w_tcp_socket = socket.lock().await;
-                    // // Tries to shut down the socket. But error does not particularly matter.
-                    // let _ = SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both);
-                    // drop(w_tcp_socket);
 
                 // If the managed socket isn't the one that we are cleaning up...
                 } else {
@@ -1917,53 +1719,31 @@ enum UdpState {
 }
 
 #[pin_project(PinnedDrop)]
-struct UdpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x>
+struct UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
 where
-    'a: 'd + 'r + 'v + 'x
+    'a: 'd + 'h
 {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
     #[pin]
     timeout: Sleep,
     #[pin]
-    inner: QInitQuery<'w, 'x, InnerUQ<'c, 'd, 'e, 'q, 'r, 't, 'u, 'v>>,
+    result_receiver: once_watch::Receiver<Message>,
+    #[pin]
+    inner: InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>,
 }
 
-#[pin_project(project = InnerUQProj)]
-enum InnerUQ<'c, 'd, 'e, 'q, 'r, 't, 'u, 'v> {
-    Fresh { udp_retransmissions: u8 },
-    Running {
-        #[pin]
-        socket: EitherSocket<'c, 'd, 'e>,
-        #[pin]
-        in_flight: QInFlight<'q, 'r, 't, 'u, 'v>,
-    },
-}
-
-impl<'a, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v> InnerUQ<'c, 'd, 'e, 'q, 'r, 't, 'u, 'v>
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
 where
-    'a: 'd + 'r + 'v
+    'h: 'g
 {
-    fn set_running_udp(mut self: std::pin::Pin<&mut Self>, retransmits: u8, socket: &'a Arc<MixedSocket>) {
-        let r_udp_state = socket.udp.read().boxed();
-        let w_in_flight = socket.in_flight.write().boxed();
-
-        self.set(InnerUQ::Running {
-            socket: EitherSocket::Udp { uq_socket: UQSocket::GetReadUdpState(r_udp_state), retransmits },
-            in_flight: QInFlight::WriteInFlight(w_in_flight),
-        });
-    }
-}
-
-impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> UdpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
-    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, timeout: Option<Duration>) -> Self {
-        let timeout = timeout.unwrap_or(Duration::from_millis(UDP_RETRANSMIT_MS));
-
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Message>) -> Self {
         Self {
             socket,
             query,
-            timeout: tokio::time::sleep(timeout),
-            inner: QInitQuery::Fresh,
+            timeout: tokio::time::sleep(Duration::from_millis(UDP_RETRANSMIT_MS)),
+            result_receiver,
+            inner: InnerUQ::Fresh { udp_retransmissions: UDP_RETRANSMISSIONS },
         }
     }
 
@@ -1976,137 +1756,127 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> UdpQuery<'a, 'b, 'c, 'd, 'e
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
-    type Output = io::Result<Message>;
+#[pin_project(project = InnerUQProj)]
+enum InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>
+where
+    'h: 'g
+{
+    Fresh { udp_retransmissions: u8 },
+    Running {
+        #[pin]
+        socket: EitherSocket<'c, 'd, 'e>,
+        #[pin]
+        send_query: QSendQuery<'f>,
+    },
+    Cleanup(BoxFuture<'g, RwLockWriteGuard<'h, ActiveQueries>>),
+    Complete,
+}
+
+impl<'a, 'c, 'd, 'e, 'f, 'g, 'h> InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>
+where
+    'a: 'd + 'h
+{
+    pub fn set_running_udp(mut self: std::pin::Pin<&mut Self>, udp_retransmissions: u8, query_type: Query) {
+        self.set(Self::Running {
+            socket: EitherSocket::Udp { uq_socket: UQSocket::Fresh, retransmits: udp_retransmissions },
+            send_query: QSendQuery::Fresh(query_type),
+        });
+    }
+
+    fn set_running_tcp(mut self: std::pin::Pin<&mut Self>, query_type: Query) {
+        self.set(InnerUQ::Running {
+            socket: EitherSocket::Tcp { tq_socket: TQSocket::Fresh },
+            send_query: QSendQuery::Fresh(query_type),
+        });
+    }
+
+    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
+        let w_active_queries = socket.active_queries.write().boxed();
+
+        self.set(Self::Cleanup(w_active_queries));
+    }
+
+    pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
+        self.set(Self::Complete);
+    }
+}
+
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+    type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        // Poll the timeout, if the state allows for the query to time out.
         let mut this = self.as_mut().project();
         match this.inner.as_mut().project() {
-            QInitQueryProj::Fresh
-            | QInitQueryProj::ReadActiveQuery(_)
-            | QInitQueryProj::WriteActiveQuery(_) => {
+            InnerUQProj::Fresh { udp_retransmissions: 0 } => {
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    // We do not yet know how many UDP retransmissions are allowed. We will just
-                    // keep resetting. But we need to poll it so that we are registered.
+                    // If we run out of UDP retransmissions before the query has even begun,
+                    // then it is time to transmit via TCP.
+                    // Setting the socket state to TQSocket::Fresh will cause the socket to be
+                    // initialized (if needed) and then a message sent over that socket.
+                    this.inner.set_running_tcp(Query::Initial);
+                    self.as_mut().reset_timeout(Duration::from_millis(TCP_TIMEOUT_MS));
 
+                    // TODO
+                }
+            },
+            InnerUQProj::Fresh { udp_retransmissions: udp_retransmissions @ 1.. } => {
+                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    // If we time out before the first query has begin, burn a retransmission.
+                    *udp_retransmissions = udp_retransmissions.saturating_sub(1);
                     self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
 
                     // TODO
                 }
             },
-            QInitQueryProj::Registered(mut this_inner, _) => {
-                match this_inner.as_mut().project() {
-                    InnerUQProj::Fresh { udp_retransmissions: 0 } => {
+            InnerUQProj::Running { mut socket, mut send_query } => {
+                match (send_query.as_mut().project(), socket.as_mut().project()) {
+                    (QSendQueryProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 })
+                  | (QSendQueryProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 })
+                  | (QSendQueryProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                            // If we run out of UDP retransmissions before the query has even begun,
-                            // then it is time to transmit via TCP.
-                            // Setting the socket state to TQSocket::Fresh will cause the socket to be
-                            // initialized (if needed) and then a message sent over that socket.
-                            this_inner.set(InnerUQ::Running {
-                                socket: EitherSocket::Tcp { tq_socket: TQSocket::Fresh },
-                                in_flight: QInFlight::Fresh,
-                            });
-    
-                            self.as_mut().reset_timeout(Duration::from_millis(UDP_TIMEOUT_MS));
-    
-                            // TODO
-                        }
-                    },
-                    InnerUQProj::Fresh { udp_retransmissions } => {
-                        if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                            // If we time out before the first query has begin, burn a retransmission.
-                            *udp_retransmissions -= 1;
-                            self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
-    
-                            // TODO
-                        }
-                    },
-                    InnerUQProj::Running { mut socket, mut in_flight } => {
-                        let socket_projection = socket.as_mut().project();
-                        let in_flight_projection = in_flight.as_mut().project();
-                        match (socket_projection, in_flight_projection) {
-                            (EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }, QInFlightProj::Fresh)
-                            | (EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }, QInFlightProj::WriteInFlight(_))
-                            | (EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }, QInFlightProj::InFlight { send_query: QSendQuery::Fresh(_) })
-                            | (EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }, QInFlightProj::InFlight { send_query: QSendQuery::SendQuery(_, _) }) => {
-                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                                    // Setting the socket state to TQSocket::Fresh will cause the socket
-                                    // to be initialized (if needed) and then a message sent over that
-                                    // socket. TCP is always treated as a re-query.
-                                    socket.set(EitherSocket::Tcp { tq_socket: TQSocket::Fresh });
-                                    self.as_mut().reset_timeout(Duration::from_millis(UDP_TIMEOUT_MS));
-    
-                                    // TODO
-                                }
-                            },
-                            | (EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }, QInFlightProj::InFlight { send_query: send_query @ QSendQuery::Complete(_) }) => {
-                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                                    // Setting the socket state to TQSocket::Fresh will cause the socket
-                                    // to be initialized (if needed) and then a message sent over that
-                                    // socket.
-                                    send_query.set_fresh(Query::Retransmit);
-                                    socket.set(EitherSocket::Tcp { tq_socket: TQSocket::Fresh });
-                                    self.as_mut().reset_timeout(Duration::from_millis(UDP_TIMEOUT_MS));
-    
-                                    // TODO
-                                }
-                            },
-                            (EitherSocketProj::Udp { uq_socket: _, retransmits: retransmits @ 1.. }, QInFlightProj::Fresh)
-                            | (EitherSocketProj::Udp { uq_socket: _, retransmits: retransmits @ 1.. }, QInFlightProj::WriteInFlight(_))
-                            | (EitherSocketProj::Udp { uq_socket: _, retransmits: retransmits @ 1.. }, QInFlightProj::InFlight { send_query: QSendQuery::Fresh(_) })
-                            | (EitherSocketProj::Udp { uq_socket: _, retransmits: retransmits @ 1.. }, QInFlightProj::InFlight { send_query: QSendQuery::SendQuery(_, _) }) => {
-                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                                    // If we are currently sending a query or have not sent one yet,
-                                    // burn the retransmission.
-                                    *retransmits -= 1;
-                                    self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
-    
-                                    // TODO
-                                }
-                            },
-                            (EitherSocketProj::Udp { uq_socket: _, retransmits }, QInFlightProj::InFlight { send_query: send_query @ QSendQuery::Complete(_) }) => {
-                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                                    // A previous query has succeeded. Setting the state to Fresh will
-                                    // cause the state machine to send another query and drive it to
-                                    // Complete.
-                                    send_query.set_fresh(Query::Retransmit);
-                                    *retransmits -= 1;
-                                    self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
-    
-                                    // TODO
-                                }
-                            },
-                            (EitherSocketProj::Tcp { tq_socket: _ }, QInFlightProj::Fresh)
-                            | (EitherSocketProj::Tcp { tq_socket: _ }, QInFlightProj::WriteInFlight(_)) => {
-                                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                                    this.inner.set_remove_active_query(Err(io::Error::from(io::ErrorKind::TimedOut)), &this.socket);
-    
-                                    // TODO
-                                }
-                            },
-                            (EitherSocketProj::Tcp { tq_socket: _ }, QInFlightProj::InFlight { send_query: _ }) => {
-                                in_flight.set_remove_in_flight(this.socket, Err(io::Error::from(io::ErrorKind::TimedOut)));
-    
-                                // TODO
-                            },
-                            (_, QInFlightProj::RemoveInFlight { w_in_flight: _, response: _ }) => {
-                                // Not allowed to timeout. This is a cleanup state.
-                            },
-                        }
-                    },
-                }        
-            },
-            QInitQueryProj::Following(_) => {
-                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    this.inner.set_complete();
+                            // Setting the socket state to TQSocket::Fresh will cause the socket
+                            // to be initialized (if needed) and then a message sent over that
+                            // socket.
+                            this.inner.set_running_tcp(Query::Retransmit);
+                            self.as_mut().reset_timeout(Duration::from_millis(TCP_TIMEOUT_MS));
 
-                    // TODO
-                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                            // TODO
+                        }
+                    },
+                    (QSendQueryProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. })
+                  | (QSendQueryProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
+                        if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            // If we are currently sending a query or have not sent one yet,
+                            // burn the retransmission.
+                            *udp_retransmissions = udp_retransmissions.saturating_sub(1);
+                            self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
+
+                            // TODO
+                        }
+                    },
+                    (QSendQueryProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
+                        if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            // A previous query has succeeded. Setting the state to Fresh will
+                            // cause the state machine to send another query and drive it to
+                            // Complete.
+                            send_query.set_fresh(Query::Retransmit);
+                            *udp_retransmissions = udp_retransmissions.saturating_sub(1);
+                            self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
+
+                            // TODO
+                        }
+                    },
+                    (_, EitherSocketProj::Tcp { tq_socket: _ }) => {
+                        if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            this.inner.set_cleanup(this.socket);
+
+                            // TODO
+                        }
+                    },
                 }
             },
-            QInitQueryProj::RemoveActiveQuery { w_active_queries: _, response: _ }
-          | QInitQueryProj::Complete => {
+            InnerUQProj::Cleanup(_)
+          | InnerUQProj::Complete => {
                 // Not allowed to timeout. This is a cleanup state.
             },
         }
@@ -2114,8 +1884,324 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
         loop {
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
+                InnerUQProj::Fresh { udp_retransmissions } => {
+                    let retransmissions = *udp_retransmissions;
+
+                    this.inner.set_running_udp(retransmissions, Query::Initial);
+
+                    // Next loop: poll tq_socket and in_flight to start getting the TCP socket and
+                    // inserting the query ID into the in-flight map.
+                    continue;
+                },
+                InnerUQProj::Running { socket: mut q_socket, mut send_query } => {
+                    match (send_query.as_mut().project(), q_socket.as_mut().project()) {
+                        (QSendQueryProj::Fresh(query_type), EitherSocketProj::Udp { mut uq_socket, retransmits: _ }) => {
+                            match query_type {
+                                Query::Initial => (),
+                                Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
+                                    Poll::Ready(_) => {
+                                        this.inner.set_cleanup(&this.socket);
+
+                                        // Next loop will poll for the in-flight map lock to clean
+                                        // up the query ID before returning the response.
+                                        continue;
+                                    },
+                                    Poll::Pending => (),
+                                },
+                            };
+
+                            let uq_socket_result = match uq_socket.poll(this.socket, cx) {
+                                PollSocket::Error(error) => {
+                                    this.inner.set_cleanup(&this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                PollSocket::Continue => LoopPoll::Continue,
+                                PollSocket::Pending => LoopPoll::Pending,
+                            };
+
+                            if let UQSocketProj::Acquired { udp_socket, kill_udp: _ } = uq_socket.as_mut().project() {
+                                let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
+                                let mut write_wire = WriteWire::from_bytes(&mut raw_message);
+                                if let Err(wire_error) = this.query.to_wire_format(&mut write_wire, &mut Some(CompressionMap::new())) {
+                                    this.inner.set_cleanup(&this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                };
+                                let wire_length = write_wire.current_len();
+
+                                let socket = this.socket.clone();
+                                let udp_socket = udp_socket.clone();
+
+                                println!("Sending on UDP socket {} :: {:?}", this.socket.upstream_socket, this.query);
+
+                                let send_query_future = async move {
+                                    let socket = socket;
+                                    let udp_socket = udp_socket;
+                                    let wire_length = wire_length;
+
+                                    socket.recent_messages_sent.store(true, Ordering::Release);
+                                    let bytes_written = udp_socket.send(&raw_message[..wire_length]).await?;
+                                    // Verify that the correct number of bytes were written.
+                                    if bytes_written != wire_length {
+                                        return Err(io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            format!("Incorrect number of bytes sent to UDP socket; Expected {wire_length} bytes but sent {bytes_written} bytes"),
+                                        ));
+                                    }
+
+                                    return Ok(());
+                                }.boxed();
+
+                                send_query.set_send_query(send_query_future);
+
+                                // Next loop will begin to poll SendQuery. This will write the bytes
+                                // out.
+                                continue;
+                            }
+
+                            match uq_socket_result {
+                                LoopPoll::Continue => continue,
+                                LoopPoll::Pending => return Poll::Pending,
+                            }
+                        },
+                        (QSendQueryProj::Fresh(query_type), EitherSocketProj::Tcp { mut tq_socket }) => {
+                            match query_type {
+                                Query::Initial => (),
+                                Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
+                                    Poll::Ready(_) => {
+                                        this.inner.set_cleanup(&this.socket);
+
+                                        // Next loop will poll for the in-flight map lock to clean
+                                        // up the query ID before returning the response.
+                                        continue;
+                                    },
+                                    Poll::Pending => (),
+                                },
+                            };
+
+                            let tq_socket_result = match tq_socket.poll(this.socket, cx) {
+                                PollSocket::Error(error) => {
+                                    this.inner.set_cleanup(&this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                PollSocket::Continue => LoopPoll::Continue,
+                                PollSocket::Pending => LoopPoll::Pending,
+                            };
+
+                            if let TQSocketProj::Acquired { tcp_socket, kill_tcp: _ } = tq_socket.as_mut().project() {
+                                let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
+                                let mut write_wire = WriteWire::from_bytes(&mut raw_message);
+                                if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
+                                    this.inner.set_cleanup(&this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to clean up the
+                                    // query ID before returning the response.
+                                    continue;
+                                };
+                                let wire_length = write_wire.current_len();
+
+                                let socket = this.socket.clone();
+                                let tcp_socket = tcp_socket.clone();
+
+                                println!("Sending on TCP socket {} :: {:?}", this.socket.upstream_socket, this.query);
+
+                                let send_query_future = async move {
+                                    let socket = socket;
+                                    let tcp_socket = tcp_socket;
+                                    let wire_length = wire_length;
+
+                                    socket.recent_messages_sent.store(true, Ordering::Release);
+                                    let mut w_tcp_stream = tcp_socket.lock().await;
+                                    let bytes_written = w_tcp_stream.write(&raw_message[..wire_length]).await?;
+                                    drop(w_tcp_stream);
+                                    // Verify that the correct number of bytes were written.
+                                    if bytes_written != wire_length {
+                                        return Err(io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            format!("Incorrect number of bytes sent to TCP stream; expected {wire_length} bytes but sent {bytes_written} bytes"),
+                                        ));
+                                    }
+
+                                    return Ok(());
+                                }.boxed();
+
+                                send_query.set_send_query(send_query_future);
+
+                                // Next loop will begin to poll SendQuery. This will get the lock and
+                                // the TcpStream and write the bytes out.
+                                continue;
+                            }
+
+                            match tq_socket_result {
+                                LoopPoll::Continue => continue,
+                                LoopPoll::Pending => return Poll::Pending,
+                            }
+                        },
+                        (QSendQueryProj::SendQuery(query_type, send_query_future), _) => {
+                            match query_type {
+                                Query::Initial => (),
+                                Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
+                                    Poll::Ready(_) => {
+                                        this.inner.set_cleanup(&this.socket);
+
+                                        // Next loop will poll for the in-flight map lock to clean
+                                        // up the query ID before returning the response.
+                                        continue;
+                                    },
+                                    Poll::Pending => (),
+                                },
+                            };
+
+                            let q_socket_result = match q_socket.poll(this.socket, cx) {
+                                PollSocket::Error(error) => {
+                                    this.inner.set_cleanup(&this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                PollSocket::Continue => LoopPoll::Continue,
+                                PollSocket::Pending => LoopPoll::Pending,
+                            };
+
+                            match send_query_future.as_mut().poll(cx) {
+                                Poll::Ready(Err(error)) => {
+                                    this.inner.set_cleanup(&this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                Poll::Ready(Ok(())) => {
+                                    send_query.set_complete();
+
+                                    // Next loop will poll the receiver, now that a message has been
+                                    // sent out.
+                                    continue;
+                                },
+                                Poll::Pending => (),
+                            }
+
+                            match q_socket_result {
+                                LoopPoll::Continue => continue,
+                                LoopPoll::Pending => return Poll::Pending,
+                            }
+                        },
+                        (QSendQueryProj::Complete(_), _) => {
+                            match this.result_receiver.as_mut().poll(cx) {
+                                Poll::Ready(_) => {
+                                    this.inner.set_cleanup(&this.socket);
+
+                                    // TODO
+                                    continue;
+                                },
+                                Poll::Pending => (),
+                            }
+
+                            match q_socket.poll(this.socket, cx) {
+                                PollSocket::Error(error) => {
+                                    this.inner.set_cleanup(&this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                PollSocket::Continue => continue,
+                                PollSocket::Pending => return Poll::Pending,
+                            };
+                        },
+                    }
+                },
+                InnerUQProj::Cleanup(w_active_queries) => {
+                    this.result_receiver.close();
+
+                    match w_active_queries.as_mut().poll(cx) {
+                        Poll::Ready(mut w_active_queries) => {
+                            w_active_queries.in_flight.remove(&this.query.id);
+                            w_active_queries.tcp_or_udp.remove(&this.query.question);
+                            drop(w_active_queries);
+
+                            this.inner.set_complete();
+
+                            return Poll::Ready(());
+                        },
+                        Poll::Pending => {
+                            // TODO
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerUQProj::Complete => {
+                    panic!("UDP query polled after completion");
+                },
+            }
+        }
+    }
+}
+
+#[pinned_drop]
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+    fn drop(mut self: Pin<&mut Self>) {
+        async fn cleanup(socket: Arc<MixedSocket>, query: Message) {
+            let mut w_active_queries = socket.active_queries.write().await;
+            let _ = w_active_queries.in_flight.remove(&query.id);
+            let _ = w_active_queries.tcp_or_udp.remove(&query.question);
+            drop(w_active_queries);
+        }
+
+        match self.as_mut().project().inner.as_mut().project() {
+            InnerUQProj::Fresh { udp_retransmissions: _ }
+          | InnerUQProj::Running { socket: _, send_query: _ }
+          | InnerUQProj::Cleanup(_) => {
+                let socket = self.socket.clone();
+                let query = self.query.clone();
+                tokio::spawn(cleanup(socket, query));
+            },
+            InnerUQProj::Complete => {
+                // Nothing to do for active queries.
+            }
+        }
+    }
+}
+
+#[pin_project]
+struct UdpQuery<'a, 'b, 'c, 'd>
+where
+    'a: 'd
+{
+    socket: &'a Arc<MixedSocket>,
+    query: &'b mut Message,
+    #[pin]
+    inner: QInitQuery<'c, 'd>,
+}
+
+impl<'a, 'b, 'c, 'd> UdpQuery<'a, 'b, 'c, 'd> {
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message) -> Self {
+        Self {
+            socket,
+            query,
+            inner: QInitQuery::Fresh,
+        }
+    }
+}
+
+impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
+    type Output = io::Result<Message>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        loop {
+            let mut this = self.as_mut().project();
+            match this.inner.as_mut().project() {
                 QInitQueryProj::Fresh => {
-                    this.inner.set_read_active_query(&this.socket);
+                    this.inner.set_read_active_query(this.socket);
 
                     // TODO
                     continue;
@@ -2123,22 +2209,25 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                 QInitQueryProj::ReadActiveQuery(r_active_queries) => {
                     match r_active_queries.as_mut().poll(cx) {
                         Poll::Ready(r_active_queries) => {
-                            match (r_active_queries.tcp_or_udp.get(&this.query.question), r_active_queries.tcp_only.get(&this.query.question)) {
-                                (Some(result_receiver), _)
-                              | (_, Some(result_receiver)) => {
-                                    let result_receiver = result_receiver.resubscribe();
+                            match (
+                                r_active_queries.tcp_or_udp.get(&this.query.question),
+                                r_active_queries.tcp_only.get(&this.query.question)
+                            ) {
+                                (Some((query_id, result_receiver)), _)
+                              | (_, Some((query_id, result_receiver))) => {
+                                    this.query.id = *query_id;
+                                    let result_receiver = result_receiver.subscribe();
                                     drop(r_active_queries);
 
                                     this.inner.set_following(result_receiver);
                                     // println!("{} Following(1) active query '{}'", this.socket.upstream_socket, this.query.question);
-                                    self.as_mut().reset_timeout(Duration::from_millis((UDP_RETRANSMISSIONS as u64 * UDP_RETRANSMIT_MS) + UDP_TIMEOUT_MS + TCP_TIMEOUT_MS));
 
                                     // TODO
                                     continue;
                                 },
                                 (None, None) => {
                                     drop(r_active_queries);
-                                    this.inner.set_write_active_query(&this.socket);
+                                    this.inner.set_write_active_query(this.socket);
 
                                     // TODO
                                     continue;                
@@ -2154,25 +2243,53 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                 QInitQueryProj::WriteActiveQuery(w_active_queries) => {
                     match w_active_queries.as_mut().poll(cx) {
                         Poll::Ready(mut w_active_queries) => {
-                            match (w_active_queries.tcp_or_udp.get(&this.query.question), w_active_queries.tcp_only.get(&this.query.question)) {
-                                (Some(result_receiver), _)
-                              | (_, Some(result_receiver)) => {
-                                    let result_receiver = result_receiver.resubscribe();
+                            match (
+                                w_active_queries.tcp_or_udp.get(&this.query.question),
+                                w_active_queries.tcp_only.get(&this.query.question)
+                            ) {
+                                (Some((query_id, result_receiver)), _)
+                              | (_, Some((query_id, result_receiver))) => {
+                                    this.query.id = *query_id;
+                                    let result_receiver = result_receiver.subscribe();
                                     drop(w_active_queries);
 
                                     this.inner.set_following(result_receiver);
                                     // println!("{} Following(2) active query '{}'", this.socket.upstream_socket, this.query.question);
-                                    self.as_mut().reset_timeout(Duration::from_millis((UDP_RETRANSMISSIONS as u64 * UDP_RETRANSMIT_MS) + UDP_TIMEOUT_MS + TCP_TIMEOUT_MS));
 
                                     // TODO
                                     continue;
                                 },
                                 (None, None) => {
-                                    let result_receiver = once_watch::Receiver::new();
-                                    w_active_queries.tcp_or_udp.insert(this.query.question.clone(), result_receiver.clone());
+                                    let (send_response, result_receiver) = once_watch::channel();
+
+                                    // This is the initial query ID. However, it could change if it
+                                    // is already in use.
+                                    this.query.id = rand::random();
+
+                                    // verify that ID is unique.
+                                    while w_active_queries.in_flight.contains_key(&this.query.id) {
+                                        this.query.id = rand::random();
+                                        // FIXME: should this fail after some number of non-unique
+                                        // keys? May want to verify that the list isn't full.
+                                    }
+
+                                    let socket = this.socket.clone();
+                                    let query = this.query.clone();
+                                    let join_handle = tokio::spawn({
+                                        let result_receiver = result_receiver.clone();
+                                        let socket = socket;
+                                        let mut query = query;
+                                        async move {
+                                            UdpQueryRunner::new(&socket, &mut query, result_receiver).await;
+                                        }
+                                    });
+
+                                    w_active_queries.in_flight.insert(this.query.id, (send_response, join_handle));
+                                    w_active_queries.tcp_or_udp.insert(this.query.question.clone(), (this.query.id, result_receiver.subscribe()));
                                     drop(w_active_queries);
 
-                                    this.inner.set_registered(InnerUQ::Fresh { udp_retransmissions: UDP_RETRANSMISSIONS }, result_receiver);
+                                    this.inner.set_following(result_receiver);
+                                    // println!("{} Following(3) active query '{}'", this.socket.upstream_socket, this.query.question);
 
                                     // TODO
                                     continue;                
@@ -2185,368 +2302,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                         },
                     }
                 },
-                QInitQueryProj::Registered(mut this_inner, mut result_receiver) => {
-                    match this_inner.as_mut().project() {
-                        InnerUQProj::Fresh { udp_retransmissions } => {
-                            let retransmissions = *udp_retransmissions;
-
-                            this_inner.set_running_udp(retransmissions, &this.socket);
-
-                            // Next loop: poll tq_socket and in_flight to start getting the TCP socket and
-                            // inserting the query ID into the in-flight map.
-                            continue;
-                        },
-                        InnerUQProj::Running { socket: mut q_socket, mut in_flight } => {
-                            let in_flight_projection = in_flight.as_mut().project();
-                            let q_socket_projection = q_socket.as_mut().project();
-
-                            match (in_flight_projection, q_socket_projection) {
-                                (QInFlightProj::Fresh, EitherSocketProj::Udp { uq_socket: _, retransmits: _ })
-                              | (QInFlightProj::Fresh, EitherSocketProj::Tcp { tq_socket: _ }) => {
-                                    match q_socket.poll(this.socket, cx) {
-                                        PollSocket::Error(error) => {
-                                            this.inner.set_remove_active_query(Err(error), &this.socket);
-
-                                            // Nothing to clean up. Not yet in-flight map.
-                                            continue;
-                                        },
-                                        PollSocket::Continue
-                                    | PollSocket::Pending => {
-                                            in_flight.set_write_in_flight(this.socket);
-
-                                            // Another loop is needed to poll the in-flight map, even if the
-                                            // TQSocket returned Pending.
-                                            continue;
-                                        },
-                                    }
-                                },
-                                (QInFlightProj::WriteInFlight(w_in_flight), EitherSocketProj::Udp { uq_socket: _, retransmits: _ })
-                              | (QInFlightProj::WriteInFlight(w_in_flight), EitherSocketProj::Tcp { tq_socket: _ }) => {
-                                    let poll_q_socket_result = q_socket.poll(this.socket, cx);
-
-                                    match (w_in_flight.as_mut().poll(cx), poll_q_socket_result) {
-                                        (_, PollSocket::Error(error)) => {
-                                            this.inner.set_remove_active_query(Err(error), &this.socket);
-
-                                            // Nothing to clean up. Not yet in-flight map.
-                                            continue;
-                                        },
-                                        (Poll::Ready(mut w_in_flight), PollSocket::Continue | PollSocket::Pending) => {
-                                            // This is the initial query ID. However, it could change if it
-                                            // is already in use.
-                                            this.query.id = rand::random();
-
-                                            // verify that ID is unique.
-                                            while w_in_flight.contains_key(&this.query.id) {
-                                                this.query.id = rand::random();
-                                                // FIXME: should this fail after some number of non-unique
-                                                // keys? May want to verify that the list isn't full.
-                                            }
-                                            w_in_flight.insert(this.query.id, InFlight { send_response: result_receiver.get_sender() });
-                                            drop(w_in_flight);
-
-                                            in_flight.set_in_flight();
-
-                                            // Next loop will either establish a QSendQuery if the TQSocket
-                                            // is already Acquired or will poll the TQSocket until it is so
-                                            // the query can be sent.
-                                            continue;
-                                        },
-                                        (Poll::Pending, PollSocket::Continue) => {
-                                            // If at least one of the futures says to loop again, we should.
-                                            continue;
-                                        },
-                                        (Poll::Pending, PollSocket::Pending) => {
-                                            // If both futures are pending, then the entire future is
-                                            // pending. This will wake up again once TQSocket wakes us, the
-                                            // in-flight map lock becomes available, or the query timeout
-                                            // occurs.
-                                            return Poll::Pending;
-                                        },
-                                    }
-                                },
-                                (QInFlightProj::InFlight { send_query: send_query_state @ QSendQuery::Fresh(_) }, EitherSocketProj::Udp { mut uq_socket, retransmits: _ }) => {
-                                    match send_query_state.query_type() {
-                                        Query::Initial => (),
-                                        Query::Retransmit => match result_receiver.as_mut().poll(cx) {
-                                            Poll::Ready(Ok(response)) => {
-                                                in_flight.set_remove_in_flight(this.socket, Ok(response));
-            
-                                                // Next loop will poll for the in-flight map lock to clean
-                                                // up the query ID before returning the response.
-                                                continue;
-                                            },
-                                            Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                                                in_flight.set_remove_in_flight(this.socket, Err(io::Error::from(io::ErrorKind::Interrupted)));
-            
-                                                // Next loop will poll for the in-flight map lock to clean
-                                                // up the query ID before returning the response.
-                                                continue;
-                                            },
-                                            Poll::Pending => (),
-                                        },
-                                    };
-
-                                    let uq_socket_result = match uq_socket.poll(this.socket, cx) {
-                                        PollSocket::Error(error) => {
-                                            in_flight.set_remove_in_flight(this.socket, Err(error));
-
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        },
-                                        PollSocket::Continue => LoopPoll::Continue,
-                                        PollSocket::Pending => LoopPoll::Pending,
-                                    };
-
-                                    if let UQSocketProj::Acquired { udp_socket, kill_udp: _ } = uq_socket.as_mut().project() {
-                                        let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
-                                        let mut write_wire = WriteWire::from_bytes(&mut raw_message);
-                                        if let Err(wire_error) = this.query.to_wire_format(&mut write_wire, &mut Some(CompressionMap::new())) {
-                                            in_flight.set_remove_in_flight(this.socket, Err(io::Error::new(io::ErrorKind::InvalidData, wire_error)));
-            
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        };
-                                        let wire_length = write_wire.current_len();
-
-                                        let socket = this.socket.clone();
-                                        let udp_socket = udp_socket.clone();
-
-                                        println!("Sending on UDP socket {} :: {:?}", this.socket.upstream_socket, this.query);
-            
-                                        let send_query = async move {
-                                            let socket = socket;
-                                            let udp_socket = udp_socket;
-                                            let wire_length = wire_length;
-            
-                                            socket.recent_messages_sent.store(true, Ordering::Release);
-                                            let bytes_written = udp_socket.send(&raw_message[..wire_length]).await?;
-                                            // Verify that the correct number of bytes were written.
-                                            if bytes_written != wire_length {
-                                                return Err(io::Error::new(
-                                                    io::ErrorKind::InvalidData,
-                                                    format!("Incorrect number of bytes sent to UDP socket; Expected {wire_length} bytes but sent {bytes_written} bytes"),
-                                                ));
-                                            }
-            
-                                            return Ok(());
-                                        }.boxed();
-
-                                        send_query_state.set_send_query(send_query);
-
-                                        // Next loop will begin to poll SendQuery. This will write the bytes
-                                        // out.
-                                        continue;
-                                    }
-
-                                    match uq_socket_result {
-                                        LoopPoll::Continue => continue,
-                                        LoopPoll::Pending => return Poll::Pending,
-                                    }
-                                },
-                                (QInFlightProj::InFlight { send_query: send_query_state @ QSendQuery::Fresh(_) }, EitherSocketProj::Tcp { mut tq_socket }) => {
-                                    match send_query_state.query_type() {
-                                        Query::Initial => (),
-                                        Query::Retransmit => match result_receiver.as_mut().poll(cx) {
-                                            Poll::Ready(Ok(response)) => {
-                                                in_flight.set_remove_in_flight(this.socket, Ok(response));
-            
-                                                // Next loop will poll for the in-flight map lock to clean
-                                                // up the query ID before returning the response.
-                                                continue;
-                                            },
-                                            Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                                                in_flight.set_remove_in_flight(this.socket, Err(io::Error::from(io::ErrorKind::Interrupted)));
-            
-                                                // Next loop will poll for the in-flight map lock to clean
-                                                // up the query ID before returning the response.
-                                                continue;
-                                            },
-                                            Poll::Pending => (),
-                                        },
-                                    };
-
-                                    let tq_socket_result = match tq_socket.poll(this.socket, cx) {
-                                        PollSocket::Error(error) => {
-                                            in_flight.set_remove_in_flight(this.socket, Err(error));
-
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        },
-                                        PollSocket::Continue => LoopPoll::Continue,
-                                        PollSocket::Pending => LoopPoll::Pending,
-                                    };
-
-                                    if let TQSocketProj::Acquired { tcp_socket, kill_tcp: _ } = tq_socket.as_mut().project() {
-                                        let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
-                                        let mut write_wire = WriteWire::from_bytes(&mut raw_message);
-                                        if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
-                                            in_flight.set_remove_in_flight(this.socket, Err(io::Error::new(io::ErrorKind::InvalidData, wire_error)));
-            
-                                            // Next loop will poll for the in-flight map lock to clean up the
-                                            // query ID before returning the response.
-                                            continue;
-                                        };
-                                        let wire_length = write_wire.current_len();
-
-                                        let socket = this.socket.clone();
-                                        let tcp_socket = tcp_socket.clone();
-            
-                                        println!("Sending on TCP socket {} :: {:?}", this.socket.upstream_socket, this.query);
-            
-                                        let send_query = async move {
-                                            let socket = socket;
-                                            let tcp_socket = tcp_socket;
-                                            let wire_length = wire_length;
-            
-                                            socket.recent_messages_sent.store(true, Ordering::Release);
-                                            let mut w_tcp_stream = tcp_socket.lock().await;
-                                            let bytes_written = w_tcp_stream.write(&raw_message[..wire_length]).await?;
-                                            drop(w_tcp_stream);
-                                            // Verify that the correct number of bytes were written.
-                                            if bytes_written != wire_length {
-                                                return Err(io::Error::new(
-                                                    io::ErrorKind::InvalidData,
-                                                    format!("Incorrect number of bytes sent to TCP stream; expected {wire_length} bytes but sent {bytes_written} bytes"),
-                                                ));
-                                            }
-            
-                                            return Ok(());
-                                        }.boxed();
-
-                                        send_query_state.set_send_query(send_query);
-
-                                        // Next loop will begin to poll SendQuery. This will get the lock and
-                                        // the TcpStream and write the bytes out.
-                                        continue;
-                                    }
-
-                                    match tq_socket_result {
-                                        LoopPoll::Continue => continue,
-                                        LoopPoll::Pending => return Poll::Pending,
-                                    }
-                                },
-                                (QInFlightProj::InFlight { send_query: send_query_state @ QSendQuery::SendQuery(_, _) }, _) => {
-                                    let (query_type, send_query) = match send_query_state {
-                                        QSendQuery::Fresh(query_type) => panic!("Previous match guaranteed that send query state is QSendQuery::SendQuery but it was QSendQuery::Fresh({query_type})"),
-                                        QSendQuery::SendQuery(query_type, send_query) => (query_type, send_query),
-                                        QSendQuery::Complete(query_type) => panic!("Previous match guaranteed that send query state is QSendQuery::SendQuery but it was QSendQuery::Complete({query_type})"),
-                                    };
-
-                                    match query_type {
-                                        Query::Initial => (),
-                                        Query::Retransmit => match result_receiver.as_mut().poll(cx) {
-                                            Poll::Ready(Ok(response)) => {
-                                                in_flight.set_remove_in_flight(this.socket, Ok(response));
-            
-                                                // Next loop will poll for the in-flight map lock to clean
-                                                // up the query ID before returning the response.
-                                                continue;
-                                            },
-                                            Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                                                in_flight.set_remove_in_flight(this.socket, Err(io::Error::from(io::ErrorKind::Interrupted)));
-            
-                                                // Next loop will poll for the in-flight map lock to clean
-                                                // up the query ID before returning the response.
-                                                continue;
-                                            },
-                                            Poll::Pending => (),
-                                        },
-                                    };
-
-                                    let q_socket_result = match q_socket.poll(this.socket, cx) {
-                                        PollSocket::Error(error) => {
-                                            in_flight.set_remove_in_flight(this.socket, Err(error));
-
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        },
-                                        PollSocket::Continue => LoopPoll::Continue,
-                                        PollSocket::Pending => LoopPoll::Pending,
-                                    };
-
-                                    match send_query.as_mut().poll(cx) {
-                                        Poll::Ready(Err(error)) => {
-                                            in_flight.set_remove_in_flight(this.socket, Err(error));
-
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        },
-                                        Poll::Ready(Ok(())) => {
-                                            send_query_state.set_complete();
-
-                                            // Next loop will poll the receiver, now that a message has been
-                                            // sent out.
-                                            continue;
-                                        },
-                                        Poll::Pending => (),
-                                    }
-
-                                    match q_socket_result {
-                                        LoopPoll::Continue => continue,
-                                        LoopPoll::Pending => return Poll::Pending,
-                                    }
-                                },
-                                (QInFlightProj::InFlight { send_query: QSendQuery::Complete(_) }, _) => {
-                                    let q_socket_result = match q_socket.poll(this.socket, cx) {
-                                        PollSocket::Error(error) => {
-                                            in_flight.set_remove_in_flight(this.socket, Err(error));
-
-                                            // Next loop will poll for the in-flight map lock to clean up
-                                            // the query ID before returning the response.
-                                            continue;
-                                        },
-                                        PollSocket::Continue => LoopPoll::Continue,
-                                        PollSocket::Pending => LoopPoll::Pending,
-                                    };
-
-                                    if let LoopPoll::Continue = handle_poll_result_receiver(result_receiver.as_mut().poll(cx), in_flight, this.socket) {
-                                        continue;
-                                    }
-
-                                    match q_socket_result {
-                                        LoopPoll::Continue => continue,
-                                        LoopPoll::Pending => return Poll::Pending,
-                                    }
-                                },
-                                (QInFlightProj::RemoveInFlight { w_in_flight, response }, _) => {
-                                    // This is a cleanup state so we don't care about polling the socket.
-
-                                    match w_in_flight.as_mut().poll(cx) {
-                                        Poll::Ready(mut w_in_flight) => {
-                                            w_in_flight.remove(&this.query.id);
-                                            drop(w_in_flight);
-                                            result_receiver.close();
-                                            let response = response.take();
-
-                                            // Cleanup is done. We can pull the response out of the Option
-                                            // and return it. It is stored this way since the Error type
-                                            // does not support Clone.
-                                            match response {
-                                                Some(response) => {
-                                                    this.inner.set_remove_active_query(response, &this.socket);
-
-                                                    continue;
-                                                },
-                                                None => panic!("Inconsistent state reached. response is only supposed to be None so the value can be taken out of it"),
-                                            }
-                                        },
-                                        Poll::Pending => {
-                                            // Exit loop. Will wake up once the in-flight map lock becomes
-                                            // available.
-                                            return Poll::Pending;
-                                        },
-                                    }
-                                },
-                            }
-                        },
-                    }
-                },
                 QInitQueryProj::Following(mut result_receiver) => {
                     match result_receiver.as_mut().poll(cx) {
                         Poll::Ready(Ok(response)) => {
@@ -2556,33 +2311,12 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                             return Poll::Ready(Ok(response));
                         },
                         Poll::Ready(Err(once_watch::RecvError::Closed)) => {
+                            let error = io::Error::from(io::ErrorKind::Interrupted);
+
                             this.inner.set_complete();
 
                             // TODO
-                            return Poll::Ready(Err(io::Error::from(io::ErrorKind::Interrupted)));
-                        },
-                        Poll::Pending => {
-                            // TODO
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                QInitQueryProj::RemoveActiveQuery { w_active_queries, response } => {
-                    match w_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => {
-                            let _ = w_active_queries.tcp_or_udp.remove(&this.query.question);
-                            drop(w_active_queries);
-
-                            // Cleanup is done. We can pull the response out of the Option and return it.
-                            // It is stored this way since the Error type does not support Clone.
-                            match response.take() {
-                                Some(response) => {
-                                    this.inner.set_complete();
-
-                                    return Poll::Ready(response);
-                                },
-                                None => panic!("Inconsistent state reached. response is only supposed to be None so the value can be taken out of it"),
-                            }
+                            return Poll::Ready(Err(error));
                         },
                         Poll::Pending => {
                             // TODO
@@ -2592,67 +2326,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> Future for UdpQuery<'a, 'b,
                 },
                 QInitQueryProj::Complete => panic!("UdpQuery cannot be polled after completion"),
             }
-        }
-    }
-}
-
-#[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'i, 'j, 'k, 'l, 'm, 'n, 'o, 'p, 'q, 'r, 't, 'u, 'v, 'w, 'x> PinnedDrop for UdpQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
-    fn drop(mut self: Pin<&mut Self>) {
-        match self.as_mut().project().inner.as_mut().project() {
-            QInitQueryProj::Fresh
-          | QInitQueryProj::ReadActiveQuery(_)
-          | QInitQueryProj::WriteActiveQuery(_) => {
-                // Nothing to do.
-            },
-            QInitQueryProj::Registered(mut this_inner, result_receiver) => {
-                match this_inner.as_mut().project() {
-                    InnerUQProj::Fresh { udp_retransmissions: _ } => (),
-                    InnerUQProj::Running { socket: _, mut in_flight } => {
-                        match in_flight.as_mut().project() {
-                            QInFlightProj::Fresh
-                          | QInFlightProj::WriteInFlight(_) => {
-                                // Nothing to do for in flight.
-                            },
-                            QInFlightProj::InFlight { send_query: _ }
-                          | QInFlightProj::RemoveInFlight { w_in_flight: _, response: _ } => {
-                                let result_receiver = result_receiver.clone();
-                                let tcp_socket = self.socket.clone();
-                                let query_id = self.query.id;
-                                tokio::spawn(async move {
-                                    let mut w_in_flight = tcp_socket.in_flight.write().await;
-                                    w_in_flight.remove(&query_id);
-                                    drop(w_in_flight);
-                                    result_receiver.close();
-                                });
-                            },
-                        }
-                    },
-                }
-
-                let socket = self.socket.clone();
-                let question = self.query.question.clone();
-                tokio::spawn(async move {
-                    let mut w_active_queries = socket.active_queries.write().await;
-                    w_active_queries.tcp_or_udp.remove(&question);
-                    drop(w_active_queries);
-                });
-            },
-            QInitQueryProj::Following(_) => {
-                // Nothing to do for active queries.
-            },
-            QInitQueryProj::RemoveActiveQuery { w_active_queries: _, response: _ } => {
-                let socket = self.socket.clone();
-                let question = self.query.question.clone();
-                tokio::spawn(async move {
-                    let mut w_active_queries = socket.active_queries.write().await;
-                    w_active_queries.tcp_or_udp.remove(&question);
-                    drop(w_active_queries);
-                });
-            },
-            QInitQueryProj::Complete => {
-                // Nothing to do for active queries.
-            },
         }
     }
 }
@@ -2716,14 +2389,11 @@ impl MixedSocket {
         println!("Shutting down UDP socket {}", self.upstream_socket);
 
         let r_state = self.udp.read().await;
-        if let UdpState::Managed(udp_socket, kill_udp) = &*r_state {
-            let udp_socket = udp_socket.clone();
+        if let UdpState::Managed(_, kill_udp) = &*r_state {
             let kill_udp = kill_udp.clone();
             drop(r_state);
 
             kill_udp.awake();
-
-            // SockRef::from(udp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
 
             // Note: this task is not responsible for actual cleanup. Once the listener closes, it
             // will kill any active queries and change the UdpState.
@@ -2753,17 +2423,14 @@ impl MixedSocket {
 
         let mut w_state = self.udp.write().await;
         match &*w_state {
-            UdpState::Managed(udp_socket, kill_udp) => {
+            UdpState::Managed(_, kill_udp) => {
                 // Since we are removing the reference the kill_udp by setting state to Blocked, we
                 // need to kill them now since the listener won't be able to kill them.
                 let kill_udp = kill_udp.clone();
-                let udp_socket = udp_socket.clone();
                 *w_state = UdpState::Blocked;
                 drop(w_state);
 
                 kill_udp.awake();
-
-                // SockRef::from(udp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
 
                 Ok(())
             },
@@ -2799,11 +2466,11 @@ impl MixedSocket {
                             // Note: if truncation flag is set, that will be dealt with by the caller.
                             self.recent_messages_received.store(true, Ordering::Release);
                             let response_id = response.id;
-                            let r_in_flight = self.in_flight.read().await;
-                            if let Some(InFlight{ send_response: sender }) = r_in_flight.get(&response_id) {
-                                sender.send(response);
+                            let r_active_queries = self.active_queries.read().await;
+                            if let Some((sender, _)) = r_active_queries.in_flight.get(&response_id) {
+                                let _ = sender.send(response);
                             };
-                            drop(r_in_flight);
+                            drop(r_active_queries);
                             // Cleanup is handled by the management processes. This
                             // process is free to move on.
                         },
@@ -2858,13 +2525,15 @@ impl MixedSocket {
 }
 
 struct ActiveQueries {
-    tcp_only: HashMap<TinyVec<[Question; 1]>, once_watch::Receiver<Message>>,
-    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, once_watch::Receiver<Message>>,
+    in_flight: HashMap<u16, (once_watch::Sender<Message>, JoinHandle<()>)>,
+    tcp_only: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Message>)>,
+    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Message>)>,
 }
 
 impl ActiveQueries {
     pub fn new() -> Self {
         Self {
+            in_flight: HashMap::new(),
             tcp_only: HashMap::new(),
             tcp_or_udp: HashMap::new(),
         }
@@ -2880,7 +2549,6 @@ pub struct MixedSocket {
     tcp: RwLock<TcpState>,
 
     upstream_socket: SocketAddr,
-    in_flight: RwLock<HashMap<u16, InFlight>>,
     active_queries: RwLock<ActiveQueries>,
 
     // Counters used to determine when the socket should be closed.
@@ -2900,7 +2568,6 @@ impl MixedSocket {
             tcp: RwLock::new(TcpState::None),
 
             upstream_socket,
-            in_flight: RwLock::new(HashMap::new()),
             active_queries: RwLock::new(ActiveQueries::new()),
 
             recent_messages_sent: AtomicBool::new(false),
@@ -3010,25 +2677,25 @@ impl MixedSocket {
         }
     }
 
-    pub fn query<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOptions, timeout: Option<Duration>) -> MixedQuery<'a, 'b, 'c, 'd, 'e, 'q, 'r, 't, 'u, 'v, 'w, 'x> {
+    pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOptions) -> MixedQuery<'a, 'b, 'c, 'd> {
         let udp_timeout_count = self.udp_timeout_count.load(Ordering::Acquire);
         let query_task = match (options, udp_timeout_count) {
             (QueryOptions::Both, 0..=3) => {
-                MixedQuery::Udp(UdpQuery::new(&self, query, timeout))
+                MixedQuery::Udp(UdpQuery::new(&self, query))
             },
             // Too many UDP timeouts.
             (QueryOptions::Both, 4) => {
                 // It will query via UDP but will start setting up a TCP connection to fall back on.
                 task::spawn(self.clone().init_tcp());
-                MixedQuery::Udp(UdpQuery::new(&self, query, timeout))
+                MixedQuery::Udp(UdpQuery::new(&self, query))
             },
             // Too many UDP timeouts.
             (QueryOptions::Both, 5..) => {
-                MixedQuery::Tcp(TcpQuery::new(&self, query, timeout))
+                MixedQuery::Tcp(TcpQuery::new(&self, query))
             },
             // Only TCP is allowed
             (QueryOptions::TcpOnly, _) => {
-                MixedQuery::Tcp(TcpQuery::new(&self, query, timeout))
+                MixedQuery::Tcp(TcpQuery::new(&self, query))
             },
         };
 
@@ -3172,7 +2839,7 @@ mod mixed_udp_tcp_tests {
         let query_task = tokio::spawn({
             let mixed_socket = mixed_socket.clone();
             let mut query = query.clone();
-            async move { mixed_socket.query(&mut query, QueryOptions::Both, None).await }
+            async move { mixed_socket.query(&mut query, QueryOptions::Both).await }
         });
 
         // Test: Receiver first query (no response + no TCP)

@@ -140,7 +140,7 @@ impl<T> OnceWatchSubscribe<T> for &Sender<T> {
 
 impl<T> OnceWatchSend<T> for Sender<T> {
     fn send(&self, value: T) -> Result<(), SendError> {
-        let mut w_shared: std::sync::RwLockWriteGuard<'_, SendCell<T>> = self.shared().write().unwrap();
+        let mut w_shared = self.shared().write().unwrap();
         if w_shared.is_fresh() {
             *w_shared = SendCell::Closed(value);
             drop(w_shared);
@@ -155,7 +155,7 @@ impl<T> OnceWatchSend<T> for Sender<T> {
 
 impl<T: Clone> OnceWatchSend<&T> for Sender<T> {
     fn send(&self, value: &T) -> Result<(), SendError> {
-        let mut w_shared: std::sync::RwLockWriteGuard<'_, SendCell<T>> = self.shared().write().unwrap();
+        let mut w_shared = self.shared().write().unwrap();
         if w_shared.is_fresh() {
             *w_shared = SendCell::Closed(value.clone());
             drop(w_shared);
@@ -215,10 +215,6 @@ impl<T> Receiver<T> {
         }
     }
 
-    pub fn resubscribe(&self) -> Receiver<T> {
-        self.clone()
-    }
-
     pub fn close(&self) -> bool {
         if self.shared().write().unwrap().try_close() {
             self.awoken_token.get_shared_awake_token().awake();
@@ -250,6 +246,12 @@ impl<T: Clone> Receiver<T> {
         } else {
             Err(TryRecvError::Empty)
         }
+    }
+}
+
+impl<T> OnceWatchSubscribe<T> for &Receiver<T> {
+    fn subscribe(self) -> Receiver<T> {
+        self.clone()
     }
 }
 
