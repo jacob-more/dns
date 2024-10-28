@@ -600,6 +600,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
             InnerInitTcpProj::Fresh
           | InnerInitTcpProj::WriteEstablishing(_) => {
                 if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
+                    this.tcp_socket_sender.close();
+                    this.kill_tcp.awake();
+                    
                     *this.inner = InnerInitTcp::Complete;
 
                     // Exit loop: query killed.
@@ -607,6 +610,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                 }
 
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    this.tcp_socket_sender.close();
+                    this.kill_tcp.awake();
+
                     *this.inner = InnerInitTcp::Complete;
 
                     // Exit loop: query timed out.
@@ -632,6 +638,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                 // Does not poll `kill_tcp` because that gets awoken to kill
                 // the listener (if it is set up).
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    this.tcp_socket_sender.close();
+                    this.kill_tcp.awake();
+
                     *this.inner = InnerInitTcp::Complete;
 
                     // Exit loop: query timed out.
@@ -664,8 +673,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     let tcp_socket = socket.clone();
                                     let kill_tcp_token = kill.clone();
 
-                                    // Ignore send errors. They just indicate that all receivers have been dropped.
                                     let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
+                                    this.kill_tcp.awake();
 
                                     *this.inner = InnerInitTcp::Complete;
 
@@ -683,8 +692,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     continue;
                                 },
                                 TcpState::None => {
-                                    let tcp_socket_sender = once_watch::Sender::new();
-                                    let kill_init_tcp = AwakeToken::new();
+                                    let tcp_socket_sender = this.tcp_socket_sender.clone();
+                                    let kill_init_tcp = this.kill_tcp.get_awake_token();
                                     let init_connection = TcpStream::connect(this.socket.upstream_socket).boxed();
 
                                     *tcp_state = TcpState::Establishing {
@@ -699,6 +708,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     continue;
                                 },
                                 TcpState::Blocked => {
+                                    this.tcp_socket_sender.close();
+                                    this.kill_tcp.awake();
+
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection not allowed.
@@ -751,8 +763,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     let tcp_socket = socket.clone();
                                     let kill_tcp_token = kill.clone();
 
-                                    // Ignore send errors. They just indicate that all receivers have been dropped.
                                     let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
+                                    this.kill_tcp.awake();
 
                                     *this.inner = InnerInitTcp::Complete;
 
@@ -765,6 +777,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
                                         *w_tcp_state = TcpState::None;
                                         drop(w_tcp_state);
+                                        this.tcp_socket_sender.close();
+                                        this.kill_tcp.awake();
                                         let error = io::Error::from(error.kind());
 
                                         *this.inner = InnerInitTcp::Complete;
@@ -785,6 +799,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                 TcpState::None
                               | TcpState::Blocked => {
                                     drop(w_tcp_state);
+                                    this.tcp_socket_sender.close();
+                                    this.kill_tcp.awake();
                                     let error = io::Error::from(error.kind());
 
                                     *this.inner = InnerInitTcp::Complete;
@@ -811,8 +827,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     let tcp_socket = socket.clone();
                                     let kill_tcp_token = kill.clone();
 
-                                    // Ignore send errors. They just indicate that all receivers have been dropped.
                                     let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
+                                    this.kill_tcp.awake();
 
                                     *this.inner = InnerInitTcp::Complete;
 
@@ -826,6 +842,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                         *w_tcp_state = TcpState::None;
                                     }
                                     drop(w_tcp_state);
+                                    this.tcp_socket_sender.close();
+                                    this.kill_tcp.awake();
+
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection timed out.
@@ -834,6 +853,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                 TcpState::None
                               | TcpState::Blocked => {
                                     drop(w_tcp_state);
+                                    this.tcp_socket_sender.close();
+                                    this.kill_tcp.awake();
+
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection timed out.
@@ -859,6 +881,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                         *w_tcp_state = TcpState::None;
                                     }
                                     drop(w_tcp_state);
+                                    this.tcp_socket_sender.close();
+                                    this.kill_tcp.awake();
+
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection killed.
@@ -868,6 +893,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                               | TcpState::None
                               | TcpState::Blocked => {
                                     drop(w_tcp_state);
+                                    this.tcp_socket_sender.close();
+                                    this.kill_tcp.awake();
+
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection killed.
@@ -893,7 +921,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                         *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: this.kill_tcp.get_awake_token() };
                                         drop(w_tcp_state);
 
-                                        // Ignore send errors. They just indicate that all receivers have been dropped.
                                         let _ = this.tcp_socket_sender.send((tcp_socket.clone(), this.kill_tcp.get_awake_token()));
 
                                         let tcp_socket = tcp_socket.clone();
@@ -923,11 +950,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     let kill_tcp_token = kill.clone();
                                     drop(w_tcp_state);
 
+                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
                                     // Shutdown the listener we started.
                                     this.kill_tcp.awake();
-
-                                    // Ignore send errors. They just indicate that all receivers have been dropped.
-                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
 
                                     *this.inner = InnerInitTcp::Complete;
 
@@ -939,6 +964,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                               | TcpState::Blocked => {
                                     drop(w_tcp_state);
 
+                                    this.tcp_socket_sender.close();
                                     // Shutdown the listener we started.
                                     this.kill_tcp.awake();
 
@@ -962,6 +988,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                 InnerInitTcpProj::GetEstablishing { mut receive_tcp_socket } => {
                     match receive_tcp_socket.as_mut().poll(cx) {
                         Poll::Ready(Ok((tcp_socket, kill_tcp_token))) => {
+                            let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
+                            this.kill_tcp.awake();
+
                             *this.inner = InnerInitTcp::Complete;
 
                             // Exit loop: connection setup completed and
@@ -969,6 +998,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                             return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
                         },
                         Poll::Ready(Err(once_watch::RecvError::Closed)) => {
+                            this.tcp_socket_sender.close();
+                            this.kill_tcp.awake();
+
                             *this.inner = InnerInitTcp::Complete;
 
                             // Exit loop: all senders were dropped so it is not
