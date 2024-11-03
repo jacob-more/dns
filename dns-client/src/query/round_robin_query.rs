@@ -101,6 +101,19 @@ impl<'a, 'b, 'c, CCache> NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + 
     }
 }
 
+fn take_best_address<'a, 'b, 'c, CCache>(ns_addresses: &mut Vec<IpAddr>, sockets: &HashMap<IpAddr, Arc<MixedSocket>>) -> Option<IpAddr> where CCache: AsyncCache + Send + Sync {
+    match ns_addresses.iter()
+        .enumerate()
+        .max_by_key(|(_, address)| sockets.get(address)
+            .map(|socket| (socket.average_dropped_udp_packets(), socket.average_udp_response_time()))
+            .filter(|(average_dropped_udp_packets, average_udp_response_time)| (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()))
+            .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32))))
+    {
+        Some((index, _)) => Some(ns_addresses.swap_remove(index)),
+        None => ns_addresses.pop(),
+    }
+}
+
 impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     type Output = NSQueryResult;
 
@@ -240,18 +253,10 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                     }
                 },
                 InnerNSQuery::NetworkQueryStart => {
-                    match this.ns_addresses.pop() {
+                    match take_best_address::<CCache>(this.ns_addresses, &this.sockets) {
                         Some(next_ns_address) => {
                             let context = this.context.as_ref();
                             trace!(context:?; "NSQuery::NetworkQueryStart -> NSQuery::QueryingNetwork: setting up query to next ns {next_ns_address}");
-
-                            // Select the fastest address
-                            this.ns_addresses.sort_by_cached_key(
-                                |address| this.sockets.get(address)
-                                    .map(|socket| (socket.average_dropped_udp_packets(), socket.average_udp_response_time()))
-                                    .filter(|(average_dropped_udp_packets, average_udp_response_time)| (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()))
-                                    .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32)))
-                            );
 
                             let client = this.client.clone();
                             let cache = this.joined_cache.clone();
@@ -335,8 +340,14 @@ impl<'a, 'b, 'c, CCache> NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCa
     }
 }
 
-fn sort_ns_queries<CCache>(ns_queries: &mut Vec<Pin<Box<NSQuery<'_, '_, '_, CCache>>>>) where CCache: AsyncCache + Send + Sync {
-    ns_queries.sort_by_cached_key(|ns_query| ns_query.best_address_stats().map(|stats| Reverse(stats)));
+fn take_best_ns_query<'a, 'b, 'c, CCache>(ns_queries: &mut Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>) -> Option<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>> where CCache: AsyncCache + Send + Sync {
+    match ns_queries.iter()
+        .enumerate()
+        .max_by_key(|(_, ns_query)| ns_query.best_address_stats().map(|stats| Reverse(stats)))
+    {
+        Some((index, _)) => Some(ns_queries.swap_remove(index)),
+        None => ns_queries.pop(),
+    }
 }
 
 impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync + 'static {
@@ -346,8 +357,7 @@ impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCac
         if self.is_first_poll() {
             let mut this = self.as_mut().project();
             // Initialize the `running` queue with its first query.
-            sort_ns_queries(this.ns_queries);
-            match this.ns_queries.pop() {
+            match take_best_ns_query(this.ns_queries) {
                 Some(ns_query) => this.running.push(ns_query),
                 None => {
                     // Don't want to be erroneously woken up if we are done.
@@ -359,149 +369,92 @@ impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCac
 
             // Initialize or refresh the `add_query_timer`
             match (this.add_query_timer.as_mut().as_pin_mut(), tokio::time::Instant::now().checked_add(*this.add_query_timeout)) {
-                // The expected case is that a fresh NSSelectQuery has not yet
-                // had the `add_query_timer` initialized. We should do that
-                // here.
+                // The expected case is that a fresh NSSelectQuery has not yet had the
+                // `add_query_timer` initialized. We should do that here.
                 (None, Some(deadline)) => this.add_query_timer.set(Some(tokio::time::sleep_until(deadline))),
-                // If a time was created manually, we should refresh the
-                // deadline since it may have become stale if this task has
-                // been waiting to be run for a while.
+                // If a time was created manually, we should refresh the deadline since it may have
+                // become stale if this task has been waiting to be run for a while.
                 (Some(timer), Some(deadline)) => timer.reset(deadline),
-                // If the timer cannot be reset, then this will only run 1 task
-                // at a time since it is unable to schedule them to start later.
-                // This should never really be an issue, but if it is, we could
-                // have the system schedule `max_concurrency` many tasks
-                // immediately. However, I would be concerned that this may
-                // accidentally overwhelm ourself or the endpoints. Presumably,
-                // if this fails, then this will probably fail for all other
-                // queries in the system. If we had all of them run
-                // `max_concurrency` many concurrent tasks, the system might
-                // DOS itself.
+                // If the timer cannot be reset, then this will only run 1 task at a time since it
+                // is unable to schedule them to start later. This should never really be an issue,
+                // but if it is, we could have the system schedule `max_concurrency` many tasks
+                // immediately. However, I would be concerned that this may accidentally overwhelm
+                // ourself or the endpoints. Presumably, if this fails, then this will probably fail
+                // for all other queries in the system. If we had all of them run `max_concurrency`
+                // many concurrent tasks, the system might DOS itself.
                 (_, None) => this.add_query_timer.set(None),
             }
         }
 
-        loop {
-            let mut poll_again = false;
-            let mut this = self.as_mut().project();
-            match (this.add_query_timer.as_mut().as_pin_mut(), tokio::time::Instant::now().checked_add(*this.add_query_timeout)) {
-                (Some(mut timer), Some(new_deadline)) => match timer.as_mut().poll(cx) {
-                    Poll::Ready(()) => {
-                        sort_ns_queries(this.ns_queries);
-                        match this.ns_queries.pop() {
-                            Some(ns_query) => {
-                                this.running.push(ns_query);
-                                // Keep setting the timer until the maximum number
-                                // of allowed concurrent queries have been started
-                                // for this group. Then, we will maintain that many
-                                // concurrent queries until we run out of queued
-                                // queries.
-                                if this.running.len() < *this.max_concurrency {
-                                    // Poll again is set so that the new timer is
-                                    // polled (to get it started).
-                                    // If a result is found and this returns
-                                    // Poll::Ready(), then it won't get polled
-                                    // unless this struct is awaited again.
-                                    timer.reset(new_deadline);
-                                    poll_again = true;
-                                } else {
-                                    // Once we have the maximum number of tasks
-                                    // running concurrently, we don't need to wake
-                                    // up to add new tasks. New tasks from
-                                    // `ns_query` will only be moved to `running`
-                                    // when a space opens up in `running`.
-                                    this.add_query_timer.set(None);
-                                }
-                            },
-                            None => {
-                                // Don't want to be erroneously woken up if there
-                                // is nobody else to add.
-                                this.add_query_timer.set(None);
-                            },
-                        }
-                    },
-                    Poll::Pending => (),
-                },
-                (Some(mut timer), None) => match timer.as_mut().poll(cx) {
-                    Poll::Ready(()) => {
-                        sort_ns_queries(this.ns_queries);
-                        match this.ns_queries.pop() {
-                            Some(ns_query) => {
-                                this.running.push(ns_query);
-                                // Since a deadline could not be calculated, the
-                                // timer cannot be reset.
-                                // This could limit the number of concurrent
-                                // processes that can run below `max_concurrency`.
-                                // I go into more detail on why this is the
+        let mut this = self.as_mut().project();
+        if let Some(mut timer) = this.add_query_timer.as_mut().as_pin_mut() {
+            if let Poll::Ready(()) = timer.as_mut().poll(cx) {
+                match take_best_ns_query(this.ns_queries) {
+                    Some(ns_query) => {
+                        this.running.push(ns_query);
+                        // Keep setting the timer until the maximum number of allowed concurrent
+                        // queries have been started for this group. Then, we will maintain that
+                        // many concurrent queries until we run out of queued queries.
+                        if this.running.len() < *this.max_concurrency {
+                            match tokio::time::Instant::now().checked_add(*this.add_query_timeout) {
+                                Some(new_deadline) => timer.reset(new_deadline),
+                                // If a deadline could not be calculated, the timer cannot be reset.
+                                // This could limit the number of concurrent processes that can run
+                                // below `max_concurrency`. I go into more detail on why this is the
                                 // preferred option earlier in this function.
-                                this.add_query_timer.set(None);
-                            },
-                            None => {
-                                // Don't want to be erroneously woken up if there
-                                // is nobody else to add.
-                                this.add_query_timer.set(None);
-                            },
+                                None => this.add_query_timer.set(None),
+                            }
+                        } else {
+                            // Once we have the maximum number of tasks running concurrently, we
+                            // don't need to wake up to add new tasks. New tasks from `ns_query`
+                            // will only be moved to `running` when a space opens up in `running`.
+                            this.add_query_timer.set(None);
                         }
                     },
-                    Poll::Pending => (),
-                },
-                (None, _) => (),
-            }
-
-            let mut query_result = None;
-            for (index, ns_query) in this.running.iter_mut().enumerate() {
-                if let Poll::Ready(result) = ns_query.as_mut().poll(cx) {
-                    query_result = Some(result);
-                    sort_ns_queries(this.ns_queries);
-                    match this.ns_queries.pop() {
-                        Some(new_ns_query) => {
-                            // We can re-use the spot in the `running` list for
-                            // the new query since we don't care about the
-                            // order of this list. They should all get polled
-                            // eventually (as long as no result is found).
-                            // Re-using the spot means the vector does not need
-                            // to shift all the elements to the right of this
-                            // index left just for us to append to the end.
-                            *ns_query = new_ns_query;
-                            // Want to get newly added tasks polled so that they
-                            // get started and can wake this task up.
-                            // If a result is found and this returns
-                            // Poll::Ready(), then it won't get polled unless
-                            // this struct is awaited again.
-                            poll_again = true;
-                        },
-                        None => {
-                            match query_result {
-                                Some(NSQueryResult::OutOfAddresses) => {
-                                    let _ = this.running.swap_remove(index);
-                                },
-                                _ => {
-                                    let ns_query = this.running.swap_remove(index);
-                                    // Since this list gets re-sorted every time, it does not matter
-                                    // that we are appending it to the end of the list.
-                                    this.ns_queries.push(ns_query);
-                                }
-                            }
-                            
-                            // Don't want to be erroneously woken up if there is
-                            // nobody else to add.
-                            this.add_query_timer.set(None);
-                        },
-                    }
-                    break;
+                    None => {
+                        // Don't want to be erroneously woken up if there is nobody else to add.
+                        this.add_query_timer.set(None);
+                    },
                 }
-            }
-
-            if let Some(result) = query_result {
-                return Poll::Ready(Some(result));
-            }
-
-            if !poll_again {
-                break;
             }
         }
 
-        let this = self.as_mut().project();
+        for (index, ns_query) in this.running.iter_mut().enumerate() {
+            if let Poll::Ready(result) = ns_query.as_mut().poll(cx) {
+                match (take_best_ns_query(this.ns_queries), &result) {
+                    // We can re-use the spot in the `running` list for the new query since we don't
+                    // care about the order of this list. They should all get polled eventually (as
+                    // long as no result is found). Re-using the spot means the vector does not need
+                    // to shift all the elements to the right of this index left just for us to
+                    // append to the end.
+                    (Some(new_ns_query), NSQueryResult::OutOfAddresses) => {
+                        *ns_query = new_ns_query;
+                    },
+                    (Some(new_ns_query), _) => {
+                        let ns_query = this.running.swap_remove(index);
+                        this.running.push(new_ns_query);
+                        this.ns_queries.push(ns_query);
+                    },
+                    (None, NSQueryResult::OutOfAddresses) => {
+                        let _ = this.running.swap_remove(index);
+                        // Don't want to be erroneously woken up if there is
+                        // nobody else to add.
+                        this.add_query_timer.set(None);
+                    },
+                    (None, _) => {
+                        // Since we are down to the last ns_query, it can stay in the running queue
+                        // until it runs out of addresses.
+
+                        // Don't want to be erroneously woken up if there is
+                        // nobody else to add.
+                        this.add_query_timer.set(None);
+                    },
+                }
+
+                return Poll::Ready(Some(result));
+            }
+        }
+
         match (this.ns_queries.len(), this.running.len()) {
             // All of the queued queries have completed.
             (0, 0) => Poll::Ready(None),
