@@ -1,6 +1,8 @@
-use std::{collections::HashMap, fmt::Display, future::Future, io::ErrorKind, net::SocketAddr, pin::Pin, sync::{atomic::{AtomicBool, AtomicU8, Ordering}, Arc}, task::Poll, time::Duration};
+use std::{cmp::{max, min}, collections::HashMap, fmt::Display, future::Future, io::ErrorKind, net::SocketAddr, num::NonZeroU8, ops::{Add, Div}, pin::Pin, sync::{atomic::{AtomicBool, Ordering}, Arc}, task::Poll, time::Duration};
 
 use async_lib::{awake_token::{AwakeToken, AwokenToken, SameAwakeToken}, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
+use atomic::Atomic;
+use bytemuck::{NoUninit, Pod, Zeroable};
 use dns_lib::{query::{message::Message, question::Question}, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
 use futures::{future::BoxFuture, FutureExt};
 use log::trace;
@@ -9,14 +11,95 @@ use tinyvec::TinyVec;
 use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
 
 const MAX_MESSAGE_SIZE: usize = 8192;
-const UDP_RETRANSMIT_MS: u64 = 200;
-const UDP_RETRANSMISSIONS: u8 = 1;
-const TCP_TIMEOUT_MS: u64 = 1000;
+
+
+const MILLISECONDS_IN_1_SECOND: f64 = 1000.0;
 
 const TCP_INIT_TIMEOUT_MS: u64 = 5000;
 const TCP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
-
 const UDP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
+
+/// The initial TCP timeout, used when setting up a socket, before anything is known about the
+/// average response time.
+const INIT_TCP_TIMEOUT: Duration = Duration::from_secs(1);
+/// The percentage of the average TCP response time that the timeout should be set to. Currently,
+/// this represents 200%. If the average response time were 20 ms, then the retransmission timeout
+/// would be 40 ms.
+const TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME: f64 = 2.00;
+/// The maximum percentage of the average TCP response time that the timeout should be set to.
+/// Currently, this represents 400%. If the average response time were 20 ms, then the
+/// retransmission timeout would be 80 ms.
+const TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME: f64 = 4.00;
+/// The step size to use if INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is exceeded.
+const TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
+/// When 20% or more of packets are being dropped (for TCP, this just means that the queries are
+/// timing out), then it is time to start slowing down the socket.
+const INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+/// When 1% or more of packets are being dropped (for TCP, this just means that the queries are
+/// timing out), then we might want to try speeding up the socket again, to reflect the average
+/// response time.
+const DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+/// The maximum allowable TCP timeout.
+const MAX_TCP_TIMEOUT: Duration = Duration::from_secs(10);
+/// The minimum allowable TCP timeout.
+const MIN_TCP_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// The initial UDP retransmission timeout, used when setting up a socket, before anything is known
+/// about the average response time.
+const INIT_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_millis(500);
+/// The percentage of the average UDP response time that the timeout should be set to. Currently,
+/// this represents 150%. If the average response time were 20 ms, then the retransmission timeout
+/// would be 30 ms.
+const UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 1.50;
+/// The maximum percentage of the average UDP response time that the timeout should be set to.
+/// Currently, this represents 250%. If the average response time were 20 ms, then the
+/// retransmission timeout would be 60 ms.
+const UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 3.00;
+/// The step size to use if INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is
+/// exceeded.
+const UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
+/// When 20% or more of packets are being dropped, then it is time to start slowing down the socket.
+const INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+/// When 1% or more of packets are being dropped, then we might want to try speeding up the socket
+/// again, to reflect the average response time.
+const DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+/// The maximum allowable UDP retransmission timeout.
+const MAX_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_secs(10);
+/// The minimum allowable UDP retransmission timeout.
+const MIN_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// The initial UDP timeout, used when setting up a socket, before anything is known about the
+/// average response time.
+const INIT_UDP_TIMEOUT: Duration = Duration::from_millis(500);
+/// The number of UDP retransmission that are allowed for a mixed UDP-TCP query.
+const UDP_RETRANSMISSIONS: u8 = 1;
+/// The percentage of the average UDP response time that the timeout should be set to. Currently,
+/// this represents 200%. If the average response time were 20 ms, then the timeout would be 40 ms.
+const UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 2.00;
+/// The maximum percentage of the average UDP response time that the timeout should be set to.
+/// Currently, this represents 400%. If the average response time were 20 ms, then the
+/// retransmission timeout would be 80 ms.
+const UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 4.00;
+/// The step size to use if INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is
+/// exceeded.
+const UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
+/// When 20% or more of packets are being dropped, then it is time to start slowing down the socket.
+const INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+/// When 1% or more of packets are being dropped, then we might want to try speeding up the socket
+/// again, to reflect the average response time.
+const DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+/// The maximum allowable UDP timeout.
+const MAX_UDP_TIMEOUT: Duration = Duration::from_secs(10);
+/// The minimum allowable UDP timeout.
+const MIN_UDP_TIMEOUT: Duration = Duration::from_millis(50);
+
+// Using the safe checked version of new is not stable. As long as we always use non-zero constants,
+// there should not be any problems with this.
+const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(30) };
+const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(30) };
+const ROLLING_AVERAGE_UDP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(30) };
+const ROLLING_AVERAGE_UDP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(30) };
+const ROLLING_AVERAGE_UDP_MAX_TRUNCATED: NonZeroU8      = unsafe { NonZeroU8::new_unchecked(50) };
 
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -65,8 +148,8 @@ enum Query {
 impl Display for Query {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Query::Initial => write!(f, "Initial"),
-            Query::Retransmit => write!(f, "Retransmit"),
+            Self::Initial => write!(f, "Initial"),
+            Self::Retransmit => write!(f, "Retransmit"),
         }
     }
 }
@@ -81,20 +164,20 @@ enum QSendQuery<'t> {
 impl<'t> QSendQuery<'t> {
     pub fn query_type(&self) -> &Query {
         match self {
-            QSendQuery::Fresh(query) => query,
-            QSendQuery::SendQuery(query, _) => query,
-            QSendQuery::Complete(query) => query,
+            Self::Fresh(query) => query,
+            Self::SendQuery(query, _) => query,
+            Self::Complete(query) => query,
         }
     }
 
     pub fn set_fresh(mut self: std::pin::Pin<&mut Self>, query_type: Query) {
-        self.set(QSendQuery::Fresh(query_type));
+        self.set(Self::Fresh(query_type));
     }
 
     pub fn set_send_query(mut self: std::pin::Pin<&mut Self>, send_query: BoxFuture<'t, io::Result<()>>) {
         let query_type = self.query_type();
 
-        self.set(QSendQuery::SendQuery(*query_type, send_query));
+        self.set(Self::SendQuery(*query_type, send_query));
     }
 
     pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
@@ -119,6 +202,26 @@ impl<'a, 'b, 'c, 'd> Future for MixedQuery<'a, 'b, 'c, 'd> {
             MixedQueryProj::Udp(udp_query) => udp_query.poll(cx),
         }
     }
+}
+
+enum TcpResponseTime {
+    Dropped,
+    Responded(Duration),
+    /// `None` is used for cases where the message was never sent (e.g. serialization errors) or the
+    /// socket was closed before a response could be received.
+    None,
+}
+
+enum UdpResponseTime {
+    Dropped,
+    UdpDroppedTcpResponded(Duration),
+    Responded {
+        execution_time: Duration,
+        truncated: bool,
+    },
+    /// `None` is used for cases where the message was never sent (e.g. serialization errors) or the
+    /// socket was closed before a response could be received.
+    None,
 }
 
 enum PollSocket {
@@ -1099,12 +1202,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 'e, 
 }
 
 #[pin_project(PinnedDrop)]
-struct TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g>
+struct TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
 where
     'a: 'd + 'g
 {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
+    tcp_timeout: &'h Duration,
+    tcp_start_time: Instant,
     #[pin]
     timeout: Sleep,
     #[pin]
@@ -1113,15 +1218,17 @@ where
     inner: InnerTQ<'c, 'd, 'e, 'f, 'g>,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g>
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
 where
     'g: 'f
 {
-    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Message>) -> Self {
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Message>, tcp_timeout: &'h Duration) -> Self {
         Self {
             socket,
             query,
-            timeout: tokio::time::sleep(Duration::from_millis(TCP_TIMEOUT_MS)),
+            tcp_timeout,
+            tcp_start_time: Instant::now(),
+            timeout: tokio::time::sleep(*tcp_timeout),
             result_receiver,
             inner: InnerTQ::Fresh,
         }
@@ -1140,7 +1247,7 @@ where
         #[pin]
         send_query: QSendQuery<'e>,
     },
-    Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>),
+    Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>, TcpResponseTime),
     Complete,
 }
 
@@ -1155,10 +1262,10 @@ where
         });
     }
 
-    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
+    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: TcpResponseTime, socket: &'a Arc<MixedSocket>) {
         let w_active_queries = socket.active_queries.write().boxed();
 
-        self.set(Self::Cleanup(w_active_queries));
+        self.set(Self::Cleanup(w_active_queries, execution_time));
     }
 
     pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
@@ -1166,7 +1273,7 @@ where
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
     type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -1175,12 +1282,12 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
             InnerTQProj::Fresh
           | InnerTQProj::Running { tq_socket: _, send_query: _ } => {
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    this.inner.set_cleanup(this.socket);
+                    this.inner.set_cleanup(TcpResponseTime::Dropped, this.socket);
 
                     // Exit loop forever: query timed out.
                 }
             },
-            InnerTQProj::Cleanup(_)
+            InnerTQProj::Cleanup(_, _)
           | InnerTQProj::Complete => {
                 // Not allowed to timeout. This is a cleanup state.
             },
@@ -1207,7 +1314,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
             
                             match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
-                                    this.inner.set_cleanup(this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -1232,7 +1339,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
                             let tcp_socket = tcp_socket.clone();
             
                             if let PollSocket::Error(error) = tq_socket.poll(this.socket, cx) {
-                                this.inner.set_cleanup(this.socket);
+                                this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                 // Next loop will poll for the in-flight map lock to clean up the
                                 // query ID before returning the response.
@@ -1242,7 +1349,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
                             let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
                             let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                             if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
-                                this.inner.set_cleanup(this.socket);
+                                this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                 // Next loop will poll for the in-flight map lock to clean up the
                                 // query ID before returning the response.
@@ -1250,7 +1357,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
                             };
                             let wire_length = write_wire.current_len();
             
-                            println!("Sending on TCP socket {} :: {:?}", this.socket.upstream_socket, this.query);
+                            println!("Sending on TCP socket {} {{ drop rate {:.2}%, truncation rate {:.2}%, response time {:.2} ms, timeout {} ms }} :: {:?}", this.socket.upstream_socket, this.socket.average_dropped_tcp_packets() * 100.0, this.socket.average_truncated_udp_packets() * 100.0, this.socket.average_tcp_response_time(), this.tcp_timeout.as_millis(), this.query);
             
                             let send_query_future = async move {
                                 let socket = socket;
@@ -1283,7 +1390,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
                             match (send_query_future.as_mut().poll(cx), tq_socket.poll(this.socket, cx)) {
                                 (_, PollSocket::Error(error))
                                 | (Poll::Ready(Err(error)), _) => {
-                                    this.inner.set_cleanup(this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -1312,7 +1419,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
                         (QSendQueryProj::Complete(_), _) => {
                             match this.result_receiver.as_mut().poll(cx) {
                                 Poll::Ready(_) => {
-                                    this.inner.set_cleanup(this.socket);
+                                    let execution_time = this.tcp_start_time.elapsed();
+
+                                    this.inner.set_cleanup(TcpResponseTime::Responded(execution_time), this.socket);
             
                                     // TODO
                                     continue;
@@ -1322,7 +1431,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
             
                             match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
-                                    this.inner.set_cleanup(this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -1342,11 +1451,49 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
                         },
                     }
                 },
-                InnerTQProj::Cleanup(w_active_queries) => {
+                InnerTQProj::Cleanup(w_active_queries, execution_time) => {
                     this.result_receiver.close();
 
                     match w_active_queries.as_mut().poll(cx) {
                         Poll::Ready(mut w_active_queries) => {
+                            match execution_time {
+                                TcpResponseTime::Dropped => {
+                                    let average_tcp_dropped_packets = this.socket.add_dropped_packet_to_tcp_average();
+                                    let average_tcp_response_time = this.socket.average_tcp_response_time();
+                                    if average_tcp_response_time.is_finite() {
+                                        if average_tcp_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                            w_active_queries.tcp_timeout = min(
+                                                min(
+                                                    w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                    Duration::from_secs_f64(average_tcp_response_time * TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                                ),
+                                                MAX_TCP_TIMEOUT
+                                            );
+                                        }
+                                    } else {
+                                        if average_tcp_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                            w_active_queries.tcp_timeout = min(
+                                                w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                MAX_TCP_TIMEOUT
+                                            );
+                                        }
+                                    }
+                                },
+                                TcpResponseTime::Responded(response_time) => {
+                                    let (average_tcp_response_time, average_tcp_dropped_packets) = this.socket.add_response_time_to_tcp_average(*response_time);
+                                    if average_tcp_dropped_packets.current_average() <= DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                        w_active_queries.tcp_timeout = max(
+                                            max(
+                                                w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                Duration::from_secs_f64(average_tcp_response_time.current_average() * TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                            ),
+                                            MIN_TCP_TIMEOUT
+                                        );
+                                    }
+                                },
+                                TcpResponseTime::None => (),
+                            }
+
                             w_active_queries.in_flight.remove(&this.query.id);
                             w_active_queries.tcp_only.remove(&this.query.question);
                             drop(w_active_queries);
@@ -1371,7 +1518,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, '
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> PinnedDrop for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
     fn drop(mut self: Pin<&mut Self>) {
         async fn cleanup(socket: Arc<MixedSocket>, query: Message) {
             let mut w_active_queries = socket.active_queries.write().await;
@@ -1383,7 +1530,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g> PinnedDrop for TcpQueryRunner<'a, 'b, 'c, 'd, '
         match self.as_mut().project().inner.as_mut().project() {
             InnerTQProj::Fresh
           | InnerTQProj::Running { tq_socket: _, send_query: _ }
-          | InnerTQProj::Cleanup(_) => {
+          | InnerTQProj::Cleanup(_, _) => {
                 let socket = self.socket.clone();
                 let query = self.query.clone();
                 tokio::spawn(cleanup(socket, query));
@@ -1489,14 +1636,13 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
                                         // keys? May want to verify that the list isn't full.
                                     }
 
-                                    let socket = this.socket.clone();
-                                    let query = this.query.clone();
                                     let join_handle = tokio::spawn({
+                                        let tcp_timeout = w_active_queries.tcp_timeout;
                                         let result_receiver = result_receiver.clone();
-                                        let socket = socket;
-                                        let mut query = query;
+                                        let socket = this.socket.clone();
+                                        let mut query = this.query.clone();
                                         async move {
-                                            TcpQueryRunner::new(&socket, &mut query, result_receiver).await;
+                                            TcpQueryRunner::new(&socket, &mut query, result_receiver, &tcp_timeout).await;
                                         }
                                     });
 
@@ -1751,12 +1897,16 @@ enum UdpState {
 }
 
 #[pin_project(PinnedDrop)]
-struct UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
+struct UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i>
 where
     'a: 'd + 'h
 {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
+    udp_retransmission_timeout: &'i Duration,
+    udp_timeout: &'i Duration,
+    tcp_start_time: Instant,
+    udp_start_time: Instant,
     #[pin]
     timeout: Sleep,
     #[pin]
@@ -1765,16 +1915,20 @@ where
     inner: InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i>
 where
     'h: 'g
 {
-    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Message>) -> Self {
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Message>, udp_retransmission_timeout: &'i Duration, udp_timeout: &'i Duration) -> Self {
         Self {
             socket,
             query,
-            timeout: tokio::time::sleep(Duration::from_millis(UDP_RETRANSMIT_MS)),
+            udp_retransmission_timeout,
+            udp_timeout,
+            timeout: tokio::time::sleep(*udp_retransmission_timeout),
             result_receiver,
+            tcp_start_time: Instant::now(),
+            udp_start_time: Instant::now(),
             inner: InnerUQ::Fresh { udp_retransmissions: UDP_RETRANSMISSIONS },
         }
     }
@@ -1800,7 +1954,7 @@ where
         #[pin]
         send_query: QSendQuery<'f>,
     },
-    Cleanup(BoxFuture<'g, RwLockWriteGuard<'h, ActiveQueries>>),
+    Cleanup(BoxFuture<'g, RwLockWriteGuard<'h, ActiveQueries>>, UdpResponseTime),
     Complete,
 }
 
@@ -1822,10 +1976,10 @@ where
         });
     }
 
-    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
+    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: UdpResponseTime, socket: &'a Arc<MixedSocket>) {
         let w_active_queries = socket.active_queries.write().boxed();
 
-        self.set(Self::Cleanup(w_active_queries));
+        self.set(Self::Cleanup(w_active_queries, execution_time));
     }
 
     pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
@@ -1833,7 +1987,7 @@ where
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> {
     type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -1841,21 +1995,23 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
         match this.inner.as_mut().project() {
             InnerUQProj::Fresh { udp_retransmissions: 0 } => {
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    let new_timeout = **this.udp_timeout;
                     // If we run out of UDP retransmissions before the query has even begun,
                     // then it is time to transmit via TCP.
                     // Setting the socket state to TQSocket::Fresh will cause the socket to be
                     // initialized (if needed) and then a message sent over that socket.
                     this.inner.set_running_tcp(Query::Initial);
-                    self.as_mut().reset_timeout(Duration::from_millis(TCP_TIMEOUT_MS));
+                    self.as_mut().reset_timeout(new_timeout);
 
                     // TODO
                 }
             },
             InnerUQProj::Fresh { udp_retransmissions: udp_retransmissions @ 1.. } => {
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    let new_timeout = **this.udp_retransmission_timeout;
                     // If we time out before the first query has begin, burn a retransmission.
                     *udp_retransmissions = udp_retransmissions.saturating_sub(1);
-                    self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
+                    self.as_mut().reset_timeout(new_timeout);
 
                     // TODO
                 }
@@ -1863,14 +2019,27 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
             InnerUQProj::Running { mut socket, mut send_query } => {
                 match (send_query.as_mut().project(), socket.as_mut().project()) {
                     (QSendQueryProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 })
-                  | (QSendQueryProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 })
-                  | (QSendQueryProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
+                  | (QSendQueryProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            let new_timeout = **this.udp_timeout;
                             // Setting the socket state to TQSocket::Fresh will cause the socket
                             // to be initialized (if needed) and then a message sent over that
                             // socket.
                             this.inner.set_running_tcp(Query::Retransmit);
-                            self.as_mut().reset_timeout(Duration::from_millis(TCP_TIMEOUT_MS));
+                            self.as_mut().reset_timeout(new_timeout);
+
+                            // TODO
+                        }
+                    },
+                    (QSendQueryProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
+                        if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            let new_timeout = **this.udp_timeout;
+                            // Setting the socket state to TQSocket::Fresh will cause the socket
+                            // to be initialized (if needed) and then a message sent over that
+                            // socket.
+                            this.socket.add_dropped_packet_to_udp_average();
+                            this.inner.set_running_tcp(Query::Retransmit);
+                            self.as_mut().reset_timeout(new_timeout);
 
                             // TODO
                         }
@@ -1878,36 +2047,38 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                     (QSendQueryProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. })
                   | (QSendQueryProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            let new_timeout = **this.udp_retransmission_timeout;
                             // If we are currently sending a query or have not sent one yet,
                             // burn the retransmission.
                             *udp_retransmissions = udp_retransmissions.saturating_sub(1);
-                            self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
+                            self.as_mut().reset_timeout(new_timeout);
 
                             // TODO
                         }
                     },
                     (QSendQueryProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            let new_timeout = **this.udp_retransmission_timeout;
                             // A previous query has succeeded. Setting the state to Fresh will
                             // cause the state machine to send another query and drive it to
                             // Complete.
+                            this.socket.add_dropped_packet_to_udp_average();
                             send_query.set_fresh(Query::Retransmit);
                             *udp_retransmissions = udp_retransmissions.saturating_sub(1);
-                            self.as_mut().reset_timeout(Duration::from_millis(UDP_RETRANSMIT_MS));
-
+                            self.as_mut().reset_timeout(new_timeout);
                             // TODO
                         }
                     },
                     (_, EitherSocketProj::Tcp { tq_socket: _ }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                            this.inner.set_cleanup(this.socket);
+                            this.inner.set_cleanup(UdpResponseTime::Dropped, this.socket);
 
                             // TODO
                         }
                     },
                 }
             },
-            InnerUQProj::Cleanup(_)
+            InnerUQProj::Cleanup(_, _)
           | InnerUQProj::Complete => {
                 // Not allowed to timeout. This is a cleanup state.
             },
@@ -1931,8 +2102,17 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                             match query_type {
                                 Query::Initial => (),
                                 Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
-                                    Poll::Ready(_) => {
-                                        this.inner.set_cleanup(&this.socket);
+                                    Poll::Ready(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => {
+                                        let execution_time = this.udp_start_time.elapsed();
+
+                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
+
+                                        // Next loop will poll for the in-flight map lock to clean
+                                        // up the query ID before returning the response.
+                                        continue;
+                                    },
+                                    Poll::Ready(Err(error)) => {
+                                        this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
 
                                         // Next loop will poll for the in-flight map lock to clean
                                         // up the query ID before returning the response.
@@ -1944,7 +2124,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
 
                             let uq_socket_result = match uq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
-                                    this.inner.set_cleanup(&this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -1958,7 +2138,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
                                 let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                                 if let Err(wire_error) = this.query.to_wire_format(&mut write_wire, &mut Some(CompressionMap::new())) {
-                                    this.inner.set_cleanup(&this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -1966,10 +2146,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 };
                                 let wire_length = write_wire.current_len();
 
-                                let socket = this.socket.clone();
+                                let socket: Arc<MixedSocket> = this.socket.clone();
                                 let udp_socket = udp_socket.clone();
 
-                                println!("Sending on UDP socket {} :: {:?}", this.socket.upstream_socket, this.query);
+                                println!("Sending on UDP socket {} {{ drop rate {:.2}%, truncation rate {:.2}%, response time {:.2} ms, timeout {} ms }} :: {:?}", this.socket.upstream_socket, this.socket.average_dropped_udp_packets() * 100.0, this.socket.average_truncated_udp_packets() * 100.0, this.socket.average_udp_response_time(), this.udp_retransmission_timeout.as_millis(), this.query);
 
                                 let send_query_future = async move {
                                     let socket = socket;
@@ -1989,6 +2169,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                     return Ok(());
                                 }.boxed();
 
+                                *this.udp_start_time = Instant::now();
                                 send_query.set_send_query(send_query_future);
 
                                 // Next loop will begin to poll SendQuery. This will write the bytes
@@ -2005,8 +2186,17 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                             match query_type {
                                 Query::Initial => (),
                                 Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
-                                    Poll::Ready(_) => {
-                                        this.inner.set_cleanup(&this.socket);
+                                    Poll::Ready(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => {
+                                        let execution_time = this.udp_start_time.elapsed();
+
+                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
+
+                                        // Next loop will poll for the in-flight map lock to clean
+                                        // up the query ID before returning the response.
+                                        continue;
+                                    },
+                                    Poll::Ready(Err(error)) => {
+                                        this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
 
                                         // Next loop will poll for the in-flight map lock to clean
                                         // up the query ID before returning the response.
@@ -2018,7 +2208,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
 
                             let tq_socket_result = match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
-                                    this.inner.set_cleanup(&this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -2032,7 +2222,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
                                 let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                                 if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
-                                    this.inner.set_cleanup(&this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up the
                                     // query ID before returning the response.
@@ -2043,7 +2233,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 let socket = this.socket.clone();
                                 let tcp_socket = tcp_socket.clone();
 
-                                println!("Sending on TCP socket {} :: {:?}", this.socket.upstream_socket, this.query);
+                                println!("Sending on TCP socket {} {{ drop rate {:.2}%, truncation rate {:.2}%, response time {:.2} ms, timeout {} ms }} :: {:?}", this.socket.upstream_socket, this.socket.average_dropped_tcp_packets() * 100.0, this.socket.average_truncated_udp_packets() * 100.0, this.socket.average_tcp_response_time(), this.udp_timeout.as_millis(), this.query);
 
                                 let send_query_future = async move {
                                     let socket = socket;
@@ -2065,6 +2255,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                     return Ok(());
                                 }.boxed();
 
+                                *this.tcp_start_time = Instant::now();
                                 send_query.set_send_query(send_query_future);
 
                                 // Next loop will begin to poll SendQuery. This will get the lock and
@@ -2081,8 +2272,17 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                             match query_type {
                                 Query::Initial => (),
                                 Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
-                                    Poll::Ready(_) => {
-                                        this.inner.set_cleanup(&this.socket);
+                                    Poll::Ready(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => {
+                                        let execution_time = this.udp_start_time.elapsed();
+
+                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
+
+                                        // Next loop will poll for the in-flight map lock to clean
+                                        // up the query ID before returning the response.
+                                        continue;
+                                    },
+                                    Poll::Ready(Err(error)) => {
+                                        this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
 
                                         // Next loop will poll for the in-flight map lock to clean
                                         // up the query ID before returning the response.
@@ -2094,7 +2294,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
 
                             let q_socket_result = match q_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
-                                    this.inner.set_cleanup(&this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -2106,7 +2306,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
 
                             match send_query_future.as_mut().poll(cx) {
                                 Poll::Ready(Err(error)) => {
-                                    this.inner.set_cleanup(&this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -2129,8 +2329,16 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                         },
                         (QSendQueryProj::Complete(_), _) => {
                             match this.result_receiver.as_mut().poll(cx) {
-                                Poll::Ready(_) => {
-                                    this.inner.set_cleanup(&this.socket);
+                                Poll::Ready(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => {
+                                    let execution_time = this.udp_start_time.elapsed();
+
+                                    this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
+
+                                    // TODO
+                                    continue;
+                                },
+                                Poll::Ready(Err(error)) => {
+                                    this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
 
                                     // TODO
                                     continue;
@@ -2140,7 +2348,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
 
                             match q_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
-                                    this.inner.set_cleanup(&this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
@@ -2152,11 +2360,96 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                         },
                     }
                 },
-                InnerUQProj::Cleanup(w_active_queries) => {
+                InnerUQProj::Cleanup(w_active_queries, execution_time) => {
                     this.result_receiver.close();
 
                     match w_active_queries.as_mut().poll(cx) {
                         Poll::Ready(mut w_active_queries) => {
+                            match execution_time {
+                                UdpResponseTime::Dropped => {
+                                    let average_udp_dropped_packets = this.socket.add_dropped_packet_to_udp_average();
+                                    let average_udp_response_time = this.socket.average_udp_response_time();
+                                    if average_udp_response_time.is_finite() {
+                                        if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                            w_active_queries.udp_timeout = min(
+                                                min(
+                                                    w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                    Duration::from_secs_f64(average_udp_response_time * UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                                ),
+                                                MAX_UDP_TIMEOUT
+                                            );
+                                        }
+                                        if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                            w_active_queries.udp_retransmit_timeout = min(
+                                                min(
+                                                    w_active_queries.udp_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                    Duration::from_secs_f64(average_udp_response_time * UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                                ),
+                                                MAX_UDP_RETRANSMISSION_TIMEOUT
+                                            );
+                                        }
+                                    } else {
+                                        if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                            w_active_queries.udp_timeout = min(
+                                                w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                MAX_UDP_TIMEOUT
+                                            );
+                                        }
+                                        if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                            w_active_queries.udp_retransmit_timeout = min(
+                                                w_active_queries.udp_retransmit_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                MAX_UDP_RETRANSMISSION_TIMEOUT
+                                            );
+                                        }
+                                    }
+                                },
+                                UdpResponseTime::UdpDroppedTcpResponded(response_time) => {
+                                    let average_udp_dropped_packets = this.socket.add_dropped_packet_to_udp_average();
+                                    let (average_tcp_response_time, average_tcp_dropped_packets) = this.socket.add_response_time_to_tcp_average(*response_time);
+                                    if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                        w_active_queries.udp_timeout = min(
+                                            w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                            MAX_UDP_TIMEOUT
+                                        );
+                                    }
+                                    if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                        w_active_queries.udp_retransmit_timeout = min(
+                                            w_active_queries.udp_retransmit_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                            MAX_UDP_RETRANSMISSION_TIMEOUT
+                                        );
+                                    }
+                                },
+                                UdpResponseTime::Responded { execution_time: response_time, truncated } => {
+                                    let (average_udp_response_time, average_udp_dropped_packets) = this.socket.add_response_time_to_udp_average(*response_time);
+                                    if average_udp_dropped_packets.current_average() <= DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                        w_active_queries.udp_timeout = max(
+                                            min(
+                                                max(
+                                                    w_active_queries.udp_timeout.saturating_sub(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                    Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                                ),
+                                                Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                            ),
+                                            MIN_UDP_TIMEOUT,
+                                        );
+                                    }
+                                    if average_udp_dropped_packets.current_average() <= DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                        w_active_queries.udp_retransmit_timeout = max(
+                                            min(
+                                                max(
+                                                    w_active_queries.udp_retransmit_timeout.saturating_sub(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                    Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                                ),
+                                                Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                            ),
+                                            MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                        );
+                                    }
+                                    this.socket.add_truncated_packet_to_udp_average(*truncated);
+                                },
+                                UdpResponseTime::None => (),
+                            }
+
                             w_active_queries.in_flight.remove(&this.query.id);
                             w_active_queries.tcp_or_udp.remove(&this.query.question);
                             drop(w_active_queries);
@@ -2180,7 +2473,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> {
     fn drop(mut self: Pin<&mut Self>) {
         async fn cleanup(socket: Arc<MixedSocket>, query: Message) {
             let mut w_active_queries = socket.active_queries.write().await;
@@ -2192,7 +2485,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, '
         match self.as_mut().project().inner.as_mut().project() {
             InnerUQProj::Fresh { udp_retransmissions: _ }
           | InnerUQProj::Running { socket: _, send_query: _ }
-          | InnerUQProj::Cleanup(_) => {
+          | InnerUQProj::Cleanup(_, _) => {
                 let socket = self.socket.clone();
                 let query = self.query.clone();
                 tokio::spawn(cleanup(socket, query));
@@ -2305,14 +2598,14 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                         // keys? May want to verify that the list isn't full.
                                     }
 
-                                    let socket = this.socket.clone();
-                                    let query = this.query.clone();
                                     let join_handle = tokio::spawn({
+                                        let udp_retransmit_timeout = w_active_queries.udp_retransmit_timeout;
+                                        let udp_timeout = w_active_queries.udp_timeout;
                                         let result_receiver = result_receiver.clone();
-                                        let socket = socket;
-                                        let mut query = query;
+                                        let socket = this.socket.clone();
+                                        let mut query = this.query.clone();
                                         async move {
-                                            UdpQueryRunner::new(&socket, &mut query, result_receiver).await;
+                                            UdpQueryRunner::new(&socket, &mut query, result_receiver, &udp_retransmit_timeout, &udp_timeout).await;
                                         }
                                     });
 
@@ -2557,6 +2850,10 @@ impl MixedSocket {
 }
 
 struct ActiveQueries {
+    udp_retransmit_timeout: Duration,
+    udp_timeout: Duration,
+    tcp_timeout: Duration,
+
     in_flight: HashMap<u16, (once_watch::Sender<Message>, JoinHandle<()>)>,
     tcp_only: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Message>)>,
     tcp_or_udp: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Message>)>,
@@ -2565,6 +2862,10 @@ struct ActiveQueries {
 impl ActiveQueries {
     pub fn new() -> Self {
         Self {
+            udp_retransmit_timeout: INIT_UDP_RETRANSMISSION_TIMEOUT,
+            udp_timeout: INIT_UDP_TIMEOUT,
+            tcp_timeout: INIT_TCP_TIMEOUT,
+
             in_flight: HashMap::new(),
             tcp_only: HashMap::new(),
             tcp_or_udp: HashMap::new(),
@@ -2572,16 +2873,100 @@ impl ActiveQueries {
     }
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Zeroable, Pod)]
+struct RollingAverage {
+    total: u32,
+    count: u8,
+    // Padding out to 8 bytes is required for bytemuck Zeroable and Pod.
+    pad1: u8,
+    pad2: u16,
+}
+
+impl RollingAverage {
+    pub fn new() -> Self {
+        Self {
+            total: 0,
+            count: 0,
+            pad1: 0,
+            pad2: 0,
+        }
+    }
+
+    pub fn put_next(mut self, value: u32, max_count: NonZeroU8) -> Self {
+        if self.count < max_count.into() {
+            if let Some(total) = self.total.checked_add(value) {
+                self.total = total;
+                self.count += 1;
+                return self;
+            }
+        }
+
+        // Don't need to use a check_div since max_count is guaranteed to be non-zero, so if the
+        // count were zero, the first case would have run instead.
+        let average = u64::from(self.total.div(u32::from(self.count)));
+        let value = u64::from(value);
+        // Since we up-casted from u32, there is no way for the addition to fail. No need to use a
+        // checked add.
+        let mut total = u64::from(self.total).add(value);
+
+        // If we have overshot the maximum count, then subtract the average one an extra time.
+        if self.count > max_count.into() {
+            total = total.saturating_sub(average);
+            // self.count will never drop below 1 because max_count is non-zero. If max_count were 0
+            // or 1, this conditional wouldn't be run.
+            self.count -= 1;
+        }
+
+        match u32::try_from(total.saturating_sub(average)) {
+            Ok(total) => {
+                self.total = total;
+                return self;
+            },
+            Err(_) => {
+                self.total = u32::MAX;
+                return self;
+            },
+        }
+    }
+
+    pub fn current_average(&self) -> f64 {
+        f64::from(self.total).div(f64::from(self.count))
+    }
+}
+
+/// Similar to `Atomic::fetch_update()` except...
+/// 1. it returns the updated value, not the previous value.
+/// 2. the input function returns `T`, not `Option<T>`.
+/// 3. the return value is never an `Err(T)`.
+/// This allows it to work better when updating `RollingAverage`.
+pub fn fetch_update<T, F>(atomic: &Atomic<T>, success: Ordering, failure: Ordering, f: F) -> T
+where
+    T: NoUninit + Clone,
+    F: Fn(T) -> T
+{
+    let mut prev = atomic.load(Ordering::Relaxed);
+    loop {
+        let next = f(prev);
+        match atomic.compare_exchange_weak(prev, next.clone(), success, failure) {
+            Ok(_) => return next,
+            Err(next_prev) => prev = next_prev,
+        }
+    }
+}
+
 pub struct MixedSocket {
-    udp_retransmit: Duration,
-    udp_timeout_count: AtomicU8,
-    udp: RwLock<UdpState>,
-
-    tcp_timeout: Duration,
-    tcp: RwLock<TcpState>,
-
     upstream_socket: SocketAddr,
+    tcp: RwLock<TcpState>,
+    udp: RwLock<UdpState>,
     active_queries: RwLock<ActiveQueries>,
+
+    // Rolling averages
+    average_tcp_response_time: Atomic<RollingAverage>,
+    average_tcp_dropped_packets: Atomic<RollingAverage>,
+    average_udp_response_time: Atomic<RollingAverage>,
+    average_udp_dropped_packets: Atomic<RollingAverage>,
+    average_udp_truncated_packets: Atomic<RollingAverage>,
 
     // Counters used to determine when the socket should be closed.
     recent_messages_sent: AtomicBool,
@@ -2592,19 +2977,131 @@ impl MixedSocket {
     #[inline]
     pub fn new(upstream_socket: SocketAddr) -> Arc<Self> {
         Arc::new(MixedSocket {
-            udp_retransmit: Duration::from_millis(UDP_RETRANSMIT_MS),
-            udp_timeout_count: AtomicU8::new(0),
-            udp: RwLock::new(UdpState::None),
-
-            tcp_timeout: Duration::from_millis(TCP_TIMEOUT_MS),
-            tcp: RwLock::new(TcpState::None),
-
             upstream_socket,
+            tcp: RwLock::new(TcpState::None),
+            udp: RwLock::new(UdpState::None),
             active_queries: RwLock::new(ActiveQueries::new()),
+
+            average_tcp_response_time: Atomic::new(RollingAverage::new()),
+            average_tcp_dropped_packets: Atomic::new(RollingAverage::new()),
+            average_udp_response_time: Atomic::new(RollingAverage::new()),
+            average_udp_dropped_packets: Atomic::new(RollingAverage::new()),
+            average_udp_truncated_packets: Atomic::new(RollingAverage::new()),
 
             recent_messages_sent: AtomicBool::new(false),
             recent_messages_received: AtomicBool::new(false),
         })
+    }
+
+    #[inline]
+    pub fn socket_address(&self) -> &SocketAddr {
+        &self.upstream_socket
+    }
+
+    #[inline]
+    pub fn average_tcp_response_time(&self) -> f64 {
+        self.average_tcp_response_time.load(Ordering::Acquire).current_average()
+    }
+
+    #[inline]
+    pub fn average_dropped_tcp_packets(&self) -> f64 {
+        self.average_tcp_dropped_packets.load(Ordering::Acquire).current_average()
+    }
+
+    #[inline]
+    pub fn average_udp_response_time(&self) -> f64 {
+        self.average_udp_response_time.load(Ordering::Acquire).current_average()
+    }
+
+    #[inline]
+    pub fn average_dropped_udp_packets(&self) -> f64 {
+        self.average_udp_dropped_packets.load(Ordering::Acquire).current_average()
+    }
+
+    #[inline]
+    pub fn average_truncated_udp_packets(&self) -> f64 {
+        self.average_udp_truncated_packets.load(Ordering::Acquire).current_average()
+    }
+
+    #[inline]
+    fn add_dropped_packet_to_tcp_average(&self) -> RollingAverage {
+        // We can use relaxed memory orderings with the rolling average because it is not being used
+        // for synchronization nor do we care about the order of atomic operations. We only care
+        // that the operation is atomic.
+        fetch_update(
+            &self.average_tcp_dropped_packets,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |average| average.put_next(1, ROLLING_AVERAGE_TCP_MAX_DROPPED)
+        )
+    }
+
+    #[inline]
+    fn add_response_time_to_tcp_average(&self, response_time: Duration) -> (RollingAverage, RollingAverage) {
+        // We can use relaxed memory orderings with the rolling average because it is not being used
+        // for synchronization nor do we care about the order of atomic operations. We only care
+        // that the operation is atomic.
+        (
+            fetch_update(
+                &self.average_tcp_response_time,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |average| average.put_next(u32::try_from(response_time.as_millis()).unwrap_or(u32::MAX), ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES)
+            ),
+            fetch_update(
+                &self.average_tcp_dropped_packets,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |average| average.put_next(0, ROLLING_AVERAGE_TCP_MAX_DROPPED)
+            )
+        )
+    }
+
+    #[inline]
+    fn add_dropped_packet_to_udp_average(&self) -> RollingAverage {
+        // We can use relaxed memory orderings with the rolling average because it is not being used
+        // for synchronization nor do we care about the order of atomic operations. We only care
+        // that the operation is atomic.
+        fetch_update(
+            &self.average_udp_dropped_packets,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |average| average.put_next(1, ROLLING_AVERAGE_UDP_MAX_DROPPED)
+        )
+    }
+
+    #[inline]
+    fn add_response_time_to_udp_average(&self, response_time: Duration) -> (RollingAverage, RollingAverage) {
+        // We can use relaxed memory orderings with the rolling average because it is not being used
+        // for synchronization nor do we care about the order of atomic operations. We only care
+        // that the operation is atomic.
+        (
+            fetch_update(
+                &self.average_udp_response_time,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |average| average.put_next(u32::try_from(response_time.as_millis()).unwrap_or(u32::MAX), ROLLING_AVERAGE_UDP_MAX_RESPONSE_TIMES)
+            ),
+            fetch_update(
+                &self.average_udp_dropped_packets,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |average| average.put_next(0, ROLLING_AVERAGE_UDP_MAX_DROPPED)
+            )
+        )
+    }
+
+    #[inline]
+    fn add_truncated_packet_to_udp_average(&self, truncated: bool) -> RollingAverage {
+        // We can use relaxed memory orderings with the rolling average because it is not being used
+        // for synchronization nor do we care about the order of atomic operations. We only care
+        // that the operation is atomic.
+        fetch_update(
+            &self.average_udp_truncated_packets,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |average| average.put_next(truncated.into(), ROLLING_AVERAGE_UDP_MAX_TRUNCATED)
+        )
     }
 
     #[inline]
@@ -2710,23 +3207,25 @@ impl MixedSocket {
     }
 
     pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOptions) -> MixedQuery<'a, 'b, 'c, 'd> {
-        let udp_timeout_count = self.udp_timeout_count.load(Ordering::Acquire);
-        let query_task = match (options, udp_timeout_count) {
-            (QueryOptions::Both, 0..=3) => {
-                MixedQuery::Udp(UdpQuery::new(&self, query))
+        // If the UDP socket is unreliable, send most data via TCP. Some queries should still use
+        // UDP to determine if the network conditions are improving. However, if the TCP connection
+        // is also unstable, then we should not rely on it.
+        let query_task = match options {
+            QueryOptions::Both => {
+                let average_dropped_udp_packets = self.average_dropped_udp_packets();
+                let average_truncated_udp_packets = self.average_truncated_udp_packets();
+                let average_dropped_tcp_packets = self.average_dropped_tcp_packets();
+                if ((average_dropped_udp_packets.is_finite() && (average_dropped_udp_packets >= 0.40))
+                 || (average_truncated_udp_packets.is_finite() && (average_truncated_udp_packets >= 0.50)))
+                && (average_dropped_tcp_packets.is_nan() || (average_dropped_tcp_packets <= 0.25))
+                && (rand::random::<f32>() >= 0.20)
+                {
+                    MixedQuery::Tcp(TcpQuery::new(&self, query))
+                } else {
+                    MixedQuery::Udp(UdpQuery::new(&self, query))
+                }
             },
-            // Too many UDP timeouts.
-            (QueryOptions::Both, 4) => {
-                // It will query via UDP but will start setting up a TCP connection to fall back on.
-                task::spawn(self.clone().init_tcp());
-                MixedQuery::Udp(UdpQuery::new(&self, query))
-            },
-            // Too many UDP timeouts.
-            (QueryOptions::Both, 5..) => {
-                MixedQuery::Tcp(TcpQuery::new(&self, query))
-            },
-            // Only TCP is allowed
-            (QueryOptions::TcpOnly, _) => {
+            QueryOptions::TcpOnly => {
                 MixedQuery::Tcp(TcpQuery::new(&self, query))
             },
         };
