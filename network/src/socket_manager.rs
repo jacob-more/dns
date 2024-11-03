@@ -1,5 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
+use futures::StreamExt;
 use tokio::{select, sync::{watch, RwLock}, task::JoinHandle};
 
 use crate::mixed_tcp_udp::MixedSocket;
@@ -138,6 +139,9 @@ impl SocketManager {
         drop(w_socket_manager);
     }
 
+    /// # Cancel Safety
+    /// 
+    /// This function is cancel safe.
     #[inline]
     pub async fn get(&self, address: &SocketAddr) -> Arc<MixedSocket> {
         let r_socket_manager = self.internal.read().await;
@@ -156,6 +160,50 @@ impl SocketManager {
                 return socket;
             },
         }
+    }
+
+    /// # Cancel Safety
+    /// 
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn try_get(&self, address: &SocketAddr) -> Option<Arc<MixedSocket>> {
+        let r_socket_manager = self.internal.read().await;
+        let socket = r_socket_manager.sockets.get(address).cloned();
+        drop(r_socket_manager);
+        return socket;
+    }
+
+    /// # Cancel Safety
+    /// 
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn get_all(&self, addresses: impl Iterator<Item = &SocketAddr>) -> Vec<Arc<MixedSocket>> {
+        let mut w_socket_manager = self.internal.write().await;
+        let sockets = addresses
+            .map(|address| match w_socket_manager.sockets.get(address) {
+                Some(socket) => socket.clone(),
+                None => {
+                    let socket = MixedSocket::new(address.clone());
+                    w_socket_manager.sockets.insert(address.clone(), socket.clone());
+                    socket
+                },
+            })
+            .collect::<Vec<_>>();
+        drop(w_socket_manager);
+        return sockets;
+    }
+
+    /// # Cancel Safety
+    /// 
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn try_get_all(&self, addresses: impl Iterator<Item = &SocketAddr>) -> Vec<Arc<MixedSocket>> {
+        let r_socket_manager = self.internal.read().await;
+        let sockets = addresses
+            .filter_map(|address| r_socket_manager.sockets.get(address).cloned())
+            .collect::<Vec<_>>();
+        drop(r_socket_manager);
+        return sockets;
     }
 
     #[inline]

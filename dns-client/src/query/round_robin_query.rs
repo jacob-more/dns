@@ -1,8 +1,9 @@
-use std::{borrow::BorrowMut, future::Future, io, net::IpAddr, pin::Pin, sync::Arc, task::Poll, time::Duration};
+use std::{borrow::BorrowMut, cmp::Reverse, collections::HashMap, future::Future, io, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
 use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
+use network::mixed_tcp_udp::MixedSocket;
 use pin_project::{pin_project, pinned_drop};
 
 use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
@@ -10,7 +11,7 @@ use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
 use super::{network_query::query_network, recursive_query::{query_cache, QueryResponse}};
 
 
-async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, address_rtype: RType, context: Arc<Context>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
+async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(ns_domain: CDomainName, address_rtype: RType, context: Arc<Context>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
     let ns_question = context.query().with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
 
     fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
@@ -21,11 +22,20 @@ async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, ad
         }
     }
 
-    let ns_init_state = match query_cache(&joined_cache, &ns_question).await {
-        QueryResponse::Records(mut records) => NSQueryState::CacheHit {
-            ns_addresses: records.drain(..).filter_map(|record| rr_to_ip(record)).collect()
+    let ns_addresses;
+    let cache_response;
+    match query_cache(&joined_cache, &ns_question).await {
+        QueryResponse::Records(records) => {
+            ns_addresses = records.into_iter()
+                .filter_map(|record| rr_to_ip(record))
+                .collect();
+            cache_response = NSQueryCacheResponse::Hit;
         },
-        _ => NSQueryState::CacheMiss,
+        _ => {
+            ns_addresses = vec![];
+            cache_response = NSQueryCacheResponse::Miss;
+
+        },
     };
 
     NSQuery {
@@ -36,23 +46,10 @@ async fn query_cache_for_ns_addresses<'a, 'b, CCache>(ns_domain: CDomainName, ad
         client,
         joined_cache,
 
-        state: ns_init_state,
+        ns_addresses,
+        sockets: HashMap::new(),
+        state: InnerNSQuery::Fresh(cache_response),
     }
-}
-
-enum NSQueryState<'a, 'b> {
-    CacheMiss,
-    QueryingNetworkNSAddresses {
-        ns_addresses_query: BoxFuture<'a, QueryResponse<ResourceRecord>>,
-    },
-    CacheHit {
-        ns_addresses: Vec<IpAddr>,
-    },
-    QueryingNetwork {
-        query: Option<BoxFuture<'b, io::Result<Message>>>,
-        remaining_ns_addresses: Vec<IpAddr>,
-    },
-    OutOfAddresses,
 }
 
 #[derive(Debug)]
@@ -63,7 +60,7 @@ enum NSQueryResult {
 }
 
 #[pin_project]
-struct NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
+struct NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
     ns_domain: CDomainName,
     ns_address_rtype: RType,
     context: Arc<Context>,
@@ -71,10 +68,40 @@ struct NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync {
     client: Arc<DNSAsyncClient>,
     joined_cache: Arc<CCache>,
 
-    state: NSQueryState<'a, 'b>,
+    ns_addresses: Vec<IpAddr>,
+    sockets: HashMap<IpAddr, Arc<MixedSocket>>,
+    state: InnerNSQuery<'a, 'b, 'c>,
 }
 
-impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+enum InnerNSQuery<'a, 'b, 'c> {
+    Fresh(NSQueryCacheResponse),
+    QueryingNetworkNSAddresses {
+        ns_addresses_query: BoxFuture<'a, QueryResponse<ResourceRecord>>,
+    },
+    GettingSocketStats(BoxFuture<'b, Vec<Arc<MixedSocket>>>),
+    NetworkQueryStart,
+    QueryingNetwork(BoxFuture<'c, io::Result<Message>>),
+    OutOfAddresses,
+}
+
+enum NSQueryCacheResponse {
+    Hit,
+    Miss,
+}
+
+impl<'a, 'b, 'c, CCache> NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
+    pub fn best_address_stats(&self) -> Option<(u32, u32)> {
+        self.ns_addresses.iter().map(|address| self.sockets.get(address)
+                .map(|socket| (socket.average_dropped_udp_packets(), socket.average_udp_response_time()))
+                .filter(|(average_dropped_udp_packets, average_udp_response_time)| (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()))
+                .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32))))
+                .max()
+                .flatten()
+                .map(|val| val.0)
+    }
+}
+
+impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     type Output = NSQueryResult;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -84,6 +111,10 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
 
         async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, name_server_address: IpAddr) -> io::Result<Message> where CCache: AsyncCache + Send + Sync {
             query_network(&client, joined_cache, context.query(), &name_server_address).await
+        }
+
+        async fn query_for_sockets<CCache>(client: Arc<DNSAsyncClient>, sockets: Vec<SocketAddr>) -> Vec<Arc<MixedSocket>> where CCache: AsyncCache + Send {
+            client.socket_manager.try_get_all(sockets.iter()).await
         }
 
         fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
@@ -97,156 +128,176 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
         loop {
             let this = self.as_mut().project();
             match this.state {
-                NSQueryState::CacheMiss => {
+                InnerNSQuery::Fresh(NSQueryCacheResponse::Hit) => {
+                    let sockets_addresses = this.ns_addresses.iter()
+                        .map(|address| SocketAddr::new(*address, 53))
+                        .collect::<Vec<_>>();
+                    let client = this.client.clone();
+                    let context = &self.context;
+                    trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::GettingSocketStats");
+
+                    self.state = InnerNSQuery::GettingSocketStats(query_for_sockets::<CCache>(client, sockets_addresses).boxed());
+
+                    // TODO
+                    continue;
+                },
+                InnerNSQuery::Fresh(NSQueryCacheResponse::Miss) => {
                     let client = self.client.clone();
                     let cache = self.joined_cache.clone();
                     match self.context.clone().new_ns_address(self.context.query().with_new_qname_qtype(self.ns_domain.clone(), self.ns_address_rtype)) {
                         Ok(ns_address_context) => {
                             let context = self.context.as_ref();
-                            trace!(context:?; "NSQuery::CacheMiss -> NSQuery::QueryingNetworkNSAddresses: querying for new ns addresses with context '{ns_address_context:?}'");
-                            self.state = NSQueryState::QueryingNetworkNSAddresses { ns_addresses_query: recursive_query_owned_args(client, cache, ns_address_context).boxed() };
+                            trace!(context:?; "NSQuery::Fresh(Miss) -> NSQuery::QueryingNetworkNSAddresses: querying for new ns addresses with context '{ns_address_context:?}'");
+
+                            self.state = InnerNSQuery::QueryingNetworkNSAddresses { ns_addresses_query: recursive_query_owned_args(client, cache, ns_address_context).boxed() };
+
                             // Next loop will poll the query for NS addresses
                             continue;
                         },
                         Err(error) => {
-                            self.state = NSQueryState::OutOfAddresses;
                             let context = self.context.as_ref();
-                            debug!(context:?; "NSQuery::CacheMiss -> NSQuery::OutOfAddresses: new ns address error: {error}");
-                            // Exit loop. The was an error trying to query for
-                            // the addresses.
+                            debug!(context:?; "NSQuery::Fresh(Miss) -> NSQuery::OutOfAddresses: new ns address error: {error}");
+
+                            self.state = InnerNSQuery::OutOfAddresses;
+
+                            // Exit loop. The was an error trying to query for the addresses.
                             return Poll::Ready(NSQueryResult::NSAddressQueryErr(RCode::ServFail));
                         },
                     };
                 },
-                NSQueryState::QueryingNetworkNSAddresses { ns_addresses_query } => {
+                InnerNSQuery::QueryingNetworkNSAddresses { ns_addresses_query } => {
                     match ns_addresses_query.as_mut().poll(cx) {
-                        Poll::Ready(QueryResponse::Records(mut records)) => {
-                            let mut ns_addresses = records.drain(..)
-                                .filter_map(|record| rr_to_ip(record))
-                                .collect::<Vec<_>>();
-                            match ns_addresses.pop() {
-                                Some(first_ns_address) => {
-                                    let context = this.context.as_ref();
-                                    trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::QueryingNetwork: querying ns address {first_ns_address}");
-                                    let client = this.client.clone();
-                                    let cache = this.joined_cache.clone();
-                                    let context = this.context.clone();
-                                    let query = query_network_owned_args(client, cache, context, first_ns_address).boxed();
-                                    self.state = NSQueryState::QueryingNetwork { query: Some(query), remaining_ns_addresses: ns_addresses };
-                                    // Next loop will poll the query for the question.
-                                    continue;
-                                },
-                                None => {
-                                    self.state = NSQueryState::OutOfAddresses;
-                                    let context = &self.context;
-                                    trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: tried to query first ns address but out of addresses");
-                                    // Exit loop. There are no addresses to query.
-                                    return Poll::Ready(NSQueryResult::OutOfAddresses);
-                                },
+                        Poll::Ready(QueryResponse::Records(records)) => {
+                            this.ns_addresses.extend(records.into_iter().filter_map(|record| rr_to_ip(record)));
+                            if this.ns_addresses.is_empty() {
+                                let context = &self.context;
+                                trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: tried to query first ns address but out of addresses");
+
+                                self.state = InnerNSQuery::OutOfAddresses;
+
+                                // Exit loop. There are no addresses to query.
+                                return Poll::Ready(NSQueryResult::OutOfAddresses);
+                            } else {
+                                let sockets_addresses = this.ns_addresses.iter()
+                                    .map(|address| SocketAddr::new(*address, 53))
+                                    .collect::<Vec<_>>();
+                                let client = this.client.clone();
+                                let context = &self.context;
+                                trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::GettingSocketStats");
+            
+                                self.state = InnerNSQuery::GettingSocketStats(query_for_sockets::<CCache>(client, sockets_addresses).boxed());
+
+                                // TODO
+                                continue;
                             }
-                        }
+                        },
                         Poll::Ready(QueryResponse::NoRecords) => {
-                            self.state = NSQueryState::OutOfAddresses;
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::NoRecords when querying network for ns addresses");
+
+                            self.state = InnerNSQuery::OutOfAddresses;
+
                             // Exit loop. There are no addresses to query.
                             return Poll::Ready(NSQueryResult::OutOfAddresses);
                         },
                         Poll::Ready(QueryResponse::Error(rcode)) => {
-                            self.state = NSQueryState::OutOfAddresses;
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::Error({rcode}) when querying network for ns addresses");
-                            // Exit loop. The was an error trying to query for
-                            // the addresses.
+
+                            self.state = InnerNSQuery::OutOfAddresses;
+
+                            // Exit loop. The was an error trying to query for the addresses.
                             return Poll::Ready(NSQueryResult::NSAddressQueryErr(rcode));
                         },
                         Poll::Pending => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses: waiting for network query response for ns addresses");
+
                             // Exit loop. Will be woken up by the ns address query.
                             return Poll::Pending
                         },
                     }
                 },
-                NSQueryState::CacheHit { ns_addresses } => {
-                    match ns_addresses.pop() {
-                        Some(first_ns_address) => {
+                InnerNSQuery::GettingSocketStats(sockets_future) => {
+                    match sockets_future.as_mut().poll(cx) {
+                        Poll::Ready(sockets) => {
+                            self.sockets.extend(sockets.into_iter().map(|socket| (socket.socket_address().ip(), socket)));
+                            let context = self.context.as_ref();
+                            trace!(context:?; "NSQuery::GettingSocketStats -> InnerNSQuery::NetworkQueryStart: getting sockets to determine the fastest addresses");
+
+                            self.state = InnerNSQuery::NetworkQueryStart;
+
+                            // TODO
+                            continue;
+                        },
+                        Poll::Pending => {
+                            let context = self.context.as_ref();
+                            trace!(context:?; "NSQuery::GettingSocketStats: getting sockets to determine the fastest addresses");
+
+                            // Exit loop. Will be woken up by the ns address query.
+                            return Poll::Pending
+                        },
+                    }
+                },
+                InnerNSQuery::NetworkQueryStart => {
+                    match this.ns_addresses.pop() {
+                        Some(next_ns_address) => {
                             let context = this.context.as_ref();
-                            trace!(context:?; "NSQuery::CacheHit -> NSQuery::QueryingNetwork: querying ns address {first_ns_address}");
+                            trace!(context:?; "NSQuery::NetworkQueryStart -> NSQuery::QueryingNetwork: setting up query to next ns {next_ns_address}");
+
+                            // Select the fastest address
+                            this.ns_addresses.sort_by_cached_key(
+                                |address| this.sockets.get(address)
+                                    .map(|socket| (socket.average_dropped_udp_packets(), socket.average_udp_response_time()))
+                                    .filter(|(average_dropped_udp_packets, average_udp_response_time)| (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()))
+                                    .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32)))
+                            );
+
                             let client = this.client.clone();
                             let cache = this.joined_cache.clone();
                             let context = this.context.clone();
-                            let remaining_ns_addresses = ns_addresses.drain(..).collect();
-                            let query = query_network_owned_args(client, cache, context, first_ns_address).boxed();
-                            self.state = NSQueryState::QueryingNetwork { query: Some(query), remaining_ns_addresses };
+                            let query = query_network_owned_args(client, cache, context, next_ns_address).boxed();
+
+                            self.state = InnerNSQuery::QueryingNetwork(query);
+
                             // Next loop will poll the query for the question.
                             continue;
                         },
                         None => {
-                            self.state = NSQueryState::OutOfAddresses;
                             let context = self.context.as_ref();
-                            trace!(context:?; "NSQuery::CacheHit -> NSQuery::OutOfAddresses: tried to query first ns address but out of addresses");
-                            // Exit loop. There are no addresses to query.
-                            return Poll::Ready(NSQueryResult::OutOfAddresses);
+                            trace!(context:?; "NSQuery::NetworkQueryStart -> NSQuery::OutOfAddresses: tried to query next ns address but out of addresses");
+
+                            return Poll::Ready(NSQueryResult::OutOfAddresses)
                         },
                     }
                 },
-                NSQueryState::QueryingNetwork { query: optional_query, remaining_ns_addresses } => {
-                    match optional_query {
-                        Some(query) => {
-                            match query.as_mut().poll(cx) {
-                                Poll::Ready(result) => {
-                                    if remaining_ns_addresses.is_empty() {
-                                        self.state = NSQueryState::OutOfAddresses;
-                                        let context = self.context.as_ref();
-                                        trace!(context:?; "NSQuery::QueryingNetwork -> NSQuery::OutOfAddresses: found result '{result:?}'");
-                                        // Exit loop. A result was found.
-                                        return Poll::Ready(NSQueryResult::QueryResult(result));
-                                    } else {
-                                        let context = this.context.as_ref();
-                                        trace!(context:?; "NSQuery::QueryingNetwork: found result '{result:?}'");
-                                        // Clear the query. If this object is
-                                        // polled again, a new one will be set up
-                                        // at that time.
-                                        *optional_query = None;
-                                        // Exit loop. A result was found.
-                                        return Poll::Ready(NSQueryResult::QueryResult(result));
-                                    }
-                                },
-                                Poll::Pending => {
-                                    let context = self.context.as_ref();
-                                    trace!(context:?; "NSQuery::QueryingNetwork: waiting for network query response for ns addresses");
-                                    // Exit loop. Will be woken up by the query.
-                                    return Poll::Pending
-                                },
-                            }
+                InnerNSQuery::QueryingNetwork(query) => {
+                    match query.as_mut().poll(cx) {
+                        Poll::Ready(result) => {
+                            let context = this.context.as_ref();
+                            trace!(context:?; "NSQuery::QueryingNetwork -> NSQuery::NetworkQueryStart: found result '{result:?}'");
+
+                            // Clear the query. If this object is polled again, a new one will be
+                            // set up at that time.
+                            self.state = InnerNSQuery::NetworkQueryStart;
+
+                            // Exit loop. A result was found.
+                            return Poll::Ready(NSQueryResult::QueryResult(result));
                         },
-                        None => {
-                            match remaining_ns_addresses.pop() {
-                                Some(next_ns_address) => {
-                                    let context = this.context.as_ref();
-                                    trace!(context:?; "NSQuery::QueryingNetwork: setting up query to next ns {next_ns_address}");
-                                    let client = this.client.clone();
-                                    let cache = this.joined_cache.clone();
-                                    let context = this.context.clone();
-                                    let query = query_network_owned_args(client, cache, context, next_ns_address).boxed();
-                                    *optional_query = Some(query);
-                                    // Next loop will poll the query for the question.
-                                    continue;
-                                },
-                                None => {
-                                    let context = self.context.as_ref();
-                                    trace!(context:?; "NSQuery::QueryingNetwork -> NSQuery::OutOfAddresses: tried to query next ns address but out of addresses");
-                                    return Poll::Ready(NSQueryResult::OutOfAddresses)
-                                },
-                            }
+                        Poll::Pending => {
+                            let context = self.context.as_ref();
+                            trace!(context:?; "NSQuery::QueryingNetwork: waiting for network query response for ns addresses");
+
+                            // Exit loop. Will be woken up by the query.
+                            return Poll::Pending
                         },
                     }
                 },
-                // Exit loop. All addresses have been queried.
-                NSQueryState::OutOfAddresses => {
+                InnerNSQuery::OutOfAddresses => {
                     let context = self.context.as_ref();
                     trace!(context:?; "NSQuery::OutOfAddresses");
+
+                    // Exit loop. All addresses have been queried.
                     return Poll::Ready(NSQueryResult::OutOfAddresses)
                 },
             }
@@ -255,18 +306,18 @@ impl<'a, 'b, CCache> Future for NSQuery<'a, 'b, CCache> where CCache: AsyncCache
 }
 
 #[pin_project]
-struct NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
+struct NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
     // Note: the queries are read in reverse order (like a stack).
-    ns_queries: Vec<Pin<Box<Fut>>>,
-    running: Vec<Pin<Box<Fut>>>,
+    ns_queries: Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>,
+    running: Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>,
     max_concurrency: usize,
     add_query_timeout: Duration,
     #[pin]
     add_query_timer: Option<tokio::time::Sleep>,
 }
 
-impl<Fut> NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
-    pub fn new(ns_queries: Vec<Pin<Box<Fut>>>, max_concurrency: usize, add_query_timeout: Duration) -> Self {
+impl<'a, 'b, 'c, CCache> NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
+    pub fn new(ns_queries: Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>, max_concurrency: usize, add_query_timeout: Duration) -> Self {
         Self {
             ns_queries,
             running: Vec::new(),
@@ -284,13 +335,18 @@ impl<Fut> NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
     }
 }
 
-impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult> {
+fn sort_ns_queries<CCache>(ns_queries: &mut Vec<Pin<Box<NSQuery<'_, '_, '_, CCache>>>>) where CCache: AsyncCache + Send + Sync {
+    ns_queries.sort_by_cached_key(|ns_query| ns_query.best_address_stats().map(|stats| Reverse(stats)));
+}
+
+impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     type Output = Option<NSQueryResult>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         if self.is_first_poll() {
             let mut this = self.as_mut().project();
             // Initialize the `running` queue with its first query.
+            sort_ns_queries(this.ns_queries);
             match this.ns_queries.pop() {
                 Some(ns_query) => this.running.push(ns_query),
                 None => {
@@ -330,56 +386,62 @@ impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult
             let mut this = self.as_mut().project();
             match (this.add_query_timer.as_mut().as_pin_mut(), tokio::time::Instant::now().checked_add(*this.add_query_timeout)) {
                 (Some(mut timer), Some(new_deadline)) => match timer.as_mut().poll(cx) {
-                    Poll::Ready(()) => match this.ns_queries.pop() {
-                        Some(ns_query) => {
-                            this.running.push(ns_query);
-                            // Keep setting the timer until the maximum number
-                            // of allowed concurrent queries have been started
-                            // for this group. Then, we will maintain that many
-                            // concurrent queries until we run out of queued
-                            // queries.
-                            if this.running.len() < *this.max_concurrency {
-                                // Poll again is set so that the new timer is
-                                // polled (to get it started).
-                                // If a result is found and this returns
-                                // Poll::Ready(), then it won't get polled
-                                // unless this struct is awaited again.
-                                timer.reset(new_deadline);
-                                poll_again = true;
-                            } else {
-                                // Once we have the maximum number of tasks
-                                // running concurrently, we don't need to wake
-                                // up to add new tasks. New tasks from
-                                // `ns_query` will only be moved to `running`
-                                // when a space opens up in `running`.
+                    Poll::Ready(()) => {
+                        sort_ns_queries(this.ns_queries);
+                        match this.ns_queries.pop() {
+                            Some(ns_query) => {
+                                this.running.push(ns_query);
+                                // Keep setting the timer until the maximum number
+                                // of allowed concurrent queries have been started
+                                // for this group. Then, we will maintain that many
+                                // concurrent queries until we run out of queued
+                                // queries.
+                                if this.running.len() < *this.max_concurrency {
+                                    // Poll again is set so that the new timer is
+                                    // polled (to get it started).
+                                    // If a result is found and this returns
+                                    // Poll::Ready(), then it won't get polled
+                                    // unless this struct is awaited again.
+                                    timer.reset(new_deadline);
+                                    poll_again = true;
+                                } else {
+                                    // Once we have the maximum number of tasks
+                                    // running concurrently, we don't need to wake
+                                    // up to add new tasks. New tasks from
+                                    // `ns_query` will only be moved to `running`
+                                    // when a space opens up in `running`.
+                                    this.add_query_timer.set(None);
+                                }
+                            },
+                            None => {
+                                // Don't want to be erroneously woken up if there
+                                // is nobody else to add.
                                 this.add_query_timer.set(None);
-                            }
-                        },
-                        None => {
-                            // Don't want to be erroneously woken up if there
-                            // is nobody else to add.
-                            this.add_query_timer.set(None);
-                        },
+                            },
+                        }
                     },
                     Poll::Pending => (),
                 },
                 (Some(mut timer), None) => match timer.as_mut().poll(cx) {
-                    Poll::Ready(()) => match this.ns_queries.pop() {
-                        Some(ns_query) => {
-                            this.running.push(ns_query);
-                            // Since a deadline could not be calculated, the
-                            // timer cannot be reset.
-                            // This could limit the number of concurrent
-                            // processes that can run below `max_concurrency`.
-                            // I go into more detail on why this is the
-                            // preferred option earlier in this function.
-                            this.add_query_timer.set(None);
-                        },
-                        None => {
-                            // Don't want to be erroneously woken up if there
-                            // is nobody else to add.
-                            this.add_query_timer.set(None);
-                        },
+                    Poll::Ready(()) => {
+                        sort_ns_queries(this.ns_queries);
+                        match this.ns_queries.pop() {
+                            Some(ns_query) => {
+                                this.running.push(ns_query);
+                                // Since a deadline could not be calculated, the
+                                // timer cannot be reset.
+                                // This could limit the number of concurrent
+                                // processes that can run below `max_concurrency`.
+                                // I go into more detail on why this is the
+                                // preferred option earlier in this function.
+                                this.add_query_timer.set(None);
+                            },
+                            None => {
+                                // Don't want to be erroneously woken up if there
+                                // is nobody else to add.
+                                this.add_query_timer.set(None);
+                            },
+                        }
                     },
                     Poll::Pending => (),
                 },
@@ -390,6 +452,7 @@ impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult
             for (index, ns_query) in this.running.iter_mut().enumerate() {
                 if let Poll::Ready(result) = ns_query.as_mut().poll(cx) {
                     query_result = Some(result);
+                    sort_ns_queries(this.ns_queries);
                     match this.ns_queries.pop() {
                         Some(new_ns_query) => {
                             // We can re-use the spot in the `running` list for
@@ -408,7 +471,18 @@ impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult
                             poll_again = true;
                         },
                         None => {
-                            let _ = this.running.swap_remove(index);
+                            match query_result {
+                                Some(NSQueryResult::OutOfAddresses) => {
+                                    let _ = this.running.swap_remove(index);
+                                },
+                                _ => {
+                                    let ns_query = this.running.swap_remove(index);
+                                    // Since this list gets re-sorted every time, it does not matter
+                                    // that we are appending it to the end of the list.
+                                    this.ns_queries.push(ns_query);
+                                }
+                            }
+                            
                             // Don't want to be erroneously woken up if there is
                             // nobody else to add.
                             this.add_query_timer.set(None);
@@ -439,19 +513,20 @@ impl<Fut> Future for NSSelectQuery<Fut> where Fut: Future<Output = NSQueryResult
 }
 
 #[pin_project(PinnedDrop)]
-struct NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache>
+struct NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
 where
     CCache: AsyncCache + Send + Sync + 'static,
     'f: 'e,
     'g: 'e,
+    'h: 'e,
 {
     client: &'a Arc<DNSAsyncClient>,
     joined_cache: &'b Arc<CCache>,
     context: &'c Arc<Context>,
-    inner: InnerNSRoundRobin<'d, 'e, 'f, 'g, CCache>,
+    inner: InnerNSRoundRobin<'d, 'e, 'f, 'g, 'h, CCache>,
 }
 
-enum InnerNSRoundRobin<'a, 'b, 'c, 'd, CCache>
+enum InnerNSRoundRobin<'a, 'b, 'c, 'd, 'e, CCache>
 where
     CCache: AsyncCache + Send + Sync + 'static,
     'c: 'b,
@@ -461,23 +536,23 @@ where
         name_servers: &'a [CDomainName],
     },
     GetCachedNSAddresses {
-        name_server_address_queries: Vec<BoxFuture<'b, NSQuery<'c, 'd, CCache>>>,
-        name_server_non_cached_queries: Vec<Pin<Box<NSQuery<'c, 'd, CCache>>>>,
-        name_server_cached_queries: Vec<Pin<Box<NSQuery<'c, 'd, CCache>>>>,
+        name_server_address_queries: Vec<BoxFuture<'b, NSQuery<'c, 'd, 'e, CCache>>>,
+        name_server_non_cached_queries: Vec<Pin<Box<NSQuery<'c, 'd, 'e, CCache>>>>,
+        name_server_cached_queries: Vec<Pin<Box<NSQuery<'c, 'd, 'e, CCache>>>>,
     },
     QueryNameServers {
-        ns_query_select: Pin<Box<NSSelectQuery<NSQuery<'c, 'd, CCache>>>>,
+        ns_query_select: Pin<Box<NSSelectQuery<'c, 'd, 'e, CCache>>>,
     },
     Complete,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     fn new(client: &'a Arc<DNSAsyncClient>, joined_cache: &'b Arc<CCache>, question: &'c Arc<Context>, name_servers: &'d [CDomainName]) -> Self {
         Self { client, joined_cache, context: question, inner: InnerNSRoundRobin::Fresh { name_servers } }
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     type Output = QueryResponse<ResourceRecord>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -504,7 +579,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
                 InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries, name_server_non_cached_queries, name_server_cached_queries } => {
                     name_server_address_queries.retain_mut(|ns_address_query| {
                         match ns_address_query.as_mut().poll(cx) {
-                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, context: _, client: _, joined_cache: _, state: NSQueryState::CacheHit { ns_addresses: _ } }) => {
+                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, context: _, client: _, joined_cache: _, ns_addresses: _, sockets: _, state: InnerNSQuery::Fresh(NSQueryCacheResponse::Hit) }) => {
                                 name_server_cached_queries.push(Box::pin(ns_query));
                                 false
                             },
@@ -621,7 +696,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd,
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> PinnedDrop for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> PinnedDrop for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     fn drop(mut self: Pin<&mut Self>) {
         let this = self.project();
         match this.inner {

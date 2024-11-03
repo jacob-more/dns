@@ -1,4 +1,4 @@
-use std::{net::{IpAddr, SocketAddr}, sync::Arc, time::Duration};
+use std::{net::{IpAddr, SocketAddr}, sync::Arc};
 
 use dns_lib::{query::{question::Question, message::Message}, interface::cache::cache::AsyncCache};
 use log::trace;
