@@ -47,7 +47,7 @@ impl From<AsciiError> for CDomainNameError {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct Label {
     ascii: AsciiString,
 }
@@ -130,9 +130,16 @@ impl Display for Label {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for character in self.iter_escaped() {
-            write!(f, "{}", character)?;
+            write!(f, "{character}")?;
         }
         Ok(())
+    }
+}
+
+impl Debug for Label {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Label: {self}")
     }
 }
 
@@ -554,8 +561,7 @@ impl Display for CDomainName {
 impl Debug for CDomainName {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Domain Name: ")?;
-        write!(f, "{}", self)
+        write!(f, "CDomainName: {self}")
     }
 }
 

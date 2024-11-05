@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::Add, error::Error};
+use std::{error::Error, fmt::{Debug, Display}, ops::Add};
 
 use dns_macros::ToPresentation;
 
@@ -28,7 +28,7 @@ impl From<CDomainNameError> for DomainNameError {
 /// This is an incompressible domain name. This should be used in any place where domain name compression is not
 /// allowed. It is still able to decompress a domain name but it will not compress it when
 /// serializing the name. If compression is required, use the CDomainName.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToPresentation)]
+#[derive(Clone, PartialEq, Eq, Hash, ToPresentation)]
 pub struct DomainName {
     domain_name: CDomainName,
 }
@@ -115,10 +115,17 @@ impl Labels<DomainNameError> for DomainName {
     }
 }
 
+impl Debug for DomainName {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DomainName: {self}")
+    }
+}
+
 impl Display for DomainName {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.domain_name.fmt(f)
+        write!(f, "{}", self.domain_name)
     }
 }
 

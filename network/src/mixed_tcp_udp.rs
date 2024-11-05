@@ -1,4 +1,4 @@
-use std::{cmp::{max, min}, collections::HashMap, fmt::Display, future::Future, io::ErrorKind, net::SocketAddr, num::NonZeroU8, ops::{Add, Div}, pin::Pin, sync::{atomic::{AtomicBool, Ordering}, Arc}, task::Poll, time::Duration};
+use std::{cmp::{max, min}, collections::HashMap, fmt::Display, future::Future, net::SocketAddr, num::NonZeroU8, ops::{Add, Div}, pin::Pin, sync::{atomic::{AtomicBool, Ordering}, Arc}, task::Poll, time::Duration};
 
 use async_lib::{awake_token::{AwakeToken, AwokenToken, SameAwakeToken}, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
 use atomic::Atomic;
@@ -10,14 +10,13 @@ use pin_project::{pin_project, pinned_drop};
 use tinyvec::TinyVec;
 use tokio::{io::{self, AsyncReadExt, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
 
-const MAX_MESSAGE_SIZE: usize = 8192;
-
+const MAX_MESSAGE_SIZE: u16 = 8192;
 
 const MILLISECONDS_IN_1_SECOND: f64 = 1000.0;
 
-const TCP_INIT_TIMEOUT_MS: u64 = 5000;
-const TCP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
-const UDP_LISTEN_TIMEOUT_MS: u64 = 1000 * 60 * 2;
+const TCP_INIT_TIMEOUT: Duration = Duration::from_secs(5);
+const TCP_LISTEN_TIMEOUT: Duration = Duration::from_secs(120);
+const UDP_LISTEN_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The initial TCP timeout, used when setting up a socket, before anything is known about the
 /// average response time.
@@ -95,12 +94,446 @@ const MIN_UDP_TIMEOUT: Duration = Duration::from_millis(50);
 
 // Using the safe checked version of new is not stable. As long as we always use non-zero constants,
 // there should not be any problems with this.
-const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(30) };
-const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(30) };
-const ROLLING_AVERAGE_UDP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(30) };
-const ROLLING_AVERAGE_UDP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(30) };
+const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(11) };
+const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(13) };
+const ROLLING_AVERAGE_UDP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(11) };
+const ROLLING_AVERAGE_UDP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(13) };
 const ROLLING_AVERAGE_UDP_MAX_TRUNCATED: NonZeroU8      = unsafe { NonZeroU8::new_unchecked(50) };
 
+fn bound<T>(value: T, lower_bound: T, upper_bound: T) -> T where T: Ord {
+    debug_assert!(lower_bound <= upper_bound);
+    value.clamp(lower_bound, upper_bound)
+}
+
+pub mod errors {
+    use std::{error::Error, fmt::Display, io};
+
+    use dns_lib::serde::wire::{read_wire::ReadWireError, write_wire::WriteWireError};
+    use tokio::task::JoinError;
+
+    #[derive(Debug, Clone)]
+    pub enum QueryError {
+        TcpSocket(TcpSocketError),
+        TcpSend(TcpSendError),
+        UdpSocket(UdpSocketError),
+        UdpSend(UdpSendError),
+        Timeout,
+    }
+    impl Display for QueryError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::TcpSocket(tcp_error) => write!(f, "{tcp_error}"),
+                Self::TcpSend(tcp_error) => write!(f, "{tcp_error}"),
+                Self::UdpSocket(udp_error) => write!(f, "{udp_error}"),
+                Self::UdpSend(udp_error) => write!(f, "{udp_error}"),
+                Self::Timeout => write!(f, "timeout during query"),
+            }
+        }
+    }
+    impl Error for QueryError {}
+    impl From<TcpSocketError> for QueryError {
+        fn from(error: TcpSocketError) -> Self {
+            Self::TcpSocket(error)
+        }
+    }
+    impl From<TcpSendError> for QueryError {
+        fn from(error: TcpSendError) -> Self {
+            Self::TcpSend(error)
+        }
+    }
+    impl From<UdpSocketError> for QueryError {
+        fn from(error: UdpSocketError) -> Self {
+            Self::UdpSocket(error)
+        }
+    }
+    impl From<UdpSendError> for QueryError {
+        fn from(error: UdpSendError) -> Self {
+            Self::UdpSend(error)
+        }
+    }
+    impl From<SocketSendError> for QueryError {
+        fn from(error: SocketSendError) -> Self {
+            match error {
+                SocketSendError::Tcp(tcp_send_error) => Self::from(tcp_send_error),
+                SocketSendError::Udp(udp_send_error) => Self::from(udp_send_error),
+            }
+        }
+    }
+    impl From<SocketError> for QueryError {
+        fn from(error: SocketError) -> Self {
+            match error {
+                SocketError::Tcp(tcp_error) => Self::from(tcp_error),
+                SocketError::Udp(udp_error) => Self::from(udp_error),
+            }
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum SocketSendError {
+        Tcp(TcpSendError),
+        Udp(UdpSendError),
+    }
+    impl Display for SocketSendError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::Tcp(send_error) => write!(f, "{send_error}"),
+                Self::Udp(send_error) => write!(f, "{send_error}"),
+            }
+        }
+    }
+    impl Error for SocketSendError {}
+    impl From<TcpSendError> for SocketSendError {
+        fn from(error: TcpSendError) -> Self {
+            Self::Tcp(error)
+        }
+    }
+    impl From<UdpSendError> for SocketSendError {
+        fn from(error: UdpSendError) -> Self {
+            Self::Udp(error)
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum TcpSendError {
+        Serialization(WriteWireError),
+        IncorrectNumberBytes {
+            expected: u16,
+            sent: usize,
+        },
+        Io(IoError),
+    }
+    impl Display for TcpSendError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::Serialization(write_wire_error) => write!(f, "{write_wire_error} before sending on TCP socket"),
+                Self::IncorrectNumberBytes { expected, sent } => write!(f, "expected to send {expected} bytes but sent {sent} on TCP socket"),
+                Self::Io(error) => write!(f, "{error} when sending on TCP socket"),
+            }
+        }
+    }
+    impl Error for TcpSendError {}
+    impl From<WriteWireError> for TcpSendError {
+        fn from(error: WriteWireError) -> Self {
+            Self::Serialization(error)
+        }
+    }
+    impl From<IoError> for TcpSendError {
+        fn from(error: IoError) -> Self {
+            Self::Io(error)
+        }
+    }
+    impl From<io::Error> for TcpSendError {
+        fn from(error: io::Error) -> Self {
+            Self::Io(IoError::from(error))
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum UdpSendError {
+        Serialization(WriteWireError),
+        IncorrectNumberBytes {
+            expected: u16,
+            sent: usize,
+        },
+        Io(IoError),
+    }
+    impl Display for UdpSendError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::Serialization(write_wire_error) => write!(f, "{write_wire_error} before sending on UDP socket"),
+                Self::IncorrectNumberBytes { expected, sent } => write!(f, "expected to send {expected} bytes but sent {sent} on UDP socket"),
+                Self::Io(error) => write!(f, "{error} when sending on UDP socket"),
+            }
+        }
+    }
+    impl Error for UdpSendError {}
+    impl From<WriteWireError> for UdpSendError {
+        fn from(error: WriteWireError) -> Self {
+            Self::Serialization(error)
+        }
+    }
+    impl From<IoError> for UdpSendError {
+        fn from(error: IoError) -> Self {
+            Self::Io(error)
+        }
+    }
+    impl From<io::Error> for UdpSendError {
+        fn from(error: io::Error) -> Self {
+            Self::Io(IoError::from(error))
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum TcpReceiveError {
+        IncorrectNumberBytes {
+            expected: u16,
+            received: usize,
+        },
+        IncorrectLengthByte {
+            limit: u16,
+            received: u16,
+        },
+        Deserialization(ReadWireError),
+        Io(IoError),
+    }
+    impl Display for TcpReceiveError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::IncorrectNumberBytes { expected, received } => write!(f, "expected to receive {expected} bytes but received {received} on TCP socket"),
+                Self::IncorrectLengthByte { limit, received } => write!(f, "expected to receive at most {limit} bytes but the length byte is {received} on TCP socket"),
+                Self::Deserialization(error) => write!(f, "{error} when receiving on TCP socket"),
+                Self::Io(error) => write!(f, "{error} when receiving on TCP socket"),
+            }
+        }
+    }
+    impl Error for TcpReceiveError {}
+    impl From<ReadWireError> for TcpReceiveError {
+        fn from(error: ReadWireError) -> Self {
+            Self::Deserialization(error)
+        }
+    }
+    impl From<IoError> for TcpReceiveError {
+        fn from(error: IoError) -> Self {
+            Self::Io(error)
+        }
+    }
+    impl From<io::Error> for TcpReceiveError {
+        fn from(error: io::Error) -> Self {
+            Self::Io(IoError::from(error))
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum UdpReceiveError {
+        IncorrectNumberBytes {
+            expected: u16,
+            received: usize,
+        },
+        Deserialization(ReadWireError),
+        Io(IoError),
+    }
+    impl Display for UdpReceiveError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::IncorrectNumberBytes { expected, received } => write!(f, "expected to receive {expected} bytes but received {received} on TCP socket"),
+                Self::Deserialization(error) => write!(f, "{error} when receiving on UDP socket"),
+                Self::Io(error) => write!(f, "{error} when receiving on UDP socket"),
+            }
+        }
+    }
+    impl Error for UdpReceiveError {}
+    impl From<ReadWireError> for UdpReceiveError {
+        fn from(error: ReadWireError) -> Self {
+            Self::Deserialization(error)
+        }
+    }
+    impl From<IoError> for UdpReceiveError {
+        fn from(error: IoError) -> Self {
+            Self::Io(error)
+        }
+    }
+    impl From<io::Error> for UdpReceiveError {
+        fn from(error: io::Error) -> Self {
+            Self::Io(IoError::from(error))
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum SocketError {
+        Udp(UdpSocketError),
+        Tcp(TcpSocketError),
+    }
+    impl Display for SocketError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::Udp(udp_error) => write!(f, "{udp_error}"),
+                Self::Tcp(tcp_error) => write!(f, "{tcp_error}"),
+            }
+        }
+    }
+    impl Error for SocketError {}
+    impl From<UdpSocketError> for SocketError {
+        fn from(error: UdpSocketError) -> Self {
+            Self::Udp(error)
+        }
+    }
+    impl From<TcpSocketError> for SocketError {
+        fn from(error: TcpSocketError) -> Self {
+            Self::Tcp(error)
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum TcpSocketError {
+        Disabled,
+        Shutdown,
+        Init(TcpInitError),
+    }
+    impl Display for TcpSocketError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::Disabled => write!(f, "TCP socket is disabled"),
+                Self::Shutdown => write!(f, "TCP socket was shutdown"),
+                Self::Init(init_error) => write!(f, "{init_error}"),
+            }
+        }
+    }
+    impl Error for TcpSocketError {}
+    impl From<TcpInitError> for TcpSocketError {
+        fn from(error: TcpInitError) -> Self {
+            Self::Init(error)
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum UdpSocketError {
+        Disabled,
+        Shutdown,
+        Init(UdpInitError),
+    }
+    impl Display for UdpSocketError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::Disabled => write!(f, "UDP socket is disabled"),
+                Self::Shutdown => write!(f, "UDP socket was shutdown"),
+                Self::Init(init_error) => write!(f, "{init_error}"),
+            }
+        }
+    }
+    impl Error for UdpSocketError {}
+    impl From<UdpInitError> for UdpSocketError {
+        fn from(error: UdpInitError) -> Self {
+            Self::Init(error)
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum SocketInitError {
+        Udp(UdpInitError),
+        Tcp(TcpInitError),
+        Both(UdpInitError, TcpInitError),
+    }
+    impl Display for SocketInitError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::Udp(udp_init_error) => write!(f, "{udp_init_error}"),
+                Self::Tcp(tcp_init_error) => write!(f, "{tcp_init_error}"),
+                Self::Both(udp_init_error, tcp_init_error) => write!(f, "{udp_init_error} and {tcp_init_error}"),
+            }
+        }
+    }
+    impl Error for SocketInitError {}
+    impl From<UdpInitError> for SocketInitError {
+        fn from(error: UdpInitError) -> Self {
+            Self::Udp(error)
+        }
+    }
+    impl From<TcpInitError> for SocketInitError {
+        fn from(error: TcpInitError) -> Self {
+            Self::Tcp(error)
+        }
+    }
+    impl From<(UdpInitError, TcpInitError)> for SocketInitError {
+        fn from(error: (UdpInitError, TcpInitError)) -> Self {
+            Self::Both(error.0, error.1)
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum TcpInitError {
+        SocketDisabled,
+        SocketShutdown,
+        Timeout,
+        JoinErrorPanic,
+        JoinErrorCancelled,
+        Io(IoError),
+    }
+    impl Display for TcpInitError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::SocketDisabled => write!(f, "socket disabled during TCP initialization"),
+                Self::SocketShutdown => write!(f, "socket shutdown during TCP initialization"),
+                Self::Timeout => write!(f, "timeout during TCP initialization"),
+                Self::JoinErrorPanic => write!(f, "panic in TCP initialization task"),
+                Self::JoinErrorCancelled => write!(f, "TCP initialization task cancelled"),
+                Self::Io(io_error) => write!(f, "{io_error} during TCP initialization"),
+            }
+        }
+    }
+    impl Error for TcpInitError {}
+    impl From<JoinError> for TcpInitError {
+        fn from(error: JoinError) -> Self {
+            if error.is_cancelled() {
+                Self::JoinErrorCancelled
+            } else {
+                Self::JoinErrorPanic
+            }
+        }
+    }
+    impl From<IoError> for TcpInitError {
+        fn from(error: IoError) -> Self {
+            Self::Io(error)
+        }
+    }
+    impl From<io::Error> for TcpInitError {
+        fn from(error: io::Error) -> Self {
+            Self::Io(IoError::from(error))
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum UdpInitError {
+        SocketDisabled,
+        SocketShutdown,
+        Timeout,
+        Io(IoError),
+    }
+    impl Display for UdpInitError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::SocketDisabled => write!(f, "socket disabled during UDP initialization"),
+                Self::SocketShutdown => write!(f, "socket shutdown during UDP initialization"),
+                Self::Timeout => write!(f, "timeout during UDP initialization"),
+                Self::Io(io_error) => write!(f, "{io_error} during UDP initialization"),
+            }
+        }
+    }
+    impl Error for UdpInitError {}
+    impl From<IoError> for UdpInitError {
+        fn from(error: IoError) -> Self {
+            Self::Io(error)
+        }
+    }
+    impl From<io::Error> for UdpInitError {
+        fn from(error: io::Error) -> Self {
+            Self::Io(IoError::from(error))
+        }
+    }
+    
+    #[derive(Debug, Clone)]
+    pub enum IoError {
+        OsError(io::ErrorKind),
+        Message(io::ErrorKind),
+    }
+    impl Display for IoError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self {
+                Self::OsError(error_kind) => write!(f, "OS error: {error_kind}"),
+                Self::Message(error_kind) => write!(f, "IO error: {error_kind}"),
+            }
+        }
+    }
+    impl Error for IoError {}
+    impl From<io::Error> for IoError {
+        fn from(error: io::Error) -> Self {
+            if let Some(_) = error.raw_os_error() {
+                return Self::OsError(error.kind());
+            } else {
+                return Self::Message(error.kind());
+            }
+        }
+    }    
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum QueryOptions {
@@ -113,7 +546,7 @@ enum QInitQuery<'w, 'x> where 'x: 'w {
     Fresh,
     ReadActiveQuery(BoxFuture<'w, RwLockReadGuard<'x, ActiveQueries>>),
     WriteActiveQuery(BoxFuture<'w, RwLockWriteGuard<'x, ActiveQueries>>),
-    Following(#[pin] once_watch::Receiver<Message>),
+    Following(#[pin] once_watch::Receiver<Result<Message, errors::QueryError>>),
     Complete,
 }
 
@@ -130,7 +563,7 @@ impl<'a, 'w, 'x> QInitQuery<'w, 'x> where 'a: 'x {
         self.set(QInitQuery::WriteActiveQuery(w_active_queries));
     }
 
-    fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<Message>) {
+    fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<Result<Message, errors::QueryError>>) {
         self.set(QInitQuery::Following(receiver));
     }
 
@@ -155,13 +588,13 @@ impl Display for Query {
 }
 
 #[pin_project(project = QSendQueryProj)]
-enum QSendQuery<'t> {
+enum QSendQuery<'t, E> {
     Fresh(Query),
-    SendQuery(Query, BoxFuture<'t, io::Result<()>>),
+    SendQuery(Query, BoxFuture<'t, Result<(), E>>),
     Complete(Query),
 }
 
-impl<'t> QSendQuery<'t> {
+impl<'t, E> QSendQuery<'t, E> {
     pub fn query_type(&self) -> &Query {
         match self {
             Self::Fresh(query) => query,
@@ -174,7 +607,7 @@ impl<'t> QSendQuery<'t> {
         self.set(Self::Fresh(query_type));
     }
 
-    pub fn set_send_query(mut self: std::pin::Pin<&mut Self>, send_query: BoxFuture<'t, io::Result<()>>) {
+    pub fn set_send_query(mut self: std::pin::Pin<&mut Self>, send_query: BoxFuture<'t, Result<(), E>>) {
         let query_type = self.query_type();
 
         self.set(Self::SendQuery(*query_type, send_query));
@@ -194,7 +627,7 @@ pub enum MixedQuery<'a, 'b, 'c, 'd> {
 }
 
 impl<'a, 'b, 'c, 'd> Future for MixedQuery<'a, 'b, 'c, 'd> {
-    type Output = io::Result<Message>;
+    type Output = Result<Message, errors::QueryError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         match self.project() {
@@ -224,8 +657,8 @@ enum UdpResponseTime {
     None,
 }
 
-enum PollSocket {
-    Error(io::Error),
+enum PollSocket<E> {
+    Error(E),
     Continue,
     Pending,
 }
@@ -236,22 +669,13 @@ enum LoopPoll {
     Pending,
 }
 
-trait FutureSocket<'d> {
+trait FutureSocket<'d, E> {
     /// Polls the socket to try to get the active the socket if possible. Initializes the socket if
     /// needed. If the connection fails, is not allowed, or is killed, PollSocket::Error will be
     /// returned with the error and the socket should not be polled again. Even after the connection
     /// is Acquired, calling this function to poll the kill token to be notified when the connection
     /// is killed.
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket where 'a: 'd;
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-enum TQClosedReason {
-    TcpStateBlocked,
-    GetTcpEstablishingReceiverClosed,
-    InitTcpIoError,
-    InitTcpJoinError,
-    TcpKilled,
+    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket<E> where 'a: 'd;
 }
 
 #[pin_project(project = TQSocketProj)]
@@ -267,14 +691,14 @@ where
     },
     InitTcp {
         #[pin]
-        join_handle: JoinHandle<io::Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>>,
+        join_handle: JoinHandle<Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError>>,
     },
     Acquired {
         tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
         #[pin]
         kill_tcp: AwokenToken,
     },
-    Closed(TQClosedReason),
+    Closed(errors::TcpSocketError),
 }
 
 impl<'a, 'c, 'd, 'e> TQSocket<'c, 'd>
@@ -302,13 +726,13 @@ where
         self.set(TQSocket::Acquired { tcp_socket, kill_tcp: kill_tcp_token.awoken() });
     }
 
-    fn set_closed(mut self: std::pin::Pin<&mut Self>, reason: TQClosedReason) {
+    fn set_closed(mut self: std::pin::Pin<&mut Self>, reason: errors::TcpSocketError) {
         self.set(TQSocket::Closed(reason));
     }
 }
 
-impl<'c, 'd> FutureSocket<'d> for TQSocket<'c, 'd> {
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket where 'a: 'd {
+impl<'c, 'd> FutureSocket<'d, errors::TcpSocketError> for TQSocket<'c, 'd> {
+    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::TcpSocketError> where 'a: 'd {
         match self.as_mut().project() {
             TQSocketProj::Fresh => {
                 self.as_mut().set_get_tcp_state(socket);
@@ -339,9 +763,11 @@ impl<'c, 'd> FutureSocket<'d> for TQSocket<'c, 'd> {
                                 return PollSocket::Continue;
                             },
                             TcpState::Blocked => {
-                                self.as_mut().set_closed(TQClosedReason::TcpStateBlocked);
+                                let error = errors::TcpSocketError::Disabled;
 
-                                return PollSocket::Error(io::Error::from(io::ErrorKind::ConnectionAborted));
+                                self.as_mut().set_closed(error.clone());
+
+                                return PollSocket::Error(error);
                             },
                         }
                     },
@@ -359,9 +785,11 @@ impl<'c, 'd> FutureSocket<'d> for TQSocket<'c, 'd> {
                         return PollSocket::Continue;
                     },
                     Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                        self.as_mut().set_closed(TQClosedReason::GetTcpEstablishingReceiverClosed);
+                        let error = errors::TcpSocketError::Shutdown;
 
-                        return PollSocket::Error(io::Error::from(io::ErrorKind::Interrupted));
+                        self.as_mut().set_closed(error.clone());
+
+                        return PollSocket::Error(error);
                     },
                     Poll::Pending => {
                         return PollSocket::Pending;
@@ -376,15 +804,21 @@ impl<'c, 'd> FutureSocket<'d> for TQSocket<'c, 'd> {
                         // Next loop should poll `kill_tcp`
                         return PollSocket::Continue;
                     },
-                    Poll::Ready(Ok(Err(io_error))) => {
-                        self.as_mut().set_closed(TQClosedReason::InitTcpIoError);
+                    Poll::Ready(Ok(Err(error))) => {
+                        let error = errors::TcpSocketError::from(error);
 
-                        return PollSocket::Error(io_error);
+                        self.as_mut().set_closed(error.clone());
+
+                        return PollSocket::Error(error);
                     },
                     Poll::Ready(Err(join_error)) => {
-                        self.as_mut().set_closed(TQClosedReason::InitTcpJoinError);
+                        let error = errors::TcpSocketError::from(
+                            errors::TcpInitError::from(join_error)
+                        );
 
-                        return PollSocket::Error(io::Error::from(join_error));
+                        self.as_mut().set_closed(error.clone());
+
+                        return PollSocket::Error(error);
                     },
                     Poll::Pending => {
                         return PollSocket::Pending;
@@ -394,34 +828,22 @@ impl<'c, 'd> FutureSocket<'d> for TQSocket<'c, 'd> {
             TQSocketProj::Acquired { tcp_socket: _, mut kill_tcp } => {
                 match kill_tcp.as_mut().poll(cx) {
                     Poll::Ready(()) => {
-                        self.as_mut().set_closed(TQClosedReason::TcpKilled);
+                        let error = errors::TcpSocketError::Shutdown;
 
-                        return PollSocket::Error(io::Error::from(io::ErrorKind::Interrupted));
+                        self.as_mut().set_closed(error.clone());
+
+                        return PollSocket::Error(error);
                     },
                     Poll::Pending => {
                         return PollSocket::Pending;
                     },
                 }
             },
-            TQSocketProj::Closed(reason) => {
-                let error_kind = match reason {
-                    TQClosedReason::TcpStateBlocked => io::ErrorKind::ConnectionAborted,
-                    TQClosedReason::GetTcpEstablishingReceiverClosed => io::ErrorKind::Interrupted,
-                    TQClosedReason::InitTcpIoError => io::ErrorKind::Other,
-                    TQClosedReason::InitTcpJoinError => io::ErrorKind::Other,
-                    TQClosedReason::TcpKilled => io::ErrorKind::Interrupted,
-                };
-                return PollSocket::Error(io::Error::from(error_kind));
+            TQSocketProj::Closed(error) => {
+                return PollSocket::Error(error.clone());
             },
         }
     }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-enum UQClosedReason {
-    UdpStateBlocked,
-    InitUdpError,
-    UdpKilled,
 }
 
 #[pin_project(project = UQSocketProj)]
@@ -431,14 +853,14 @@ where
 {
     Fresh,
     GetReadUdpState(BoxFuture<'c, RwLockReadGuard<'d, UdpState>>),
-    InitUdp(BoxFuture<'e, io::Result<(Arc<UdpSocket>, AwakeToken)>>),
+    InitUdp(BoxFuture<'e, Result<(Arc<UdpSocket>, AwakeToken), errors::UdpInitError>>),
     GetWriteUdpState(BoxFuture<'c, RwLockWriteGuard<'d, UdpState>>, Arc<UdpSocket>, AwakeToken),
     Acquired {
         udp_socket: Arc<UdpSocket>,
         #[pin]
         kill_udp: AwokenToken,
     },
-    Closed(UQClosedReason),
+    Closed(errors::UdpSocketError),
 }
 
 impl<'a, 'c, 'd, 'e> UQSocket<'c, 'd, 'e>
@@ -472,13 +894,13 @@ where
         self.set(UQSocket::Acquired { udp_socket, kill_udp: kill_udp_token.awoken() });
     }
 
-    fn set_closed(mut self: std::pin::Pin<&mut Self>, reason: UQClosedReason) {
+    fn set_closed(mut self: std::pin::Pin<&mut Self>, reason: errors::UdpSocketError) {
         self.set(UQSocket::Closed(reason));
     }
 }
 
-impl<'c, 'd, 'e> FutureSocket<'d> for UQSocket<'c, 'd, 'e> {
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket where 'a: 'd {
+impl<'c, 'd, 'e> FutureSocket<'d, errors::UdpSocketError> for UQSocket<'c, 'd, 'e> {
+    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::UdpSocketError> where 'a: 'd {
         match self.as_mut().project() {
             UQSocketProj::Fresh => {
                 self.as_mut().set_get_read_udp_state(socket);
@@ -503,9 +925,11 @@ impl<'c, 'd, 'e> FutureSocket<'d> for UQSocket<'c, 'd, 'e> {
                                 return PollSocket::Continue;
                             },
                             UdpState::Blocked => {
-                                self.as_mut().set_closed(UQClosedReason::UdpStateBlocked);
+                                let error = errors::UdpSocketError::Disabled;
 
-                                return PollSocket::Error(io::Error::from(io::ErrorKind::ConnectionAborted));
+                                self.as_mut().set_closed(error.clone());
+
+                                return PollSocket::Error(error);
                             },
                         }
                     },
@@ -524,7 +948,9 @@ impl<'c, 'd, 'e> FutureSocket<'d> for UQSocket<'c, 'd, 'e> {
                         return PollSocket::Continue;
                     },
                     Poll::Ready(Err(error)) => {
-                        self.as_mut().set_closed(UQClosedReason::InitUdpError);
+                        let error = errors::UdpSocketError::from(error);
+
+                        self.as_mut().set_closed(error.clone());
 
                         return PollSocket::Error(error);
                     },
@@ -560,10 +986,11 @@ impl<'c, 'd, 'e> FutureSocket<'d> for UQSocket<'c, 'd, 'e> {
                             },
                             UdpState::Blocked => {
                                 kill_udp.awake();
+                                let error = errors::UdpSocketError::Disabled;
 
-                                self.as_mut().set_closed(UQClosedReason::UdpStateBlocked);
+                                self.as_mut().set_closed(error.clone());
 
-                                return PollSocket::Error(io::Error::from(io::ErrorKind::ConnectionAborted));
+                                return PollSocket::Error(error);
                             },
                         }
                     },
@@ -575,22 +1002,19 @@ impl<'c, 'd, 'e> FutureSocket<'d> for UQSocket<'c, 'd, 'e> {
             UQSocketProj::Acquired { udp_socket: _, mut kill_udp } => {
                 match kill_udp.as_mut().poll(cx) {
                     Poll::Ready(()) => {
-                        self.as_mut().set_closed(UQClosedReason::UdpKilled);
+                        let error = errors::UdpSocketError::Shutdown;
 
-                        return PollSocket::Error(io::Error::from(io::ErrorKind::Interrupted));
+                        self.as_mut().set_closed(error.clone());
+
+                        return PollSocket::Error(error);
                     },
                     Poll::Pending => {
                         return PollSocket::Pending;
                     },
                 }
             },
-            UQSocketProj::Closed(reason) => {
-                let error_kind = match reason {
-                    UQClosedReason::UdpStateBlocked => io::ErrorKind::ConnectionAborted,
-                    UQClosedReason::InitUdpError => io::ErrorKind::Other,
-                    UQClosedReason::UdpKilled => io::ErrorKind::Interrupted,
-                };
-                return PollSocket::Error(io::Error::from(error_kind));
+            UQSocketProj::Closed(error) => {
+                return PollSocket::Error(error.clone());
             },
         }
     }
@@ -609,20 +1033,32 @@ enum EitherSocket<'c, 'd, 'e> {
     },
 }
 
-impl<'c, 'd, 'e> FutureSocket<'d> for EitherSocket<'c, 'd, 'e> {
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket where 'a: 'd {
+impl<'c, 'd, 'e> FutureSocket<'d, errors::SocketError> for EitherSocket<'c, 'd, 'e> {
+    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::SocketError> where 'a: 'd {
         match self.as_mut().project() {
-            EitherSocketProj::Udp { mut uq_socket, retransmits: _ } => uq_socket.poll(socket, cx),
-            EitherSocketProj::Tcp { mut tq_socket } => tq_socket.poll(socket, cx),
+            EitherSocketProj::Udp { mut uq_socket, retransmits: _ } => {
+                match uq_socket.poll(socket, cx) {
+                    PollSocket::Error(error) => PollSocket::Error(errors::SocketError::from(error)),
+                    PollSocket::Continue => PollSocket::Continue,
+                    PollSocket::Pending => PollSocket::Pending,
+                }
+            },
+            EitherSocketProj::Tcp { mut tq_socket } => {
+                match tq_socket.poll(socket, cx) {
+                    PollSocket::Error(error) => PollSocket::Error(errors::SocketError::from(error)),
+                    PollSocket::Continue => PollSocket::Continue,
+                    PollSocket::Pending => PollSocket::Pending,
+                }
+            },
         }
     }
 }
 
 #[derive(Debug)]
-enum CleanupReason {
+enum CleanupReason<E> {
     Timeout,
     Killed,
-    ConnectionError(io::Error),
+    ConnectionError(E),
 }
 
 enum TcpState {
@@ -664,7 +1100,7 @@ where
     WriteEstablishing(BoxFuture<'b, RwLockWriteGuard<'c, TcpState>>),
     Connecting(BoxFuture<'d, io::Result<TcpStream>>),
     WriteNone {
-        reason: CleanupReason,
+        reason: CleanupReason<errors::TcpInitError>,
         w_tcp_state: BoxFuture<'e, RwLockWriteGuard<'f, TcpState>>,
     },
     WriteManaged {
@@ -682,7 +1118,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
     pub fn new(socket: &'a Arc<MixedSocket>, timeout: Option<Duration>) -> Self {
         let kill_tcp_token = AwakeToken::new();
         let tcp_socket_sender = once_watch::Sender::new();
-        let timeout = timeout.unwrap_or(Duration::from_millis(TCP_INIT_TIMEOUT_MS));
+        let timeout = timeout.unwrap_or(TCP_INIT_TIMEOUT);
 
         Self {
             socket,
@@ -695,7 +1131,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
 }
 
 impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
-    type Output = io::Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>;
+    type Output = Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         let mut this = self.as_mut().project();
@@ -705,21 +1141,23 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                 if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
                     this.tcp_socket_sender.close();
                     this.kill_tcp.awake();
+                    let error = errors::TcpInitError::SocketShutdown;
                     
                     *this.inner = InnerInitTcp::Complete;
 
                     // Exit loop: query killed.
-                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                    return Poll::Ready(Err(error));
                 }
 
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                     this.tcp_socket_sender.close();
                     this.kill_tcp.awake();
+                    let error = errors::TcpInitError::Timeout;
 
                     *this.inner = InnerInitTcp::Complete;
 
                     // Exit loop: query timed out.
-                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                    return Poll::Ready(Err(error));
                 }
             },
             InnerInitTcpProj::Connecting(_) => {
@@ -743,11 +1181,12 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                     this.tcp_socket_sender.close();
                     this.kill_tcp.awake();
+                    let error = errors::TcpInitError::Timeout;
 
                     *this.inner = InnerInitTcp::Complete;
 
                     // Exit loop: query timed out.
-                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                    return Poll::Ready(Err(error));
                 }
             },
             InnerInitTcpProj::WriteNone { reason: _, w_tcp_state: _ }
@@ -813,11 +1252,12 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                 TcpState::Blocked => {
                                     this.tcp_socket_sender.close();
                                     this.kill_tcp.awake();
+                                    let error = errors::TcpInitError::SocketDisabled;
 
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection not allowed.
-                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                    return Poll::Ready(Err(error));
                                 },
                             }
                         }
@@ -844,6 +1284,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                         },
                         Poll::Ready(Err(error)) => {
                             let w_tcp_state = this.socket.tcp.write().boxed();
+                            let error = errors::TcpInitError::from(error);
 
                             *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::ConnectionError(error), w_tcp_state };
 
@@ -882,7 +1323,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                         drop(w_tcp_state);
                                         this.tcp_socket_sender.close();
                                         this.kill_tcp.awake();
-                                        let error = io::Error::from(error.kind());
+                                        let error = error.clone();
 
                                         *this.inner = InnerInitTcp::Complete;
 
@@ -904,7 +1345,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     drop(w_tcp_state);
                                     this.tcp_socket_sender.close();
                                     this.kill_tcp.awake();
-                                    let error = io::Error::from(error.kind());
+                                    let error = error.clone();
 
                                     *this.inner = InnerInitTcp::Complete;
 
@@ -951,7 +1392,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection timed out.
-                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                                    return Poll::Ready(Err(errors::TcpInitError::Timeout));
                                 },
                                 TcpState::None
                               | TcpState::Blocked => {
@@ -962,7 +1403,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection timed out.
-                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::TimedOut)));
+                                    return Poll::Ready(Err(errors::TcpInitError::Timeout));
                                 },
                             }
                         },
@@ -990,7 +1431,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection killed.
-                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
                                 },
                                 TcpState::Managed { socket: _, kill: _ }
                               | TcpState::None
@@ -1002,7 +1443,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection killed.
-                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
                                 },
                             }
                         },
@@ -1076,7 +1517,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                                     // Exit loop: state changed after this task
                                     // set it to Establishing. Indicates that
                                     // this task is no longer in charge.
-                                    return Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionAborted)));
+                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
                                 },
                             }
                         },
@@ -1108,7 +1549,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
 
                             // Exit loop: all senders were dropped so it is not
                             // possible to receive a connection.
-                            return Poll::Ready(Err(io::Error::from(ErrorKind::Interrupted)));
+                            return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
                         },
                         Poll::Pending => {
                             // Exit loop. Will be woken up once a TCP write
@@ -1213,7 +1654,7 @@ where
     #[pin]
     timeout: Sleep,
     #[pin]
-    result_receiver: once_watch::Receiver<Message>,
+    result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>,
     #[pin]
     inner: InnerTQ<'c, 'd, 'e, 'f, 'g>,
 }
@@ -1222,7 +1663,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 
 where
     'g: 'f
 {
-    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Message>, tcp_timeout: &'h Duration) -> Self {
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>, tcp_timeout: &'h Duration) -> Self {
         Self {
             socket,
             query,
@@ -1245,7 +1686,7 @@ where
         #[pin]
         tq_socket: TQSocket<'c, 'd>,
         #[pin]
-        send_query: QSendQuery<'e>,
+        send_query: QSendQuery<'e, errors::TcpSendError>,
     },
     Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>, TcpResponseTime),
     Complete,
@@ -1282,6 +1723,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
             InnerTQProj::Fresh
           | InnerTQProj::Running { tq_socket: _, send_query: _ } => {
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::Timeout));
+
                     this.inner.set_cleanup(TcpResponseTime::Dropped, this.socket);
 
                     // Exit loop forever: query timed out.
@@ -1314,6 +1757,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
             
                             match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                     this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -1339,6 +1784,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                             let tcp_socket = tcp_socket.clone();
             
                             if let PollSocket::Error(error) = tq_socket.poll(this.socket, cx) {
+                                let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                 this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                 // Next loop will poll for the in-flight map lock to clean up the
@@ -1346,9 +1793,11 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 continue;
                             }
             
-                            let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
+                            let mut raw_message = [0_u8; MAX_MESSAGE_SIZE as usize];
                             let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                             if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
+                                let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(errors::TcpSendError::from(wire_error))));
+
                                 this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                 // Next loop will poll for the in-flight map lock to clean up the
@@ -1370,10 +1819,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 drop(w_tcp_stream);
                                 // Verify that the correct number of bytes were written.
                                 if bytes_written != wire_length {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::InvalidData,
-                                        format!("Incorrect number of bytes sent to TCP stream; expected {wire_length} bytes but sent {bytes_written} bytes"),
-                                    ));
+                                    return Err(errors::TcpSendError::IncorrectNumberBytes { expected: wire_length as u16, sent: bytes_written });
                                 }
             
                                 return Ok(());
@@ -1388,8 +1834,18 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                         (QSendQueryProj::SendQuery(_, send_query_future), _) => {
                             // We don't poll the receiver until the QSendQuery state is Complete.
                             match (send_query_future.as_mut().poll(cx), tq_socket.poll(this.socket, cx)) {
-                                (_, PollSocket::Error(error))
-                                | (Poll::Ready(Err(error)), _) => {
+                                (_, PollSocket::Error(error)) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
+                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
+            
+                                    // Next loop will poll for the in-flight map lock to clean up
+                                    // the query ID before returning the response.
+                                    continue;
+                                },
+                                (Poll::Ready(Err(error)), _) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                     this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -1418,10 +1874,17 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                         },
                         (QSendQueryProj::Complete(_), _) => {
                             match this.result_receiver.as_mut().poll(cx) {
-                                Poll::Ready(_) => {
+                                Poll::Ready(Ok(Ok(_))) => {
                                     let execution_time = this.tcp_start_time.elapsed();
 
                                     this.inner.set_cleanup(TcpResponseTime::Responded(execution_time), this.socket);
+            
+                                    // TODO
+                                    continue;
+                                },
+                                Poll::Ready(Ok(Err(_)))
+                              | Poll::Ready(Err(_)) => {
+                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                     // TODO
                                     continue;
@@ -1431,6 +1894,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
             
                             match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                     this.inner.set_cleanup(TcpResponseTime::None, this.socket);
             
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -1462,19 +1927,21 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                     let average_tcp_response_time = this.socket.average_tcp_response_time();
                                     if average_tcp_response_time.is_finite() {
                                         if average_tcp_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.tcp_timeout = min(
+                                            w_active_queries.tcp_timeout = bound(
                                                 min(
                                                     w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
                                                     Duration::from_secs_f64(average_tcp_response_time * TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                                 ),
-                                                MAX_TCP_TIMEOUT
+                                                MIN_TCP_TIMEOUT,
+                                                MAX_TCP_TIMEOUT,
                                             );
                                         }
                                     } else {
                                         if average_tcp_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.tcp_timeout = min(
+                                            w_active_queries.tcp_timeout = bound(
                                                 w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                MAX_TCP_TIMEOUT
+                                                MIN_TCP_TIMEOUT,
+                                                MAX_TCP_TIMEOUT,
                                             );
                                         }
                                     }
@@ -1482,12 +1949,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 TcpResponseTime::Responded(response_time) => {
                                     let (average_tcp_response_time, average_tcp_dropped_packets) = this.socket.add_response_time_to_tcp_average(*response_time);
                                     if average_tcp_dropped_packets.current_average() <= DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.tcp_timeout = max(
+                                        w_active_queries.tcp_timeout = bound(
                                             max(
                                                 w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
                                                 Duration::from_secs_f64(average_tcp_response_time.current_average() * TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                             ),
-                                            MIN_TCP_TIMEOUT
+                                            MIN_TCP_TIMEOUT,
+                                            MAX_TCP_TIMEOUT,
                                         );
                                     }
                                 },
@@ -1545,7 +2013,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for TcpQueryRunner<'a, 'b, 'c, '
 #[pin_project]
 struct TcpQuery<'a, 'b, 'c, 'd>
 where
-    'a: 'd + 'd
+    'a: 'd
 {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
@@ -1564,7 +2032,7 @@ impl<'a, 'b, 'c, 'd> TcpQuery<'a, 'b, 'c, 'd> {
 }
 
 impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
-    type Output = io::Result<Message>;
+    type Output = Result<Message, errors::QueryError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         loop {
@@ -1670,10 +2138,10 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
                             this.inner.set_complete();
 
                             // TODO
-                            return Poll::Ready(Ok(response));
+                            return Poll::Ready(response);
                         },
                         Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                            let error = io::Error::from(io::ErrorKind::Interrupted);
+                            let error = errors::QueryError::from(errors::TcpSocketError::Shutdown);
 
                             this.inner.set_complete();
 
@@ -1695,12 +2163,12 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
 // Implement TCP functions on MixedSocket
 impl MixedSocket {
     #[inline]
-    async fn init_tcp(self: Arc<Self>) -> io::Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)> {
+    async fn init_tcp(self: Arc<Self>) -> Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError> {
         InitTcp::new(&self, None).await
     }
 
     #[inline]
-    pub async fn start_tcp(self: Arc<Self>) -> io::Result<()> {
+    pub async fn start_tcp(self: Arc<Self>) -> Result<(), errors::TcpInitError> {
         match self.init_tcp().await {
             Ok(_) => Ok(()),
             Err(error) => Err(error),
@@ -1708,13 +2176,12 @@ impl MixedSocket {
     }
 
     #[inline]
-    pub async fn shutdown_tcp(self: Arc<Self>) -> io::Result<()> {
+    pub async fn shutdown_tcp(self: Arc<Self>) {
         println!("Shutting down TCP socket {}", self.upstream_socket);
 
         let mut w_state = self.tcp.write().await;
         match &*w_state {
-            TcpState::Managed { socket, kill } => {
-                let socket = socket.clone();
+            TcpState::Managed { socket: _, kill } => {
                 let tcp_kill = kill.clone();
                 *w_state = TcpState::None;
                 drop(w_state);
@@ -1746,11 +2213,10 @@ impl MixedSocket {
             TcpState::None => drop(w_state),    //< Already shut down
             TcpState::Blocked => drop(w_state), //< Already shut down
         }
-        Ok(())
     }
 
     #[inline]
-    pub async fn enable_tcp(self: Arc<Self>) -> io::Result<()> {
+    pub async fn enable_tcp(self: Arc<Self>) {
         println!("Enabling TCP socket {}", self.upstream_socket);
 
         let mut w_state = self.tcp.write().await;
@@ -1761,11 +2227,10 @@ impl MixedSocket {
             TcpState::Blocked => *w_state = TcpState::None,
         }
         drop(w_state);
-        Ok(())
     }
 
     #[inline]
-    pub async fn disable_tcp(self: Arc<Self>) -> io::Result<()> {
+    pub async fn disable_tcp(self: Arc<Self>) {
         println!("Disabling TCP socket {}", self.upstream_socket);
 
         let mut w_state = self.tcp.write().await;
@@ -1793,12 +2258,8 @@ impl MixedSocket {
 
                 // If the socket still initialized, shut it down immediately.
                 match receiver.await {
-                    Ok((socket, kill_tcp)) => {
+                    Ok((_, kill_tcp)) => {
                         kill_tcp.awake();
-
-                        // let w_tcp_socket = socket.lock().await;
-                        // SockRef::from(w_tcp_socket.as_ref()).shutdown(std::net::Shutdown::Both)?;
-                        // drop(w_tcp_socket);
                     },
                     Err(_) => (), //< Successful cancellation
                 }
@@ -1809,7 +2270,6 @@ impl MixedSocket {
             },
             TcpState::Blocked => drop(w_state), //< Already disabled
         }
-        Ok(())
     }
 
     #[inline]
@@ -1822,7 +2282,7 @@ impl MixedSocket {
                     println!("TCP Socket {} Canceled. Shutting down TCP Listener.", self.upstream_socket);
                     break;
                 },
-                () = tokio::time::sleep(Duration::from_millis(TCP_LISTEN_TIMEOUT_MS)) => {
+                () = tokio::time::sleep(TCP_LISTEN_TIMEOUT) => {
                     println!("TCP Socket {} Timed Out. Shutting down TCP Listener.", self.upstream_socket);
                     break;
                 },
@@ -1833,26 +2293,15 @@ impl MixedSocket {
                             let response_id = response.id;
                             let r_active_queries = self.active_queries.read().await;
                             if let Some((sender, _)) = r_active_queries.in_flight.get(&response_id) {
-                                let _ = sender.send(response);
+                                let _ = sender.send(Ok(response));
                             };
                             drop(r_active_queries);
                             // Cleanup is handled by the management processes. This
                             // process is free to move on.
                         },
-                        Err(error) => match error.kind() {
-                            io::ErrorKind::NotFound => {println!("TCP Listener for {} unable to read from stream (fatal). Not Found: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::PermissionDenied => {println!("TCP Listener for {} unable to read from stream (fatal). Permission Denied: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::ConnectionRefused => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Refused: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::ConnectionReset => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Reset: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::ConnectionAborted => {println!("TCP Listener for {} unable to read from stream (fatal). Connection Aborted: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::NotConnected => {println!("TCP Listener for {} unable to read from stream (fatal). Not Connected: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::AddrInUse => {println!("TCP Listener for {} unable to read from stream (fatal). Address In Use: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::AddrNotAvailable => {println!("TCP Listener for {} unable to read from stream (fatal). Address Not Available: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::TimedOut => {println!("TCP Listener for {} unable to read from stream (fatal). Timed Out: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::Unsupported => {println!("TCP Listener for {} unable to read from stream (fatal). Unsupported: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::BrokenPipe => {println!("TCP Listener for {} unable to read from stream (fatal). Broken Pipe: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::UnexpectedEof => {println!("TCP Listener for {} unable to read from stream (fatal). Unexpected End of File: {error}", self.upstream_socket); break;},
-                            _ => {println!("TCP Listener for {} unable to read from stream (fatal). {error}", self.upstream_socket); break},
+                        Err(error) => {
+                            println!("{error}");
+                            break;
                         },
                     }
                 },
@@ -1910,7 +2359,7 @@ where
     #[pin]
     timeout: Sleep,
     #[pin]
-    result_receiver: once_watch::Receiver<Message>,
+    result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>,
     #[pin]
     inner: InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>,
 }
@@ -1919,7 +2368,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 
 where
     'h: 'g
 {
-    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Message>, udp_retransmission_timeout: &'i Duration, udp_timeout: &'i Duration) -> Self {
+    pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>, udp_retransmission_timeout: &'i Duration, udp_timeout: &'i Duration) -> Self {
         Self {
             socket,
             query,
@@ -1952,7 +2401,7 @@ where
         #[pin]
         socket: EitherSocket<'c, 'd, 'e>,
         #[pin]
-        send_query: QSendQuery<'f>,
+        send_query: QSendQuery<'f, errors::SocketSendError>,
     },
     Cleanup(BoxFuture<'g, RwLockWriteGuard<'h, ActiveQueries>>, UdpResponseTime),
     Complete,
@@ -2071,6 +2520,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                     },
                     (_, EitherSocketProj::Tcp { tq_socket: _ }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
+                            let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::Timeout));
+
                             this.inner.set_cleanup(UdpResponseTime::Dropped, this.socket);
 
                             // TODO
@@ -2102,7 +2553,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             match query_type {
                                 Query::Initial => (),
                                 Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
-                                    Poll::Ready(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => {
+                                    Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
                                         this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
@@ -2111,7 +2562,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                         // up the query ID before returning the response.
                                         continue;
                                     },
-                                    Poll::Ready(Err(error)) => {
+                                    Poll::Ready(Ok(Err(_)))
+                                  | Poll::Ready(Err(_)) => {
                                         this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
 
                                         // Next loop will poll for the in-flight map lock to clean
@@ -2124,6 +2576,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
 
                             let uq_socket_result = match uq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                     this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -2135,9 +2589,11 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             };
 
                             if let UQSocketProj::Acquired { udp_socket, kill_udp: _ } = uq_socket.as_mut().project() {
-                                let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
+                                let mut raw_message = [0_u8; MAX_MESSAGE_SIZE as usize];
                                 let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                                 if let Err(wire_error) = this.query.to_wire_format(&mut write_wire, &mut Some(CompressionMap::new())) {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(errors::UdpSendError::from(wire_error))));
+
                                     this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -2157,13 +2613,15 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                     let wire_length = wire_length;
 
                                     socket.recent_messages_sent.store(true, Ordering::Release);
-                                    let bytes_written = udp_socket.send(&raw_message[..wire_length]).await?;
+                                    let bytes_written = match udp_socket.send(&raw_message[..wire_length]).await {
+                                        Ok(bytes_written) => bytes_written,
+                                        Err(error) => {
+                                            return Err(errors::SocketSendError::from(errors::UdpSendError::from(error)));
+                                        },
+                                    };
                                     // Verify that the correct number of bytes were written.
                                     if bytes_written != wire_length {
-                                        return Err(io::Error::new(
-                                            io::ErrorKind::InvalidData,
-                                            format!("Incorrect number of bytes sent to UDP socket; Expected {wire_length} bytes but sent {bytes_written} bytes"),
-                                        ));
+                                        return Err(errors::SocketSendError::from(errors::UdpSendError::IncorrectNumberBytes { expected: wire_length as u16, sent: bytes_written }));
                                     }
 
                                     return Ok(());
@@ -2186,7 +2644,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             match query_type {
                                 Query::Initial => (),
                                 Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
-                                    Poll::Ready(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => {
+                                    Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
                                         this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
@@ -2195,7 +2653,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                         // up the query ID before returning the response.
                                         continue;
                                     },
-                                    Poll::Ready(Err(error)) => {
+                                    Poll::Ready(Ok(Err(_)))
+                                  | Poll::Ready(Err(_)) => {
                                         this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
 
                                         // Next loop will poll for the in-flight map lock to clean
@@ -2208,6 +2667,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
 
                             let tq_socket_result = match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                     this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -2219,9 +2680,11 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             };
 
                             if let TQSocketProj::Acquired { tcp_socket, kill_tcp: _ } = tq_socket.as_mut().project() {
-                                let mut raw_message = [0_u8; MAX_MESSAGE_SIZE];
+                                let mut raw_message = [0_u8; MAX_MESSAGE_SIZE as usize];
                                 let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                                 if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(errors::TcpSendError::from(wire_error))));
+
                                     this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up the
@@ -2242,14 +2705,16 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
 
                                     socket.recent_messages_sent.store(true, Ordering::Release);
                                     let mut w_tcp_stream = tcp_socket.lock().await;
-                                    let bytes_written = w_tcp_stream.write(&raw_message[..wire_length]).await?;
+                                    let bytes_written = match w_tcp_stream.write(&raw_message[..wire_length]).await {
+                                        Ok(bytes_written) => bytes_written,
+                                        Err(error) => {
+                                            return Err(errors::SocketSendError::from(errors::TcpSendError::from(error)));
+                                        },
+                                    };
                                     drop(w_tcp_stream);
                                     // Verify that the correct number of bytes were written.
                                     if bytes_written != wire_length {
-                                        return Err(io::Error::new(
-                                            io::ErrorKind::InvalidData,
-                                            format!("Incorrect number of bytes sent to TCP stream; expected {wire_length} bytes but sent {bytes_written} bytes"),
-                                        ));
+                                        return Err(errors::SocketSendError::from(errors::TcpSendError::IncorrectNumberBytes { expected: wire_length as u16, sent: bytes_written }));
                                     }
 
                                     return Ok(());
@@ -2272,7 +2737,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             match query_type {
                                 Query::Initial => (),
                                 Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
-                                    Poll::Ready(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => {
+                                    Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
                                         this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
@@ -2281,7 +2746,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                         // up the query ID before returning the response.
                                         continue;
                                     },
-                                    Poll::Ready(Err(error)) => {
+                                    Poll::Ready(Ok(Err(_)))
+                                  | Poll::Ready(Err(_)) => {
                                         this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
 
                                         // Next loop will poll for the in-flight map lock to clean
@@ -2294,6 +2760,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
 
                             let q_socket_result = match q_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                     this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -2306,6 +2774,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
 
                             match send_query_future.as_mut().poll(cx) {
                                 Poll::Ready(Err(error)) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                     this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -2329,7 +2799,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                         },
                         (QSendQueryProj::Complete(_), _) => {
                             match this.result_receiver.as_mut().poll(cx) {
-                                Poll::Ready(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ })) => {
+                                Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                     let execution_time = this.udp_start_time.elapsed();
 
                                     this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
@@ -2337,7 +2807,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                     // TODO
                                     continue;
                                 },
-                                Poll::Ready(Err(error)) => {
+                                Poll::Ready(Ok(Err(_))) => {
+                                    this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
+
+                                    // TODO
+                                    continue;
+                                },
+                                Poll::Ready(Err(_)) => {
                                     this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
 
                                     // TODO
@@ -2348,6 +2824,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
 
                             match q_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
                                     this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
 
                                     // Next loop will poll for the in-flight map lock to clean up
@@ -2371,34 +2849,38 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                     let average_udp_response_time = this.socket.average_udp_response_time();
                                     if average_udp_response_time.is_finite() {
                                         if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.udp_timeout = min(
+                                            w_active_queries.udp_timeout = bound(
                                                 min(
                                                     w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
                                                     Duration::from_secs_f64(average_udp_response_time * UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                                 ),
-                                                MAX_UDP_TIMEOUT
+                                                MIN_UDP_TIMEOUT,
+                                                MAX_UDP_TIMEOUT,
                                             );
                                         }
                                         if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.udp_retransmit_timeout = min(
+                                            w_active_queries.udp_retransmit_timeout = bound(
                                                 min(
                                                     w_active_queries.udp_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
                                                     Duration::from_secs_f64(average_udp_response_time * UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                                 ),
-                                                MAX_UDP_RETRANSMISSION_TIMEOUT
+                                                MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                                MAX_UDP_RETRANSMISSION_TIMEOUT,
                                             );
                                         }
                                     } else {
                                         if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.udp_timeout = min(
+                                            w_active_queries.udp_timeout = bound(
                                                 w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                MAX_UDP_TIMEOUT
+                                                MIN_UDP_TIMEOUT,
+                                                MAX_UDP_TIMEOUT,
                                             );
                                         }
                                         if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.udp_retransmit_timeout = min(
+                                            w_active_queries.udp_retransmit_timeout = bound(
                                                 w_active_queries.udp_retransmit_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                MAX_UDP_RETRANSMISSION_TIMEOUT
+                                                MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                                MAX_UDP_RETRANSMISSION_TIMEOUT,
                                             );
                                         }
                                     }
@@ -2407,42 +2889,42 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                     let average_udp_dropped_packets = this.socket.add_dropped_packet_to_udp_average();
                                     let (average_tcp_response_time, average_tcp_dropped_packets) = this.socket.add_response_time_to_tcp_average(*response_time);
                                     if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.udp_timeout = min(
+                                        w_active_queries.udp_timeout = bound(
                                             w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                            MAX_UDP_TIMEOUT
+                                            MIN_UDP_TIMEOUT,
+                                            MAX_UDP_TIMEOUT,
                                         );
                                     }
                                     if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.udp_retransmit_timeout = min(
+                                        w_active_queries.udp_retransmit_timeout = bound(
                                             w_active_queries.udp_retransmit_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                            MAX_UDP_RETRANSMISSION_TIMEOUT
+                                            MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                            MAX_UDP_RETRANSMISSION_TIMEOUT,
                                         );
                                     }
                                 },
                                 UdpResponseTime::Responded { execution_time: response_time, truncated } => {
                                     let (average_udp_response_time, average_udp_dropped_packets) = this.socket.add_response_time_to_udp_average(*response_time);
                                     if average_udp_dropped_packets.current_average() <= DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.udp_timeout = max(
-                                            min(
-                                                max(
-                                                    w_active_queries.udp_timeout.saturating_sub(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                    Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                                ),
+                                        w_active_queries.udp_timeout = bound(
+                                            bound(
+                                                w_active_queries.udp_timeout.saturating_sub(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                                 Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                             ),
                                             MIN_UDP_TIMEOUT,
+                                            MAX_UDP_TIMEOUT,
                                         );
                                     }
                                     if average_udp_dropped_packets.current_average() <= DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.udp_retransmit_timeout = max(
-                                            min(
-                                                max(
-                                                    w_active_queries.udp_retransmit_timeout.saturating_sub(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                    Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                                ),
+                                        w_active_queries.udp_retransmit_timeout = bound(
+                                            bound(
+                                                w_active_queries.udp_retransmit_timeout.saturating_sub(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                                 Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                             ),
                                             MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                            MAX_UDP_RETRANSMISSION_TIMEOUT,
                                         );
                                     }
                                     this.socket.add_truncated_packet_to_udp_average(*truncated);
@@ -2519,7 +3001,7 @@ impl<'a, 'b, 'c, 'd> UdpQuery<'a, 'b, 'c, 'd> {
 }
 
 impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
-    type Output = io::Result<Message>;
+    type Output = Result<Message, errors::QueryError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         loop {
@@ -2629,14 +3111,20 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                 },
                 QInitQueryProj::Following(mut result_receiver) => {
                     match result_receiver.as_mut().poll(cx) {
-                        Poll::Ready(Ok(response)) => {
+                        Poll::Ready(Ok(Ok(response))) => {
                             this.inner.set_complete();
 
                             // TODO
                             return Poll::Ready(Ok(response));
                         },
+                        Poll::Ready(Ok(Err(error))) => {
+                            this.inner.set_complete();
+
+                            // TODO
+                            return Poll::Ready(Err(error));
+                        },
                         Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                            let error = io::Error::from(io::ErrorKind::Interrupted);
+                            let error = errors::QueryError::from(errors::UdpSocketError::Shutdown);
 
                             this.inner.set_complete();
 
@@ -2658,7 +3146,7 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
 // Implement UDP functions on MixedSocket
 impl MixedSocket {
     #[inline]
-    async fn init_udp(self: Arc<Self>) -> io::Result<(Arc<UdpSocket>, AwakeToken)> {
+    async fn init_udp(self: Arc<Self>) -> Result<(Arc<UdpSocket>, AwakeToken), errors::UdpInitError> {
         // Initially, verify if the connection has already been established.
         let r_state = self.udp.read().await;
         match &*r_state {
@@ -2666,7 +3154,7 @@ impl MixedSocket {
             UdpState::None => (),
             UdpState::Blocked => {
                 drop(r_state);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
+                return Err(errors::UdpInitError::SocketDisabled);
             },
         }
         drop(r_state);
@@ -2696,13 +3184,13 @@ impl MixedSocket {
             },
             UdpState::Blocked => {
                 drop(w_state);
-                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
+                return Err(errors::UdpInitError::SocketDisabled);
             },
         }
     }
 
     #[inline]
-    pub async fn start_udp(self: Arc<Self>) -> io::Result<()> {
+    pub async fn start_udp(self: Arc<Self>) -> Result<(), errors::UdpInitError> {
         match self.init_udp().await {
             Ok(_) => Ok(()),
             Err(error) => Err(error),
@@ -2710,7 +3198,7 @@ impl MixedSocket {
     }
 
     #[inline]
-    pub async fn shutdown_udp(self: Arc<Self>) -> io::Result<()> {
+    pub async fn shutdown_udp(self: Arc<Self>) {
         println!("Shutting down UDP socket {}", self.upstream_socket);
 
         let r_state = self.udp.read().await;
@@ -2725,11 +3213,10 @@ impl MixedSocket {
         } else {
             drop(r_state);
         }
-        Ok(())
     }
 
     #[inline]
-    pub async fn enable_udp(self: Arc<Self>) -> io::Result<()> {
+    pub async fn enable_udp(self: Arc<Self>) {
         println!("Enabling UDP socket {}", self.upstream_socket);
 
         let mut w_state = self.udp.write().await;
@@ -2739,11 +3226,10 @@ impl MixedSocket {
             UdpState::Blocked => *w_state = UdpState::None,
         }
         drop(w_state);
-        return Ok(());
     }
 
     #[inline]
-    pub async fn disable_udp(self: Arc<Self>) -> io::Result<()> {
+    pub async fn disable_udp(self: Arc<Self>) {
         println!("Disabling UDP socket {}", self.upstream_socket);
 
         let mut w_state = self.udp.write().await;
@@ -2756,17 +3242,13 @@ impl MixedSocket {
                 drop(w_state);
 
                 kill_udp.awake();
-
-                Ok(())
             },
             UdpState::None => {
                 *w_state = UdpState::Blocked;
                 drop(w_state);
-                Ok(())
             },
             UdpState::Blocked => { //< Already disabled
                 drop(w_state);
-                Ok(())
             },
         }
     }
@@ -2781,7 +3263,7 @@ impl MixedSocket {
                     println!("UDP Socket {} Canceled. Shutting down UDP Listener.", self.upstream_socket);
                     break;
                 },
-                () = tokio::time::sleep(Duration::from_millis(UDP_LISTEN_TIMEOUT_MS)) => {
+                () = tokio::time::sleep(UDP_LISTEN_TIMEOUT) => {
                     println!("UDP Socket {} Timed Out. Shutting down UDP Listener.", self.upstream_socket);
                     break;
                 },
@@ -2793,26 +3275,15 @@ impl MixedSocket {
                             let response_id = response.id;
                             let r_active_queries = self.active_queries.read().await;
                             if let Some((sender, _)) = r_active_queries.in_flight.get(&response_id) {
-                                let _ = sender.send(response);
+                                let _ = sender.send(Ok(response));
                             };
                             drop(r_active_queries);
                             // Cleanup is handled by the management processes. This
                             // process is free to move on.
                         },
-                        Err(error) => match error.kind() {
-                            io::ErrorKind::NotFound => {println!("UDP Listener for {} unable to read from stream (fatal). Not Found: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::PermissionDenied => {println!("UDP Listener for {} unable to read from stream (fatal). Permission Denied: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::ConnectionRefused => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Refused: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::ConnectionReset => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Reset: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::ConnectionAborted => {println!("UDP Listener for {} unable to read from stream (fatal). Connection Aborted: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::NotConnected => {println!("UDP Listener for {} unable to read from stream (fatal). Not Connected: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::AddrInUse => {println!("UDP Listener for {} unable to read from stream (fatal). Address In Use: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::AddrNotAvailable => {println!("UDP Listener for {} unable to read from stream (fatal). Address Not Available: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::TimedOut => {println!("UDP Listener for {} unable to read from stream (fatal). Timed Out: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::Unsupported => {println!("UDP Listener for {} unable to read from stream (fatal). Unsupported: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::BrokenPipe => {println!("UDP Listener for {} unable to read from stream (fatal). Broken Pipe: {error}", self.upstream_socket); break;},
-                            io::ErrorKind::UnexpectedEof => {println!("UDP Listener for {} unable to read from stream (fatal). Unexpected End of File: {error}", self.upstream_socket); break;},
-                            _ => {println!("UDP Listener for {} unable to read from stream (fatal). {error}", self.upstream_socket); break},
+                        Err(error) => {
+                            println!("{error}");
+                            break;
                         },
                     }
                 },
@@ -2854,9 +3325,9 @@ struct ActiveQueries {
     udp_timeout: Duration,
     tcp_timeout: Duration,
 
-    in_flight: HashMap<u16, (once_watch::Sender<Message>, JoinHandle<()>)>,
-    tcp_only: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Message>)>,
-    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Message>)>,
+    in_flight: HashMap<u16, (once_watch::Sender<Result<Message, errors::QueryError>>, JoinHandle<()>)>,
+    tcp_only: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Result<Message, errors::QueryError>>)>,
+    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Result<Message, errors::QueryError>>)>,
 }
 
 impl ActiveQueries {
@@ -2945,12 +3416,18 @@ where
     T: NoUninit + Clone,
     F: Fn(T) -> T
 {
+    let mut tries = 1_u32;
     let mut prev = atomic.load(Ordering::Relaxed);
     loop {
         let next = f(prev);
         match atomic.compare_exchange_weak(prev, next.clone(), success, failure) {
-            Ok(_) => return next,
-            Err(next_prev) => prev = next_prev,
+            Ok(_) => {
+                println!("Fetch update took {tries} attempts");
+                return next},
+            Err(next_prev) => {
+                prev = next_prev;
+                tries += 1;
+            },
         }
     }
 }
@@ -3147,63 +3624,40 @@ impl MixedSocket {
     }
 
     #[inline]
-    pub async fn start_both(self: Arc<Self>) -> io::Result<()> {
+    pub async fn start_both(self: Arc<Self>) -> Result<(), errors::SocketInitError> {
         match join!(
             self.clone().start_udp(),
             self.start_tcp()
         ) {
             (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(tcp_error)) => Err(tcp_error),
-            (Err(udp_error), Ok(())) => Err(udp_error),
-            // FIXME: it is probably worth deciding on a method of returning both errors, since they
-            //        may not be the same.
-            (Err(udp_error), Err(_tcp_error)) => Err(udp_error),
+            (Ok(()), Err(tcp_error)) => Err(errors::SocketInitError::from(tcp_error)),
+            (Err(udp_error), Ok(())) => Err(errors::SocketInitError::from(udp_error)),
+            (Err(udp_error), Err(tcp_error)) => Err(errors::SocketInitError::from((udp_error, tcp_error))),
         }
     }
 
     #[inline]
-    pub async fn shutdown_both(self: Arc<Self>) -> io::Result<()> {
-        match join!(
+    pub async fn shutdown_both(self: Arc<Self>) {
+        join!(
             self.clone().shutdown_udp(),
             self.shutdown_tcp()
-        ) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(tcp_error)) => Err(tcp_error),
-            (Err(udp_error), Ok(())) => Err(udp_error),
-            // FIXME: it is probably worth deciding on a method of returning both errors, since they
-            //        may not be the same.
-            (Err(udp_error), Err(_tcp_error)) => Err(udp_error),
-        }
+        );
     }
 
     #[inline]
-    pub async fn enable_both(self: Arc<Self>) -> io::Result<()> {
-        match join!(
+    pub async fn enable_both(self: Arc<Self>) {
+        join!(
             self.clone().enable_udp(),
             self.enable_tcp()
-        ) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(tcp_error)) => Err(tcp_error),
-            (Err(udp_error), Ok(())) => Err(udp_error),
-            // FIXME: it is probably worth deciding on a method of returning both errors, since they
-            //        may not be the same.
-            (Err(udp_error), Err(_tcp_error)) => Err(udp_error),
-        }
+        );
     }
 
     #[inline]
-    pub async fn disable_both(self: Arc<Self>) -> io::Result<()> {
-        match join!(
+    pub async fn disable_both(self: Arc<Self>) {
+        join!(
             self.clone().disable_udp(),
             self.disable_tcp()
-        ) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(tcp_error)) => Err(tcp_error),
-            (Err(udp_error), Ok(())) => Err(udp_error),
-            // FIXME: it is probably worth deciding on a method of returning both errors, since they
-            //        may not be the same.
-            (Err(udp_error), Err(_tcp_error)) => Err(udp_error),
-        }
+        );
     }
 
     pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOptions) -> MixedQuery<'a, 'b, 'c, 'd> {
@@ -3235,68 +3689,55 @@ impl MixedSocket {
 }
 
 #[inline]
-async fn read_udp_message(udp_socket: &Arc<UdpSocket>) -> io::Result<Message> {
+async fn read_udp_message(udp_socket: &Arc<UdpSocket>) -> Result<Message, errors::UdpReceiveError> {
     // Step 1: Setup buffer. Make sure it is within the configured size.
-    let mut buffer = [0; MAX_MESSAGE_SIZE];
-    let mut buffer = &mut buffer[..MAX_MESSAGE_SIZE];
+    let mut buffer = [0; MAX_MESSAGE_SIZE as usize];
+    let mut buffer = &mut buffer[..MAX_MESSAGE_SIZE as usize];
 
     // Step 2: Get the bytes from the UDP socket.
     let received_byte_count = udp_socket.recv(&mut buffer).await?;
 
     // Step 3: Deserialize the Message received on UDP socket.
     let mut wire = ReadWire::from_bytes(&buffer[..received_byte_count]);
-    let message = match Message::from_wire_format(&mut wire) {
-        Ok(message) => message,
-        Err(wire_error) => return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            wire_error,
-        )),
-    };
+    let message = Message::from_wire_format(&mut wire)?;
+
+    // eprintln!("(\"{}\", \"{}\", \"{}\"),", message.question[0].qtype(), message.question[0].qname(), Base64::from_bytes(&buffer[..received_byte_count]));
+    println!("Received UDP Response: {message:?}");
 
     return Ok(message);
 }
 
 #[inline]
-async fn read_tcp_message(tcp_stream: &mut OwnedReadHalf) -> io::Result<Message> {
+async fn read_tcp_message(tcp_stream: &mut OwnedReadHalf) -> Result<Message, errors::TcpReceiveError> {
     // Step 1: Deserialize the u16 representing the size of the rest of the data. This is the first
     //         2 bytes of data.
     let mut wire_size = [0, 0];
     let bytes_read = tcp_stream.read_exact(&mut wire_size).await?;
     if bytes_read != 2 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Expected 2 bytes but got {bytes_read}")
-        ));
+        return Err(errors::TcpReceiveError::IncorrectNumberBytes { expected: 2, received: bytes_read });
     }
-    let expected_message_size = u16::from_be_bytes(wire_size) as usize;
+    let expected_message_size = u16::from_be_bytes(wire_size);
     if expected_message_size > MAX_MESSAGE_SIZE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("The length byte cannot exceed {MAX_MESSAGE_SIZE}; length was {expected_message_size}"),
-        ));
+        return Err(errors::TcpReceiveError::IncorrectLengthByte { limit: MAX_MESSAGE_SIZE, received: expected_message_size });
     }
 
     // Step 2: Read the rest of the packet.
     // Note: It MUST be the size of the previous u16 (expected_message_size).
-    let mut tcp_buffer = [0; MAX_MESSAGE_SIZE];
-    let tcp_buffer = &mut tcp_buffer[..MAX_MESSAGE_SIZE];
-    let bytes_read = tcp_stream.read_exact(&mut tcp_buffer[..expected_message_size]).await?;
-    if bytes_read != expected_message_size {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Expected {expected_message_size} bytes but got {bytes_read}")
-        ));
+    let mut tcp_buffer = [0; MAX_MESSAGE_SIZE as usize];
+    let tcp_buffer = &mut tcp_buffer[..MAX_MESSAGE_SIZE as usize];
+    let bytes_read = tcp_stream.read_exact(&mut tcp_buffer[..expected_message_size as usize]).await?;
+    if bytes_read != (expected_message_size as usize) {
+        return Err(errors::TcpReceiveError::IncorrectNumberBytes { expected: expected_message_size, received: bytes_read });
     }
 
     // Step 3: Deserialize the Message from the buffer.
-    let mut wire = ReadWire::from_bytes(&mut tcp_buffer[..expected_message_size]);
-    let message = match Message::from_wire_format(&mut wire) {
-        Ok(message) => message,
-        Err(wire_error) => return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            wire_error,
-        )),
-    };
+    let mut wire = ReadWire::from_bytes(&mut tcp_buffer[..expected_message_size as usize]);
+    let message = Message::from_wire_format(&mut wire)?;
+
+    // if let Some(question) = message.question.first() {
+    //     eprintln!("(\"{}\", \"{}\", \"{}\"),", question.qtype(), question.qname(), Base64::from_bytes(&tcp_buffer[..bytes_read]));
+    // }
+    println!("Received TCP Response: {message:?}");
 
     return Ok(message);
 }
@@ -3466,6 +3907,6 @@ mod mixed_udp_tcp_tests {
         assert!(query_task_response.is_err());   //< io error
 
         // Cleanup
-        assert!(mixed_socket.disable_both().await.is_ok());
+        mixed_socket.disable_both().await;
     }
 }

@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, ops::{Bound, RangeBounds}};
 
 use crate::{types::{c_domain_name::CDomainNameError, ascii::AsciiError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, base64::Base64Error, domain_name::DomainNameError}, resource_record::rtype::RType};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ReadWireError {
     FormatError(String),
     OverflowError(String),

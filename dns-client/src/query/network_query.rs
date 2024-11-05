@@ -1,15 +1,14 @@
 use std::{net::{IpAddr, SocketAddr}, sync::Arc};
 
-use dns_lib::{query::{question::Question, message::Message}, interface::cache::cache::AsyncCache};
+use dns_lib::{interface::cache::cache::AsyncCache, query::{message::Message, question::Question}};
 use log::trace;
-use network::mixed_tcp_udp::{MixedSocket, QueryOptions};
-use tokio::io;
+use network::mixed_tcp_udp::{MixedSocket, errors::QueryError, QueryOptions};
 
 use crate::DNSAsyncClient;
 
 const UPSTREAM_PORT: u16 = 53;
 
-pub async fn query_network<CCache>(client: &DNSAsyncClient, cache: Arc<CCache>, question: &Question, name_server_address: &IpAddr) -> io::Result<Message> where CCache: AsyncCache + Sync {
+pub async fn query_network<CCache>(client: &DNSAsyncClient, cache: Arc<CCache>, question: &Question, name_server_address: &IpAddr) -> Result<Message, QueryError> where CCache: AsyncCache + Sync {
     let upstream_dns_address = SocketAddr::new(
         *name_server_address,
         UPSTREAM_PORT,

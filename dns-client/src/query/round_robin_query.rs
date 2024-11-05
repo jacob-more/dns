@@ -3,7 +3,7 @@ use std::{borrow::BorrowMut, cmp::Reverse, collections::HashMap, future::Future,
 use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
-use network::mixed_tcp_udp::MixedSocket;
+use network::mixed_tcp_udp::{MixedSocket, errors::QueryError};
 use pin_project::{pin_project, pinned_drop};
 
 use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
@@ -56,7 +56,7 @@ async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(ns_domain: CDomainName
 enum NSQueryResult {
     OutOfAddresses,
     NSAddressQueryErr(RCode),
-    QueryResult(io::Result<Message>),
+    QueryResult(Result<Message, QueryError>),
 }
 
 #[pin_project]
@@ -80,7 +80,7 @@ enum InnerNSQuery<'a, 'b, 'c> {
     },
     GettingSocketStats(BoxFuture<'b, Vec<Arc<MixedSocket>>>),
     NetworkQueryStart,
-    QueryingNetwork(BoxFuture<'c, io::Result<Message>>),
+    QueryingNetwork(BoxFuture<'c, Result<Message, QueryError>>),
     OutOfAddresses,
 }
 
@@ -122,7 +122,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
             recursive_query(client, joined_cache, context).await
         }
 
-        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, name_server_address: IpAddr) -> io::Result<Message> where CCache: AsyncCache + Send + Sync {
+        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, name_server_address: IpAddr) -> Result<Message, QueryError> where CCache: AsyncCache + Send + Sync {
             query_network(&client, joined_cache, context.query(), &name_server_address).await
         }
 

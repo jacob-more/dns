@@ -4,7 +4,7 @@ use crate::types::{c_domain_name::CDomainNameError, domain_name::DomainNameError
 
 use super::read_wire::ReadWire;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WriteWireError {
     FormatError(String),
     OverflowError(String),
