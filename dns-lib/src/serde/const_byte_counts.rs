@@ -18,8 +18,8 @@ pub const I128_BYTE_COUNT: u16 = (i128::BITS / 8) as u16;
 
 // #################### ADDRESS TYPES ####################
 
-pub const IPV4_BYTE_COUNT: u16 = Ipv4Addr::LOCALHOST.octets().len() as u16;
-pub const IPV6_BYTE_COUNT: u16 = Ipv6Addr::LOCALHOST.octets().len() as u16;
+pub const IPV4_BYTE_COUNT: u16 = (Ipv4Addr::BITS / 8) as u16;
+pub const IPV6_BYTE_COUNT: u16 = (Ipv6Addr::BITS / 8) as u16;
 pub const MAC_ADDRESS_BYTE_COUNT: u16 = 6;
 
 // #################### UX PRIMITIVE UNSIGNED ####################
