@@ -5,6 +5,7 @@ use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
 use network::mixed_tcp_udp::{MixedSocket, errors::QueryError};
 use pin_project::{pin_project, pinned_drop};
+use rand::{seq::IteratorRandom, thread_rng};
 
 use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
 
@@ -94,11 +95,20 @@ impl<'a, 'b, 'c, CCache> NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + 
         self.ns_addresses.iter().map(|address| self.sockets.get(address)
                 .map(|socket| (socket.average_dropped_udp_packets(), socket.average_udp_response_time()))
                 .filter(|(average_dropped_udp_packets, average_udp_response_time)| (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()))
+                // If more than 80% of UDP packets are being dropped, we'd rather explore new
+                // addresses. Otherwise, this address would still be technically better than one
+                // which had not yet been explored.
+                .filter(|(average_dropped_udp_packets, _)| *average_dropped_udp_packets < 0.80)
                 .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32))))
                 .max()
                 .flatten()
                 .map(|val| val.0)
     }
+}
+
+fn take_random<T>(vec: &mut Vec<T>) -> Option<T> {
+    let i = (0..vec.len()).choose(&mut thread_rng())?;
+    Some(vec.swap_remove(i))
 }
 
 fn take_best_address<'a, 'b, 'c, CCache>(ns_addresses: &mut Vec<IpAddr>, sockets: &HashMap<IpAddr, Arc<MixedSocket>>) -> Option<IpAddr> where CCache: AsyncCache + Send + Sync {
@@ -107,10 +117,14 @@ fn take_best_address<'a, 'b, 'c, CCache>(ns_addresses: &mut Vec<IpAddr>, sockets
         .max_by_key(|(_, address)| sockets.get(address)
             .map(|socket| (socket.average_dropped_udp_packets(), socket.average_udp_response_time()))
             .filter(|(average_dropped_udp_packets, average_udp_response_time)| (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()))
+            // If more than 80% of UDP packets are being dropped, we'd rather explore new
+            // addresses. Otherwise, this address would still be technically better than one
+            // which had not yet been explored.
+            .filter(|(average_dropped_udp_packets, _)| *average_dropped_udp_packets < 0.80)
             .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32))))
     {
         Some((index, _)) => Some(ns_addresses.swap_remove(index)),
-        None => ns_addresses.pop(),
+        None => take_random(ns_addresses),
     }
 }
 
@@ -346,7 +360,7 @@ fn take_best_ns_query<'a, 'b, 'c, CCache>(ns_queries: &mut Vec<Pin<Box<NSQuery<'
         .max_by_key(|(_, ns_query)| ns_query.best_address_stats().map(|stats| Reverse(stats)))
     {
         Some((index, _)) => Some(ns_queries.swap_remove(index)),
-        None => ns_queries.pop(),
+        None => take_random(ns_queries),
     }
 }
 
