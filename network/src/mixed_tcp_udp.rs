@@ -2037,7 +2037,6 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         loop {
             let mut this = self.as_mut().project();
-            // Poll the timeout, if the state allows for the query to time out.
             match this.inner.as_mut().project() {
                 QInitQueryProj::Fresh => {
                     this.inner.set_read_active_query(this.socket);
@@ -2091,7 +2090,7 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
                                     continue;
                                 },
                                 None => {
-                                    let (send_response, result_receiver) = once_watch::channel();
+                                    let (result_sender, result_receiver) = once_watch::channel();
 
                                     // This is the initial query ID. However, it could change if it
                                     // is already in use.
@@ -2106,7 +2105,7 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
 
                                     let join_handle = tokio::spawn({
                                         let tcp_timeout = w_active_queries.tcp_timeout;
-                                        let result_receiver = result_receiver.clone();
+                                        let result_receiver = result_sender.subscribe();
                                         let socket = this.socket.clone();
                                         let mut query = this.query.clone();
                                         async move {
@@ -2114,8 +2113,8 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
                                         }
                                     });
 
-                                    w_active_queries.in_flight.insert(this.query.id, (send_response, join_handle));
-                                    w_active_queries.tcp_only.insert(this.query.question.clone(), (this.query.id, result_receiver.subscribe()));
+                                    w_active_queries.in_flight.insert(this.query.id, (result_sender.clone(), join_handle));
+                                    w_active_queries.tcp_only.insert(this.query.question.clone(), (this.query.id, result_sender));
                                     drop(w_active_queries);
 
                                     this.inner.set_following(result_receiver);
@@ -3020,10 +3019,10 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                 r_active_queries.tcp_or_udp.get(&this.query.question),
                                 r_active_queries.tcp_only.get(&this.query.question)
                             ) {
-                                (Some((query_id, result_receiver)), _)
-                              | (_, Some((query_id, result_receiver))) => {
+                                (Some((query_id, result_sender)), _)
+                              | (_, Some((query_id, result_sender))) => {
                                     this.query.id = *query_id;
-                                    let result_receiver = result_receiver.subscribe();
+                                    let result_receiver = result_sender.subscribe();
                                     drop(r_active_queries);
 
                                     this.inner.set_following(result_receiver);
@@ -3054,10 +3053,10 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                 w_active_queries.tcp_or_udp.get(&this.query.question),
                                 w_active_queries.tcp_only.get(&this.query.question)
                             ) {
-                                (Some((query_id, result_receiver)), _)
-                              | (_, Some((query_id, result_receiver))) => {
+                                (Some((query_id, result_sender)), _)
+                              | (_, Some((query_id, result_sender))) => {
                                     this.query.id = *query_id;
-                                    let result_receiver = result_receiver.subscribe();
+                                    let result_receiver = result_sender.subscribe();
                                     drop(w_active_queries);
 
                                     this.inner.set_following(result_receiver);
@@ -3067,7 +3066,7 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                     continue;
                                 },
                                 (None, None) => {
-                                    let (send_response, result_receiver) = once_watch::channel();
+                                    let (result_sender, result_receiver) = once_watch::channel();
 
                                     // This is the initial query ID. However, it could change if it
                                     // is already in use.
@@ -3083,7 +3082,7 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                     let join_handle = tokio::spawn({
                                         let udp_retransmit_timeout = w_active_queries.udp_retransmit_timeout;
                                         let udp_timeout = w_active_queries.udp_timeout;
-                                        let result_receiver = result_receiver.clone();
+                                        let result_receiver = result_sender.subscribe();
                                         let socket = this.socket.clone();
                                         let mut query = this.query.clone();
                                         async move {
@@ -3091,8 +3090,8 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                         }
                                     });
 
-                                    w_active_queries.in_flight.insert(this.query.id, (send_response, join_handle));
-                                    w_active_queries.tcp_or_udp.insert(this.query.question.clone(), (this.query.id, result_receiver.subscribe()));
+                                    w_active_queries.in_flight.insert(this.query.id, (result_sender.clone(), join_handle));
+                                    w_active_queries.tcp_or_udp.insert(this.query.question.clone(), (this.query.id, result_sender));
                                     drop(w_active_queries);
 
                                     this.inner.set_following(result_receiver);
@@ -3326,8 +3325,8 @@ struct ActiveQueries {
     tcp_timeout: Duration,
 
     in_flight: HashMap<u16, (once_watch::Sender<Result<Message, errors::QueryError>>, JoinHandle<()>)>,
-    tcp_only: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Result<Message, errors::QueryError>>)>,
-    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Receiver<Result<Message, errors::QueryError>>)>,
+    tcp_only: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Sender<Result<Message, errors::QueryError>>)>,
+    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Sender<Result<Message, errors::QueryError>>)>,
 }
 
 impl ActiveQueries {
@@ -3416,18 +3415,12 @@ where
     T: NoUninit + Clone,
     F: Fn(T) -> T
 {
-    let mut tries = 1_u32;
     let mut prev = atomic.load(Ordering::Relaxed);
     loop {
         let next = f(prev);
         match atomic.compare_exchange_weak(prev, next.clone(), success, failure) {
-            Ok(_) => {
-                println!("Fetch update took {tries} attempts");
-                return next},
-            Err(next_prev) => {
-                prev = next_prev;
-                tries += 1;
-            },
+            Ok(_) => return next,
+            Err(next_prev) => prev = next_prev,
         }
     }
 }

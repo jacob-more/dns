@@ -1,11 +1,13 @@
-use std::{borrow::BorrowMut, cmp::Reverse, collections::HashMap, future::Future, io, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, task::Poll, time::Duration};
+use std::{borrow::BorrowMut, cmp::Reverse, collections::HashMap, future::Future, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
-use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
+use async_lib::once_watch::{self, OnceWatchSend, OnceWatchSubscribe};
+use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
-use network::mixed_tcp_udp::{MixedSocket, errors::QueryError};
+use network::mixed_tcp_udp::{errors::QueryError, MixedSocket};
 use pin_project::{pin_project, pinned_drop};
 use rand::{seq::IteratorRandom, thread_rng};
+use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
 
@@ -691,6 +693,365 @@ fn query_response(answer: Message) -> QueryResponse<ResourceRecord> {
         },
         Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode, question: _, answer: _, authority: _, additional: _ } => QueryResponse::Error(rcode),
         Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ } => QueryResponse::Error(RCode::FormErr),
+    }
+}
+
+#[pin_project(PinnedDrop)]
+struct ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+    'a: 'j,
+    'j: 'i,
+{
+    #[pin]
+    round_robin: NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>,
+    #[pin]
+    inner: InnerActiveQuery<'i, 'j>,
+}
+
+#[pin_project(project = InnerActiveQueryProj)]
+enum InnerActiveQuery<'i, 'j> {
+    Fresh,
+    ReadActiveQueries(BoxFuture<'i, RwLockReadGuard<'j, HashMap<Question, once_watch::Sender<QueryResponse<ResourceRecord>>>>>),
+    WriteActiveQueries(BoxFuture<'i, RwLockWriteGuard<'j, HashMap<Question, once_watch::Sender<QueryResponse<ResourceRecord>>>>>),
+    Following(#[pin] once_watch::Receiver<QueryResponse<ResourceRecord>>),
+    Cleanup(BoxFuture<'i, RwLockWriteGuard<'j, HashMap<Question, once_watch::Sender<QueryResponse<ResourceRecord>>>>>, Option<QueryResponse<ResourceRecord>>),
+    Complete,
+}
+
+impl<'a, 'i, 'j> InnerActiveQuery<'i, 'j> where 'a: 'j, 'j: 'i {
+    fn set_read_active_queries(mut self: std::pin::Pin<&mut Self>, client: &'a Arc<DNSAsyncClient>) {
+        let r_active_queries = client.active_queries.read().boxed();
+
+        self.set(Self::ReadActiveQueries(r_active_queries));
+    }
+
+    fn set_write_active_queries(mut self: std::pin::Pin<&mut Self>, client: &'a Arc<DNSAsyncClient>) {
+        let w_active_queries = client.active_queries.write().boxed();
+
+        self.set(Self::WriteActiveQueries(w_active_queries));
+    }
+
+    fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<QueryResponse<ResourceRecord>>) {
+        self.set(Self::Following(receiver));
+    }
+
+    fn set_cleanup(mut self: std::pin::Pin<&mut Self>, result: QueryResponse<ResourceRecord>, client: &'a Arc<DNSAsyncClient>) {
+        let w_active_queries = client.active_queries.write().boxed();
+
+        self.set(Self::Cleanup(w_active_queries, Some(result)));
+    }
+
+    fn set_complete(mut self: std::pin::Pin<&mut Self>) {
+        self.set(Self::Complete);
+    }
+}
+
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, CCache> Future for ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+    'a: 'j,
+    'j: 'i,
+{
+    type Output = QueryResponse<ResourceRecord>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        // Before polling round robin, poll the active query to see if we've already gotten a
+        // response. This will also attempt to set up the active query if this is the first poll.
+        loop {
+            let mut this = self.as_mut().project();
+            match this.inner.as_mut().project() {
+                InnerActiveQueryProj::Fresh => {
+                    if let Poll::Ready(result) = this.round_robin.as_mut().poll(cx) {
+                        // A response was received before the active query could be established.
+                        // If there is already an active query and the lock can be gotten right now,
+                        // then we can send out this answer. Otherwise, move on.
+                        if let Ok(r_active_queries) = this.round_robin.client.active_queries.try_read() {
+                            if let Some(result_sender) = r_active_queries.get(this.round_robin.context.query()) {
+                                let _ = result_sender.send(result.clone());
+                            }
+                            drop(r_active_queries);
+                        }
+
+                        this.inner.set_complete();
+
+                        return Poll::Ready(result);
+                    }
+
+                    this.inner.set_read_active_queries(this.round_robin.client);
+
+                    // TODO
+                    continue;
+                },
+                InnerActiveQueryProj::ReadActiveQueries(r_active_queries) => {
+                    if let Poll::Ready(r_active_queries) = r_active_queries.as_mut().poll(cx) {
+                        match r_active_queries.get(&this.round_robin.context.query()) {
+                            Some(result_sender) => {
+                                let result_receiver = result_sender.subscribe();
+                                drop(r_active_queries);
+
+                                this.inner.set_following(result_receiver);
+
+                                // TODO
+                                continue;
+                            },
+                            None => {
+                                drop(r_active_queries);
+                                this.inner.set_write_active_queries(this.round_robin.client);
+
+                                // TODO
+                                continue;
+                            },
+                        }
+                    }
+
+                    if let Poll::Ready(result) = this.round_robin.as_mut().poll(cx) {
+                        // A response was received before the active query could be established.
+                        // If there is already an active query and the lock can be gotten right now,
+                        // then we can send out this answer. Otherwise, move on.
+                        if let Ok(r_active_queries) = this.round_robin.client.active_queries.try_read() {
+                            if let Some(result_sender) = r_active_queries.get(this.round_robin.context.query()) {
+                                let _ = result_sender.send(result.clone());
+                            }
+                            drop(r_active_queries);
+                        }
+
+                        this.inner.set_complete();
+
+                        return Poll::Ready(result);
+                    }
+
+                    return Poll::Pending;
+                },
+                InnerActiveQueryProj::WriteActiveQueries(w_active_queries) => {
+                    if let Poll::Ready(mut w_active_queries) = w_active_queries.as_mut().poll(cx) {
+                        match w_active_queries.get(&this.round_robin.context.query()) {
+                            Some(result_sender) => {
+                                let result_receiver = result_sender.subscribe();
+                                drop(w_active_queries);
+
+                                this.inner.set_following(result_receiver);
+
+                                // TODO
+                                continue;
+                            },
+                            None => {
+                                let (send_response, result_receiver) = once_watch::channel();
+                                w_active_queries.insert(this.round_robin.context.query().clone(), send_response);
+                                drop(w_active_queries);
+
+                                this.inner.set_following(result_receiver);
+
+                                // TODO
+                                continue;
+                            },
+                        }
+                    }
+
+                    if let Poll::Ready(result) = this.round_robin.as_mut().poll(cx) {
+                        // A response was received before the active query could be established.
+                        // If there is already an active query and the lock can be gotten right now,
+                        // then we can send out this answer. Otherwise, move on.
+                        if let Ok(r_active_queries) = this.round_robin.client.active_queries.try_read() {
+                            if let Some(result_sender) = r_active_queries.get(this.round_robin.context.query()) {
+                                let _ = result_sender.send(result.clone());
+                            }
+                            drop(r_active_queries);
+                        }
+
+                        this.inner.set_complete();
+
+                        return Poll::Ready(result);
+                    }
+
+                    return Poll::Pending;
+                },
+                InnerActiveQueryProj::Following(mut result_receiver) => {
+                    match result_receiver.as_mut().poll(cx) {
+                        Poll::Ready(Ok(response)) => {
+                            // The sender is responsible for removing the channel from the active
+                            // queries map.
+                            this.inner.set_complete();
+
+                            // TODO
+                            return Poll::Ready(response);
+                        },
+                        Poll::Ready(Err(once_watch::RecvError::Closed)) => {
+                            // The sender is responsible for removing the channel from the active
+                            // queries map.
+                            this.inner.set_complete();
+
+                            // TODO
+                            return Poll::Ready(QueryResponse::Error(RCode::ServFail));
+                        },
+                        Poll::Pending => (),
+                    }
+
+                    if let Poll::Ready(result) = this.round_robin.as_mut().poll(cx) {
+                        let _ = result_receiver.get_sender().send(result.clone());
+
+                        this.inner.set_cleanup(result, this.round_robin.client);
+
+                        continue;
+                    }
+
+                    return Poll::Pending;
+                },
+                InnerActiveQueryProj::Cleanup(w_active_queries, result) => {
+                    match w_active_queries.as_mut().poll(cx) {
+                        Poll::Ready(mut w_active_queries) => {
+                            if let Some(result_sender) = w_active_queries.remove(&this.round_robin.context.query()) {
+                                // Always make sure the channel is closed. This should never have an
+                                // effect but will ensure that it is never left open.
+                                result_sender.close();
+                            }
+                            drop(w_active_queries);
+
+                            match result.take() {
+                                Some(result) => {
+                                    this.inner.set_complete();
+
+                                    return Poll::Ready(result)
+                                },
+                                None => {
+                                    this.inner.set_complete();
+
+                                    panic!("The Option result is supposed to always be Some but was None")
+                                },
+                            }
+                        },
+                        Poll::Pending => {
+                            // TODO
+                            return Poll::Pending;
+                        },
+                    }
+                },
+                InnerActiveQueryProj::Complete => panic!("ActiveQuery cannot be polled after completion"),
+            }
+        }
+
+        let mut this = self.as_mut().project();
+        match this.round_robin.as_mut().poll(cx) {
+            Poll::Ready(result) => {
+                match this.inner.as_mut().project() {
+                    InnerActiveQueryProj::Fresh
+                  | InnerActiveQueryProj::ReadActiveQueries(_)
+                  | InnerActiveQueryProj::WriteActiveQueries(_) => {
+
+                    },
+                    InnerActiveQueryProj::Following(result_receiver) => {
+                        let _ = result_receiver.get_sender().send(result.clone());
+    
+                        this.inner.set_cleanup(result, this.round_robin.client);
+                    },
+                    InnerActiveQueryProj::Cleanup(_, old_result) => {
+                        // This condition shouldn't every actually occur. However, if it somehow
+                        // does, we still need to handle it. In this case, we will use the new
+                        // answer instead of the original if it is "better".
+                        match (&old_result, result) {
+                            // If the old result has been set to None, we've got serious issues. But
+                            // we can use this new result instead to smooth over those issues.
+                            (None, result) => { old_result.replace(result); },
+                            // If the old result is some error, we prefer a result that clearly
+                            // states that there are no records at that name.
+                            (Some(QueryResponse::Error(_)), result @ QueryResponse::NoRecords) => { old_result.replace(result); },
+                            // If the old result is some error or found no records, we prefer a
+                            // result that found records.
+                            // FIXME: If NoRecords was returned by one but Records by another, this
+                            //        is probably a serious issue.
+                            (Some(QueryResponse::NoRecords | QueryResponse::Error(_)), result @ QueryResponse::Records(_)) => { old_result.replace(result); },
+                            // If a more specific error than the general "ServFail" is returned,
+                            // prefer that error.
+                            (Some(QueryResponse::Error(RCode::ServFail)), result @ QueryResponse::Error(_)) => { old_result.replace(result); },
+                            _ => (),
+                        };
+                    },
+                    InnerActiveQueryProj::Complete => panic!("ActiveQuery cannot be polled after completion"),
+                }
+            },
+            Poll::Pending => {
+                return Poll::Pending;
+            },
+        }
+
+        let mut this = self.as_mut().project();
+        match this.inner.as_mut().project() {
+            InnerActiveQueryProj::Fresh
+            | InnerActiveQueryProj::ReadActiveQueries(_)
+            | InnerActiveQueryProj::WriteActiveQueries(_)
+            | InnerActiveQueryProj::Following(_) => {
+                panic!("Must be in the Cleanup state to reach this part of the code.")
+            },
+            InnerActiveQueryProj::Cleanup(w_active_queries, result) => {
+                match w_active_queries.as_mut().poll(cx) {
+                    Poll::Ready(mut w_active_queries) => {
+                        if let Some(result_sender) = w_active_queries.remove(&this.round_robin.context.query()) {
+                            // Always make sure the channel is closed. This should never have an
+                            // effect but will ensure that it is never left open.
+                            result_sender.close();
+                        }
+                        drop(w_active_queries);
+
+                        match result.take() {
+                            Some(result) => {
+                                this.inner.set_complete();
+
+                                return Poll::Ready(result)
+                            },
+                            None => {
+                                this.inner.set_complete();
+
+                                panic!("The Option result is supposed to always be Some but was None")
+                            },
+                        }
+                    },
+                    Poll::Pending => {
+                        // TODO
+                        return Poll::Pending;
+                    },
+                }
+            },
+            InnerActiveQueryProj::Complete => panic!("ActiveQuery cannot be polled after completion"),
+        }
+    }
+}
+
+#[pinned_drop]
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, CCache> PinnedDrop for ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+    'a: 'j,
+    'j: 'i,
+{
+    fn drop(mut self: Pin<&mut Self>) {
+        async fn cleanup(client: Arc<DNSAsyncClient>, query: Arc<Context>) {
+            let mut w_active_queries = client.active_queries.write().await;
+            if let Some(sender) = w_active_queries.get(query.query()) {
+                if (sender.sender_count() <= 1) && (sender.receiver_count() == 0) {
+                    let _ = w_active_queries.remove(query.query());
+                }
+            }
+            drop(w_active_queries);
+        }
+
+        match self.as_mut().project().inner.as_mut().project() {
+            InnerActiveQueryProj::Fresh
+          | InnerActiveQueryProj::ReadActiveQueries(_)
+          | InnerActiveQueryProj::WriteActiveQueries(_) => {
+                // Nothing to do
+            },
+            InnerActiveQueryProj::Following(_)
+          | InnerActiveQueryProj::Cleanup(_, _) => {
+                // An active query has been registered. Need to make sure it doesn't need to be
+                // removed.
+                let client = self.round_robin.client.clone();
+                let query = self.round_robin.context.clone();
+                tokio::spawn(cleanup(client, query));
+            },
+            InnerActiveQueryProj::Complete => {
+                // Nothing to do
+            },
+        }
     }
 }
 

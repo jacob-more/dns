@@ -1,11 +1,13 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
+use async_lib::once_watch;
 use async_trait::async_trait;
 use dns_cache::asynchronous::{async_cache::AsyncTreeCache, async_main_cache::AsyncMainTreeCache};
-use dns_lib::interface::client::{Answer, AsyncClient, Context, Response};
+use dns_lib::{interface::client::{Answer, AsyncClient, Context, Response}, query::{message::Message, question::Question}, resource_record::resource_record::ResourceRecord};
 use log::info;
-use network::socket_manager::SocketManager;
+use network::{mixed_tcp_udp::errors::QueryError, socket_manager::SocketManager};
 use query::recursive_query::{recursive_query, QueryResponse};
+use tokio::sync::RwLock;
 
 mod query;
 
@@ -16,6 +18,7 @@ const IPV4_ENABLED: bool = true;
 pub struct DNSAsyncClient {
     cache: Arc<AsyncMainTreeCache>,
     socket_manager: SocketManager,
+    active_queries: RwLock<HashMap<Question, once_watch::Sender<QueryResponse<ResourceRecord>>>>,
 }
 
 impl DNSAsyncClient {
@@ -24,7 +27,16 @@ impl DNSAsyncClient {
         Self {
             cache,
             socket_manager: SocketManager::new().await,
+            active_queries: RwLock::new(HashMap::new()),
         }
+    }
+
+    #[inline]
+    pub fn cache(&self) -> Arc<AsyncMainTreeCache> { self.cache.clone() }
+
+    #[inline]
+    pub async fn close(&self) {
+        self.socket_manager.drop_all_sockets().await;
     }
 }
 
