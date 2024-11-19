@@ -413,8 +413,8 @@ pub const fn is_upper_alphanumeric(character: AsciiChar) -> bool {
 pub const fn is_control_char(character: AsciiChar) -> bool {
     match character {
         ASCII_NUL..=ASCII_UNIT_SEPARATOR => true,
-        ASCII_DELETE => true,
-        _ => false,
+        ASCII_SPACE..=ASCII_TILDE => false,
+        ASCII_DELETE.. => true,
     }
 }
 
