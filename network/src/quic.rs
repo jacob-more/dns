@@ -1,7 +1,7 @@
 use std::{collections::HashSet, io::ErrorKind, net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6}, sync::{atomic::{AtomicBool, Ordering}, Arc}};
 
 use async_lib::awake_token::AwakeToken;
-use dns_lib::{query::message::Message, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
+use dns_lib::{query::message::Message, serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}, types::c_domain_name::CompressionMap};
 use quinn::{ConnectError, Connection, ConnectionError, Endpoint, ReadExactError, RecvStream, VarInt};
 use tokio::{io, pin, select, sync::{broadcast, RwLock, RwLockReadGuard}};
 

@@ -246,7 +246,7 @@ impl Display for CharacterString {
 
 impl ToWire for CharacterString {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         (self.ascii.len() as u8).to_wire_format(wire, compression)?;
         self.ascii.to_wire_format(wire, compression)
     }

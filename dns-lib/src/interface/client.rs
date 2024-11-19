@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, sync::Arc};
 
 use async_trait::async_trait;
 
-use crate::{query::{message::Message, question::Question}, resource_record::{rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::{CDomainName, Labels}};
+use crate::{query::{message::Message, question::Question}, resource_record::{rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::{CDomainName, CmpDomainName}};
 
 #[derive(Debug)]
 pub enum Response {

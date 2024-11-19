@@ -112,7 +112,7 @@ const IPV6_MAX_BITS: usize = IPV6_ADDRESS_LENGTH * 8;
 
 impl ToWire for APItem {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         self.address_family.to_wire_format(wire, compression)?;
         self.prefix.to_wire_format(wire, compression)?;
         let negation_flag = match self.negation_flag {

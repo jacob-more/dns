@@ -3,7 +3,6 @@ pub mod bytes;
 pub mod read_wire;
 pub mod write_wire;
 
-pub mod compression_map;
 pub mod to_wire;
 pub mod from_wire;
 mod from_wire_tests;

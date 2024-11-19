@@ -4,7 +4,7 @@ mod built_in_primitives_test {
         ($test_name:ident, $integer:ident, $integer_byte_count:ident) => {
             #[cfg(test)]
             mod $test_name {
-                use crate::serde::{wire::{compression_map::CompressionMap, to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*};
+                use crate::{types::c_domain_name::CompressionMap, serde::{wire::{to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*}};
 
                 #[test]
                 fn per_byte_test() {
@@ -91,7 +91,7 @@ mod ux_primitives_test {
             mod $test_name {
                 use ux::$integer;
 
-                use crate::serde::{wire::{compression_map::CompressionMap, to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*};
+                use crate::{types::c_domain_name::CompressionMap, serde::{wire::{to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*}};
 
                 #[test]
                 fn per_byte_test() {
@@ -163,7 +163,7 @@ mod ux_primitives_test {
             mod $test_name {
                 use ux::$integer;
 
-                use crate::serde::{wire::{compression_map::CompressionMap, to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*};
+                use crate::{types::c_domain_name::CompressionMap, serde::{wire::{to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*}};
 
                 #[test]
                 fn per_byte_test() {

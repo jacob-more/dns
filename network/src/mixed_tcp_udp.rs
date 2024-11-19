@@ -3,7 +3,7 @@ use std::{cmp::{max, min}, collections::HashMap, fmt::Display, future::Future, n
 use async_lib::{awake_token::{AwakeToken, AwokenToken, SameAwakeToken}, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
 use atomic::Atomic;
 use bytemuck::{NoUninit, Pod, Zeroable};
-use dns_lib::{query::{message::Message, question::Question}, serde::wire::{compression_map::CompressionMap, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}};
+use dns_lib::{query::{message::Message, question::Question}, serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}, types::c_domain_name::CompressionMap};
 use futures::{future::BoxFuture, FutureExt};
 use log::trace;
 use pin_project::{pin_project, pinned_drop};

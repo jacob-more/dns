@@ -4,7 +4,7 @@ use dns_macros::ToPresentation;
 
 use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, Label}}};
 
-use super::c_domain_name::Labels;
+use super::c_domain_name::{CmpDomainName, OwnedLabel};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
@@ -30,7 +30,7 @@ impl From<CDomainNameError> for DomainNameError {
 /// serializing the name. If compression is required, use the CDomainName.
 #[derive(Clone, PartialEq, Eq, Hash, ToPresentation)]
 pub struct DomainName {
-    domain_name: CDomainName,
+    pub(super) domain_name: CDomainName,
 }
 
 impl DomainName {
@@ -50,30 +50,48 @@ impl DomainName {
     }
 
     #[inline]
+    pub fn from_labels(labels: Vec<OwnedLabel>) -> Result<Self, DomainNameError> {
+        Ok(Self { domain_name: CDomainName::from_labels(labels)? })
+    }
+
+    #[inline]
+    pub fn label_count(&self) -> usize {
+        self.domain_name.label_count()
+    }
+
+    /// A domain name is root if it is made up of only 1 label, that has a length
+    /// of zero.
+    #[inline]
+    pub fn is_root(&self) -> bool {
+        self.domain_name.is_root()
+    }
+
+    #[inline]
     pub fn is_fully_qualified(&self) -> bool {
         self.domain_name.is_fully_qualified()
     }
 
     /// Converts this domain into a fully qualified domain.
     #[inline]
-    pub fn fully_qualified(&mut self) {
-        self.domain_name.fully_qualified()
+    pub fn fully_qualified(&mut self) -> Result<(), DomainNameError> {
+        Ok(self.domain_name.fully_qualified()?)
     }
 
     /// Creates a fully qualified domain from this domain.
     #[inline]
-    pub fn as_fully_qualified(&self) -> Self {
-        Self { domain_name: self.domain_name.as_fully_qualified() }
+    pub fn as_fully_qualified(&self) -> Result<Self, DomainNameError> {
+        Ok(Self { domain_name: self.domain_name.as_fully_qualified()? })
     }
 
     #[inline]
-    pub fn as_canonical_name(&self) -> Self {
-        Self { domain_name: self.domain_name.as_canonical_name() }
+    pub fn as_canonical_name(&self) -> Result<Self, DomainNameError> {
+        Ok(Self { domain_name: self.domain_name.as_canonical_name()? })
     }
     
     #[inline]
-    pub fn canonical_name(&mut self) {
-        self.domain_name.canonical_name()
+    pub fn canonical_name(&mut self) -> Result<(), DomainNameError> {
+        self.domain_name.canonical_name()?;
+        Ok(())
     }
 
     #[inline]
@@ -87,31 +105,13 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
-        self.iter_labels()
-            .enumerate()
-            .map(|(index, _)| Self::from_labels(&self.as_labels()[index..]).unwrap())
-    }
-}
-
-impl Labels<DomainNameError> for DomainName {
-    #[inline]
-    fn from_labels(labels: &[Label]) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: CDomainName::from_labels(labels)? })
-    }
-    
-    fn from_labels_iter<'a>(labels: impl 'a + Iterator<Item = &'a Label>) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: CDomainName::from_labels_iter(labels)? })
+    pub fn labels<'a>(&'a self) -> impl 'a + Iterator<Item = Label<'a>> {
+        self.domain_name.labels()
     }
 
     #[inline]
-    fn as_labels<'a>(&'a self) -> &'a [Label] {
-        self.domain_name.as_labels()
-    }
-
-    #[inline]
-    fn to_labels(&self) -> Vec<Label> {
-        self.domain_name.to_labels()
+    pub fn search_domains<'a>(&'a self) -> impl 'a + Iterator<Item = Self> {
+        self.domain_name.search_domains().map(|domain_name| DomainName { domain_name })
     }
 }
 
@@ -139,9 +139,33 @@ impl Add for DomainName {
     }
 }
 
+impl CmpDomainName<CDomainName> for DomainName {
+    #[inline]
+    fn matches(&self, other: &CDomainName) -> bool {
+        self.domain_name.matches(other)
+    }
+
+    #[inline]
+    fn is_subdomain(&self, child: &CDomainName) -> bool {
+        self.domain_name.is_subdomain(child)
+    }
+}
+
+impl CmpDomainName<DomainName> for DomainName {
+    #[inline]
+    fn matches(&self, other: &DomainName) -> bool {
+        self.domain_name.matches(&other.domain_name)
+    }
+
+    #[inline]
+    fn is_subdomain(&self, child: &DomainName) -> bool {
+        self.domain_name.matches(&child.domain_name)
+    }
+}
+
 impl ToWire for DomainName {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, _compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, _compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         // Providing a None type compression map to the CDomainName disables domain name compression
         // while allowing us to re-use the rest of its implementation.
         self.domain_name.to_wire_format(wire, &mut None)

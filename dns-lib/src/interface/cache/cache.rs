@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use tokio::join;
 
-use crate::{query::message::Message, types::c_domain_name::Labels};
+use crate::{query::message::Message, types::c_domain_name::CmpDomainName};
 
 use super::{CacheMeta, CacheQuery, CacheRecord, CacheResponse, MetaAuth};
 

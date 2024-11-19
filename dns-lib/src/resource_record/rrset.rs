@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, fmt::Display};
 
-use crate::types::c_domain_name::{CDomainName, Labels};
+use crate::types::c_domain_name::{CDomainName, CmpDomainName};
 
 use super::{resource_record::ResourceRecord, rtype::RType};
 

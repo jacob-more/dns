@@ -1,6 +1,6 @@
 use std::{collections::{HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, Label, Labels}};
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, OwnedLabel}};
 use futures::StreamExt;
 use tokio::sync::{Mutex, RwLock};
 
@@ -24,7 +24,7 @@ pub struct AsyncTreeCache<Records> {
     root_nodes: RwLock<HashMap<RClass, Arc<TreeNode<Records>>>>
 }
 
-type ChildNodes<Records> = RwLock<HashMap<Label, Arc<TreeNode<Records>>>>;
+type ChildNodes<Records> = RwLock<HashMap<OwnedLabel, Arc<TreeNode<Records>>>>;
 pub type MappedRecords<Records> = RwLock<HashMap<RType, Records>>;
 
 #[derive(Debug)]
@@ -82,7 +82,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().iter_labels().rev().skip(1) {
+        for label in question.qname().labels().collect::<Vec<_>>().iter().rev().skip(1) {
             let lowercase_label = label.as_lower();
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
@@ -141,7 +141,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         }
     
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().iter_labels().rev().skip(1) {
+        for label in question.qname().labels().collect::<Vec<_>>().iter().rev().skip(1) {
             let lowercase_label = label.as_lower();
             let read_current_node_children = current_node.children.read().await;
             if let Some(child_node) = read_current_node_children.get(&lowercase_label) {
@@ -183,7 +183,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
             return Ok(None);
         }
 
-        let qlabels = qname.as_labels();
+        let qlabels = qname.labels().collect::<Vec<_>>();
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels[1..qlabels.len()-1].iter().rev() {
@@ -200,12 +200,12 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         }
 
         let mut write_children = parent_node.children.write().await;
-        let result = write_children.remove(&qlabels[0]);
+        let result = write_children.remove(&qlabels[0].as_lower());
         drop(write_children);
         return Ok(result);
     }
 
-    async fn get_subdomains(node: Arc<TreeNode<Records>>) -> HashSet<Vec<Label>> {
+    async fn get_subdomains(node: Arc<TreeNode<Records>>) -> HashSet<Vec<OwnedLabel>> {
         let read_node_children = node.children.read().await;
         let node_children = read_node_children.clone();
         drop(read_node_children);
@@ -243,8 +243,8 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                 let mut write_domains = domains.lock().await;
                 write_domains.extend(
                     subdomain_names.into_iter()
-                        .map(|mut subdomain_name| {subdomain_name.push(Label::new_root()); subdomain_name})
-                        .filter_map(|domain_name| match CDomainName::from_labels(domain_name.as_slice()) {
+                        .map(|mut subdomain_name| {subdomain_name.push(OwnedLabel::new_root()); subdomain_name})
+                        .filter_map(|domain_name| match CDomainName::from_labels(domain_name) {
                             Ok(domain_name) => Some(domain_name),
                             Err(_) => None,
                         })

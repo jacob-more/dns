@@ -9,9 +9,9 @@ use std::net::{Ipv4Addr, Ipv6Addr, IpAddr};
 use mac_address::MacAddress;
 use ux::{u24, u40, u48, u56, i24, i40, i48, i56, u1, u4, u3, u7};
 
-use crate::serde::const_byte_counts::*;
+use crate::{serde::const_byte_counts::*, types::c_domain_name::CompressionMap};
 
-use super::{write_wire::{WriteWire, WriteWireError}, compression_map::CompressionMap};
+use super::write_wire::{WriteWire, WriteWireError};
 
 pub trait ToWire {
     fn to_wire_format<'a, 'b>(&self, wire: &'b mut WriteWire<'a>, compression: &mut Option<CompressionMap>) -> Result<(), WriteWireError> where 'a: 'b;

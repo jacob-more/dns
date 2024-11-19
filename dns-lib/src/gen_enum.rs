@@ -210,7 +210,7 @@ macro_rules! impl_enum_to_wire {
     ($enum_name:ident, $int_ty:ty) => {
         impl $crate::serde::wire::to_wire::ToWire for $enum_name {
             #[inline]
-            fn to_wire_format<'a, 'b>(&self, wire: &'b mut $crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<$crate::serde::wire::compression_map::CompressionMap>) -> std::result::Result<(), $crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+            fn to_wire_format<'a, 'b>(&self, wire: &'b mut $crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<$crate::types::c_domain_name::CompressionMap>) -> std::result::Result<(), $crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
                 self.code().to_wire_format(wire, compression)
             }
         

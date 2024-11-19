@@ -135,7 +135,7 @@ fn u1_to_bool(integer: u1) -> bool {
 
 impl Message {
     #[inline]
-    pub fn to_wire_format_with_two_octet_length<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    pub fn to_wire_format_with_two_octet_length<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         // Push two bytes onto the wire. These will be replaced with the u16 that indicates the wire
         // length.
         let two_octet_length_offset = wire.current_len();
@@ -155,7 +155,7 @@ impl Message {
 
 impl ToWire for Message {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         self.id.to_wire_format(wire, compression)?;
 
         let qr = match self.qr {

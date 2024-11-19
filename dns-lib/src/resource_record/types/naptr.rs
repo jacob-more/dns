@@ -1,6 +1,6 @@
 use dns_macros::{ToWire, RTypeCode, ToPresentation};
 
-use crate::{serde::{presentation::{errors::{TokenError, TokenizedRecordError}, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData}, wire::{from_wire::FromWire, read_wire::ReadWireError}}, types::{c_domain_name::{CDomainNameError, Labels}, character_string::CharacterString, domain_name::{DomainName, DomainNameError}}};
+use crate::{serde::{presentation::{errors::{TokenError, TokenizedRecordError}, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData}, wire::{from_wire::FromWire, read_wire::ReadWireError}}, types::{c_domain_name::CDomainNameError, character_string::CharacterString, domain_name::{DomainName, DomainNameError}}};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc3403#section-4
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, ToPresentation, RTypeCode)]

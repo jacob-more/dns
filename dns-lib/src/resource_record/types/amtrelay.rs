@@ -3,7 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use dns_macros::RTypeCode;
 use ux::{u1, u7};
 
-use crate::{serde::{presentation::{from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::{c_domain_name::Labels, domain_name::DomainName}};
+use crate::{serde::{presentation::{from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::domain_name::DomainName};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8777#name-amtrelay-rdata-format
 ///
@@ -61,7 +61,7 @@ impl RelayType {
 
 impl ToWire for AMTRELAY {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::serde::wire::compression_map::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
         self.precedence.to_wire_format(wire, compression)?;
         (self.discovery_optional, self.relay.relay_type()).to_wire_format(wire, compression)?;
         match &self.relay {

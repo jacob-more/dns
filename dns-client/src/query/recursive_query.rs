@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use dns_lib::{interface::{cache::{cache::AsyncCache, main_cache::AsyncMainCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::{CDomainName, Labels}};
+use dns_lib::{interface::{cache::{cache::AsyncCache, main_cache::AsyncMainCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::{CDomainName, CmpDomainName}};
 use log::{debug, trace};
 use rand::{thread_rng, seq::SliceRandom};
 
@@ -43,10 +43,10 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
     // down the tree from there.
     let context = Arc::new(context);
     let search_names_context = context.clone();
-    let search_names = search_names_context.qname().search_domains().take(search_names_max_index);
+    let search_names: Vec<_> = search_names_context.qname().search_domains().take(search_names_max_index).collect();
 
     // Query Stage: Query name servers for the next subdomain, following the tree to our answer.
-    for (index, search_name) in search_names.enumerate().rev() {
+    for (index, search_name) in search_names.into_iter().enumerate().rev() {
         // Query the name servers for the child domain (aka. search_name).
         // We set the qtype to be RRTypeCode::A to hide the actual qtype
         // that we're looking for.
@@ -218,10 +218,13 @@ async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
                 trace!(context:?; "Recursive search new dname error: The query name '{}' is not a subdomain of the dname's owner name '{}'", context.qname(), header.get_name());
                 return QueryResponse::Error(RCode::ServFail);
             }
-            let dname = CDomainName::from_labels_iter(
-                context.qname().as_labels()[..header.get_name().label_count()]
-                    .iter()
-                    .chain(dname_rdata.target_name().iter_labels())
+            let dname = CDomainName::from_labels(
+                context.qname()
+                    .labels()
+                    .take(header.get_name().label_count())
+                    .chain(dname_rdata.target_name().labels())
+                    .map(|label| label.as_owned_label())
+                    .collect()
             );
 
             let dname = match dname {
