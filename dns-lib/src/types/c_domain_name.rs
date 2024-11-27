@@ -829,7 +829,7 @@ impl CompressionMap {
 
     #[inline]
     pub fn insert_sequence(&mut self, domain: &[u8], offset: u16) {
-        self.map.insert(domain.to_vec(), offset);
+        self.map.entry(domain.to_vec()).or_insert(offset);
     }
 
     #[inline]
