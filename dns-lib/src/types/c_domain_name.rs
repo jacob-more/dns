@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, fmt::{Debug, Display}, iter::FusedIterator, ops::Add};
 
-use tinyvec::{tiny_vec, TinyVec};
+use tinyvec::{tiny_vec, ArrayVec, TinyVec};
 
 use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, ParseError}, non_escaped_to_escaped}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{ascii_char_as_lower, constants::ASCII_PERIOD, AsciiError, AsciiString}};
 
@@ -741,7 +741,7 @@ impl FromWire for CDomainName {
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
         let mut pointer_count = 0;
         let mut fully_qualified = false;
-        let mut octets = Vec::new();
+        let mut octets = ArrayVec::<[u8; Self::MAX_OCTETS as usize]>::new();
         let mut length_octets = TinyVec::new();
 
         let mut final_offset = wire.current_offset();
@@ -796,7 +796,7 @@ impl FromWire for CDomainName {
             wire.set_offset(final_offset as usize)?;
         }
 
-        octets.shrink_to_fit();
+        let octets = octets.to_vec();
         Ok(Self { octets, length_octets })
     }
 }
