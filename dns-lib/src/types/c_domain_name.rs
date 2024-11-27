@@ -1,4 +1,6 @@
-use std::{collections::HashMap, error::Error, fmt::{Debug, Display}, ops::Add};
+use std::{collections::HashMap, error::Error, fmt::{Debug, Display}, iter::FusedIterator, ops::Add};
+
+use tinyvec::{tiny_vec, TinyVec};
 
 use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, ParseError}, non_escaped_to_escaped}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{ascii_char_as_lower, constants::ASCII_PERIOD, AsciiError, AsciiString}};
 
@@ -6,6 +8,7 @@ use super::{ascii::AsciiChar, domain_name::DomainName};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
+    EmptyString,
     Fqdn,
     LongDomain,
     LongLabel,
@@ -25,6 +28,7 @@ impl Error for CDomainNameError {}
 impl Display for CDomainNameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::EmptyString =>       write!(f, "Domain Cannot Be Empty: domain name must have at least one byte"),
             Self::Fqdn =>              write!(f, "Domain Must Be Fully Qualified: indicates that a domain name does not have a closing dot"),
             Self::LongDomain =>        write!(f, "Domain Name Exceeded {} Wire-Format Octets", CDomainName::MAX_OCTETS),
             Self::LongLabel =>         write!(f, "Label Exceeded {} Wire-Format Octets", Label::MAX_OCTETS),
@@ -85,7 +89,7 @@ impl<'a> Label<'a> {
 
     #[inline]
     pub fn as_owned_label(&self) -> OwnedLabel {
-        OwnedLabel { octets: self.octets.to_vec() }
+        OwnedLabel { octets: TinyVec::from(self.octets) }
     }
 }
 
@@ -129,7 +133,8 @@ impl<'a> Debug for Label<'a> {
 
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct OwnedLabel {
-    octets: Vec<u8>,
+    // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
+    octets: TinyVec<[u8; 14]>,
 }
 
 impl OwnedLabel {
@@ -138,7 +143,7 @@ impl OwnedLabel {
 
     #[inline]
     pub fn new_root() -> Self {
-        Self { octets: vec![] }
+        Self { octets: tiny_vec![] }
     }
 
     #[inline]
@@ -191,9 +196,19 @@ pub trait CmpDomainName<T>: Sized {
     /// determines if two sets of labels are identical, ignoring capitalization
     fn matches(&self, other: &T) -> bool;
 
-    /// is_subdomain checks if child is indeed a child of the parent. If child
-    /// and parent are the same domain true is returned as well.
-    fn is_subdomain(&self, child: &T) -> bool;
+    /// is_parent_domain_of checks if child is indeed a child of the parent. If child and parent are
+    /// the same domain true is returned as well.
+    fn is_parent_domain_of(&self, child: &T) -> bool;
+
+    /// is_child_domain_of checks if this domain is indeed a child of the parent. If child and
+    /// parent are the same domain true is returned as well.
+    #[inline]
+    fn is_child_domain_of(&self, parent: &T) -> bool
+    where
+        T: CmpDomainName<Self>
+    {
+        parent.is_parent_domain_of(self)
+    }
 }
 
 /// This is a compressible domain name. This should only be used in situations where domain name
@@ -234,9 +249,13 @@ pub trait CmpDomainName<T>: Sized {
 /// Domain names cannot be compressed: Those not defined in RFC 1035
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CDomainName {
-    label_count: u8,
-    fully_qualified: bool,
+    /// Octets still contains label lengths inline despite `length_octets` containing all the length
+    /// octets. This way, it maintains the exact same layout as the wire format.
     octets: Vec<AsciiChar>,
+    /// A separate list with all the length octets. This allows for reverse iteration and keeping
+    /// track of the number of labels.
+    // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
+    length_octets: TinyVec<[u8; 14]>,
 }
 
 impl CDomainName {
@@ -260,19 +279,20 @@ impl CDomainName {
     pub const MAX_COMPRESSION_POINTERS: u16 = ((Self::MAX_OCTETS + 1) / 2) - 2;
 
     pub fn new_root() -> Self {
-        Self { label_count: 1, fully_qualified: true, octets: vec![0] }
+        Self { octets: vec![0], length_octets: tiny_vec![0] }
     }
 
     pub fn new(string: &AsciiString) -> Result<Self, CDomainNameError> {
-        let mut octets = Vec::new();
+        if string.is_empty() {
+            return Err(CDomainNameError::EmptyString);
+        }
         // As long as there are no escaped characters in the string and the name is fully qualified,
         // we expect the length to just about match the number of characters + 1 for the root label.
-        octets.reserve(string.len() + 1);
+        let mut octets = Vec::with_capacity(string.len() + 1);
         // The first byte represents the length of the first label.
         octets.push(0);
-        let mut label_count = 1;
+        let mut length_octets = TinyVec::new();
         let mut length_octet_index = 0;
-        let mut fully_qualified = true;
 
         for escaped_char_result in EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate()) {
             match (escaped_char_result, (octets.len() - length_octet_index)) {
@@ -282,27 +302,25 @@ impl CDomainName {
                         return Err(CDomainNameError::LeadingDot);
                     }
 
-                    // The first octet is a zero, which represents an empty label.
-                    // Nothing to do.
+                    length_octets.push(octets[length_octet_index]);
                     break;
                 },
                 // consecutive dots are never legal
                 (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 1) => return Err(CDomainNameError::ConsecutiveDots),
                 // a label is found
                 (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 2..) => {
-                    length_octet_index = octets.len();
-                    label_count += 1;
-                    octets.push(0);
-                    fully_qualified = true;
+                    length_octets.push(octets[length_octet_index]);
 
                     if octets.len() > Self::MAX_OCTETS as usize {
                         return Err(CDomainNameError::LongDomain);
                     }
+
+                    length_octet_index = octets.len();
+                    octets.push(0);
                 },
                 (Ok((_, escapable_char)), _) => {
                     octets.push(escapable_char.into_unescaped_character());
                     octets[length_octet_index] += 1;
-                    fully_qualified = false;
 
                     // TODO: Can we optimize this check? It might be able to do once per label as
                     // long as we still check against the maximum number of octets every time.
@@ -318,8 +336,12 @@ impl CDomainName {
             }
         }
 
+        if octets.len() >= (length_octet_index + 1) && (&octets != &[0]) {
+            length_octets.push(octets[length_octet_index]);
+        }
+
         octets.shrink_to_fit();
-        Ok(Self { label_count, fully_qualified, octets })
+        Ok(Self { octets, length_octets })
     }
 
     #[inline]
@@ -331,50 +353,52 @@ impl CDomainName {
 
     #[inline]
     pub fn from_labels(labels: Vec<OwnedLabel>) -> Result<Self, CDomainNameError> {
+        if labels.is_empty() {
+            return Err(CDomainNameError::EmptyString);
+        }
         let total_octets = labels.len() + labels.iter().map(|label| label.octets.len()).sum::<usize>();
         if total_octets > Self::MAX_OCTETS as usize {
             return Err(CDomainNameError::LongDomain);
         }
-        let label_count = labels.len() as u8;
-        let fully_qualified = labels.last().is_some_and(|label| label.is_root());
+        let mut length_octets = TinyVec::with_capacity(labels.len());
         let mut octets = Vec::with_capacity(total_octets);
         for label in labels {
-            octets.push(label.octets.len() as u8);
+            let length_octet = label.octets.len() as u8;
+            octets.push(length_octet);
             octets.extend(label.octets);
+            length_octets.push(length_octet);
         }
-        Ok(Self { label_count, fully_qualified, octets })
+        Ok(Self { octets, length_octets })
     }
 
     #[inline]
     pub fn label_count(&self) -> usize {
-        self.label_count as usize
+        self.length_octets.len()
     }
 
     /// A domain name is root if it is made up of only 1 label, that has a length
     /// of zero.
     #[inline]
     pub fn is_root(&self) -> bool {
-        // We could also check that the first octet is a zero, but this is much easier and equally
-        // correct since the root label counts as a label.
-        (self.label_count == 1) && self.fully_qualified
+        &self.octets == &[0]
     }
 
     #[inline]
     pub fn is_fully_qualified(&self) -> bool {
-        self.fully_qualified
+        self.length_octets.last() == Some(&0)
     }
 
     /// Converts this domain into a fully qualified domain.
     #[inline]
-    pub fn fully_qualified(&mut self) -> Result<(), CDomainNameError> {
+    pub fn set_fully_qualified(&mut self) -> Result<(), CDomainNameError> {
         if self.is_fully_qualified() {
             return Ok(());
         // aka. Would adding a byte exceed the limit?
-        } else if self.octets.len() >= Self::MAX_OCTETS as usize {
+        } else if self.serial_length() >= Self::MAX_OCTETS {
             return Err(CDomainNameError::LongDomain);
         } else {
-            self.fully_qualified = true;
             self.octets.push(0);
+            self.length_octets.push(0);
             return Ok(());
         }
     }
@@ -390,11 +414,9 @@ impl CDomainName {
         } else {
             let mut octets = self.octets.clone();
             octets.push(0);
-            return Ok(Self {
-                label_count: self.label_count + 1,
-                fully_qualified: true,
-                octets
-            });
+            let mut length_octets = self.length_octets.clone();
+            length_octets.push(0);
+            return Ok(Self { octets, length_octets });
         }
     }
 
@@ -429,23 +451,22 @@ impl CDomainName {
     #[inline]
     pub fn as_canonical_name(&self) -> Result<Self, CDomainNameError> {
         let mut dn = self.as_lower();
-        dn.fully_qualified()?;
+        dn.set_fully_qualified()?;
         return Ok(dn);
     }
     
     #[inline]
     pub fn canonical_name(&mut self) -> Result<(), CDomainNameError> {
         self.lower();
-        self.fully_qualified()?;
+        self.set_fully_qualified()?;
         Ok(())
     }
 
     #[inline]
     pub fn as_lower(&self) -> Self {
         Self {
-            label_count: self.label_count,
-            fully_qualified: self.fully_qualified,
-            octets: self.octets.iter().map(|character| ascii_char_as_lower(*character)).collect()
+            octets: self.octets.iter().map(|character| ascii_char_as_lower(*character)).collect(),
+            length_octets: self.length_octets.clone(),
         }
     }
 
@@ -455,79 +476,135 @@ impl CDomainName {
     }
 
     #[inline]
-    pub fn labels<'a>(&'a self) -> impl 'a + Iterator<Item = Label<'a>> {
-        CDomainLabelIterator::new(self)
+    pub fn labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Label<'a>> + ExactSizeIterator<Item = Label<'a>> {
+        CDomainLabelIter::new(self)
     }
 
     #[inline]
-    pub fn search_domains<'a>(&'a self) -> impl 'a + Iterator<Item = Self> {
-        CDomainSearchNameIterator::new(self)
+    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
+        CDomainSearchNameIter::new(self)
     }
 }
 
-struct CDomainLabelIterator<'a> {
+struct CDomainLabelIter<'a> {
     name: &'a CDomainName,
-    next_index: usize,
+    next_octet_index: u8,
+    next_length_index: u8,
+    last_octet_index: u8,
+    last_length_index: u8,
 }
 
-impl<'a> CDomainLabelIterator<'a> {
+impl<'a> CDomainLabelIter<'a> {
     pub fn new(c_domain_name: &'a CDomainName) -> Self {
         Self {
             name: &c_domain_name,
-            next_index: 0,
+            next_octet_index: 0,
+            next_length_index: 0,
+            last_octet_index: c_domain_name.octets.len() as u8,
+            last_length_index: c_domain_name.length_octets.len() as u8,
         }
     }
 }
 
-impl<'a> Iterator for CDomainLabelIterator<'a> {
+impl<'a> Iterator for CDomainLabelIter<'a> {
     type Item = Label<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let length = self.name.octets.get(self.next_index)?;
-        let label = Label { octets: &self.name.octets[(self.next_index + 1)..(self.next_index + 1 + (*length as usize))] };
-        self.next_index += (*length as usize) + 1;
-        return Some(label);
+        if self.next_length_index < self.last_length_index {
+            let length = self.name.length_octets[self.next_length_index as usize];
+            let label = Label { octets: &self.name.octets[((self.next_octet_index as usize) + 1)..((self.next_octet_index as usize) + 1 + (length as usize))] };
+            self.next_octet_index += length + 1;
+            self.next_length_index += 1;
+            return Some(label);
+        } else {
+            return None;
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = (self.last_length_index as usize) - (self.next_length_index as usize);
+        (size, Some(size))
     }
 }
 
-struct CDomainSearchNameIterator<'a> {
-    name: &'a [u8],
-    fully_qualified: bool,
-    remaining_labels: u8,
-}
-
-impl<'a> CDomainSearchNameIterator<'a> {
-    pub fn new(c_domain_name: &'a CDomainName) -> Self {
-        Self {
-            name: &c_domain_name.octets,
-            fully_qualified: c_domain_name.fully_qualified,
-            remaining_labels: c_domain_name.label_count,
+impl<'a> DoubleEndedIterator for CDomainLabelIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.next_length_index < self.last_length_index {
+            let length = self.name.length_octets[(self.last_length_index as usize) - 1];
+            let label = Label { octets: &self.name.octets[((self.last_octet_index as usize) - (length as usize))..(self.last_octet_index as usize)] };
+            self.last_octet_index -= length + 1;
+            self.last_length_index -= 1;
+            return Some(label);
+        } else {
+            return None;
         }
     }
 }
 
-impl<'a> Iterator for CDomainSearchNameIterator<'a> {
+impl<'a> ExactSizeIterator for CDomainLabelIter<'a> {}
+impl<'a> FusedIterator for CDomainLabelIter<'a> {}
+
+struct CDomainSearchNameIter<'a> {
+    name: &'a CDomainName,
+    next_octet_index: u8,
+    next_length_index: u8,
+    last_octet_index: u8,
+    last_length_index: u8,
+}
+
+impl<'a> CDomainSearchNameIter<'a> {
+    pub fn new(c_domain_name: &'a CDomainName) -> Self {
+        Self {
+            name: &c_domain_name,
+            next_octet_index: 0,
+            next_length_index: 0,
+            last_octet_index: c_domain_name.octets.len() as u8,
+            last_length_index: c_domain_name.length_octets.len() as u8,
+        }
+    }
+}
+
+impl<'a> Iterator for CDomainSearchNameIter<'a> {
     type Item = CDomainName;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.remaining_labels == 0 {
+        if self.next_length_index < self.last_length_index {
+            let octet_index = self.next_octet_index;
+            let length_octet_index = self.next_length_index;
+            self.next_octet_index += self.name.length_octets[length_octet_index as usize] + 1;
+            self.next_length_index += 1;
+            return Some(CDomainName {
+                octets: self.name.octets[(octet_index as usize)..].to_vec(),
+                length_octets: TinyVec::from(&self.name.length_octets[(length_octet_index as usize)..]),
+            });
+        } else {
             return None;
         }
+    }
 
-        let label_count = self.remaining_labels;
-        let name = self.name;
-        // The `+ 1` is for the length byte.
-        let length = name[0] + 1;
-        self.name = &name[length as usize..];
-        self.remaining_labels -= 1;
-
-        Some(CDomainName {
-            label_count,
-            fully_qualified: self.fully_qualified,
-            octets: name.to_vec(),
-        })
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = (self.last_length_index as usize) - (self.next_length_index as usize);
+        (size, Some(size))
     }
 }
+
+impl<'a> DoubleEndedIterator for CDomainSearchNameIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.next_length_index < self.last_length_index {
+            self.last_octet_index -= self.name.length_octets[(self.last_length_index as usize) - 1] + 1;
+            self.last_length_index -= 1;
+            return Some(CDomainName {
+                octets: self.name.octets[(self.last_octet_index as usize)..].to_vec(),
+                length_octets: TinyVec::from(&self.name.length_octets[(self.last_length_index as usize)..]),
+            });
+        } else {
+            return None;
+        }
+    }
+}
+
+impl<'a> ExactSizeIterator for CDomainSearchNameIter<'a> {}
+impl<'a> FusedIterator for CDomainSearchNameIter<'a> {}
 
 impl Display for CDomainName {
     #[inline]
@@ -536,14 +613,12 @@ impl Display for CDomainName {
             return write!(f, ".");
         }
 
-        let mut next_index = 0;
-        if let Some(length) = self.octets.get(next_index) {
-            write!(f, "{}", Label { octets: &self.octets[(next_index + 1)..(next_index + 1 + (*length as usize))] })?;
-            next_index += (*length as usize) + 1;
+        let mut labels = self.labels();
+        if let Some(label) = labels.next() {
+            write!(f, "{label}")?;
         }
-        while let Some(length) = self.octets.get(next_index) {
-            write!(f, ".{}", Label { octets: &self.octets[(next_index + 1)..(next_index + 1 + (*length as usize))] })?;
-            next_index += (*length as usize) + 1;
+        while let Some(labels) = labels.next() {
+            write!(f, ".{labels}")?;
         }
 
         Ok(())
@@ -570,25 +645,23 @@ impl Add for CDomainName {
             return Err(CDomainNameError::ConsecutiveDots);
         }
 
-        if (self.octets.len() + rhs.octets.len()) > (Self::MAX_OCTETS as usize) {
+        if (self.serial_length() + rhs.serial_length()) > Self::MAX_OCTETS {
             return Err(CDomainNameError::LongDomain);
         }
 
         let mut octets = self.octets.clone();
         octets.extend(rhs.octets);
+        let mut length_octets = self.length_octets.clone();
+        length_octets.extend(rhs.length_octets);
 
-        Ok(Self {
-            label_count: self.label_count + rhs.label_count,
-            fully_qualified: self.fully_qualified,
-            octets
-        })
+        return Ok(Self { octets, length_octets });
     }
 }
 
 impl CmpDomainName<CDomainName> for CDomainName {
     #[inline]
     fn matches(&self, other: &CDomainName) -> bool {
-        if self.octets.len() != other.octets.len() {
+        if self.serial_length() != other.serial_length() {
             return false;
         }
         // Entire parent is contained by the child (child = subdomain)
@@ -598,8 +671,8 @@ impl CmpDomainName<CDomainName> for CDomainName {
     }
 
     #[inline]
-    fn is_subdomain(&self, child: &CDomainName) -> bool {
-        if self.octets.len() < child.octets.len() {
+    fn is_parent_domain_of(&self, child: &CDomainName) -> bool {
+        if self.serial_length() <= child.serial_length() {
             return false;
         }
         // Entire parent is contained by the child (child = subdomain)
@@ -617,7 +690,7 @@ impl CmpDomainName<DomainName> for CDomainName {
     }
 
     #[inline]
-    fn is_subdomain(&self, child: &DomainName) -> bool {
+    fn is_parent_domain_of(&self, child: &DomainName) -> bool {
         self.matches(&child.domain_name)
     }
 }
@@ -625,41 +698,36 @@ impl CmpDomainName<DomainName> for CDomainName {
 impl ToWire for CDomainName {
     #[inline]
     fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
-        match compression {
-            Some(compression_map) => {
-                let mut length_byte_index = 0_usize;
-                let mut compression_pointer = None;
-                while length_byte_index < self.octets.len() {
-                    if let Some(pointer) = compression_map.find_sequence(&self.octets[length_byte_index..]) {
-                        // The pointer cannot make use of the first two bits. These are reserved for
-                        // use indicating that this label is a pointer. If they are needed for the
-                        // pointer itself, the pointer would be corrupted.
-                        // 
-                        // To solve this issue, we will just not use a pointer if using one would
-                        // lead to a corrupted pointer. Easy as that.
-                        if (pointer & 0b1100_0000_0000_0000) == 0b0000_0000_0000_0000 {
-                            compression_pointer = Some(pointer | 0b1100_0000_0000_0000);
-                            break;
-                        }
-                    } else {
-                        // Don't insert malformed pointers. Otherwise, it might overwrite an
-                        // existing well-formed pointer.
-                        let pointer = (wire.current_len() + length_byte_index) as u16;
-                        if (pointer & 0b1100_0000_0000_0000) == 0b0000_0000_0000_0000 {
-                            compression_map.insert_sequence(&self.octets[length_byte_index..], pointer);
-                        }
+        if let Some(compression_map) = compression {
+            let mut length_byte_index = 0_usize;
+            while length_byte_index < self.octets.len() {
+                if let Some(pointer) = compression_map.find_sequence(&self.octets[length_byte_index..]) {
+                    // The pointer cannot make use of the first two bits. These are reserved for
+                    // use indicating that this label is a pointer. If they are needed for the
+                    // pointer itself, the pointer would be corrupted.
+                    // 
+                    // To solve this issue, we will just not use a pointer if using one would
+                    // lead to a corrupted pointer. Easy as that.
+                    if (pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000 {
+                        break;
                     }
-                    length_byte_index += (self.octets[length_byte_index] + 1) as usize;
+                    wire.write_bytes(&self.octets[..length_byte_index])?;
+                    return pointer.to_wire_format(wire, compression);
+                } else {
+                    // Don't insert malformed pointers. Otherwise, it might overwrite an
+                    // existing well-formed pointer. If we reach an index that would form a
+                    // malformed pointer, then none of the pointers after this one will be well
+                    // formed.
+                    let pointer = wire.current_len() as u16;
+                    if ((pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000) || (&self.octets[length_byte_index..] != &[0]) {
+                        break;
+                    }
+                    length_byte_index += (self.octets[length_byte_index] as usize) + 1;
                 }
-                wire.write_bytes(&self.octets[..length_byte_index])?;
-                compression_pointer.to_wire_format(wire, compression)?;
-                Ok(())
-            },
-            None => {
-                wire.write_bytes(&self.octets)?;
-                Ok(())
-            },
+            }
         }
+
+        wire.write_bytes(&self.octets)
     }
 
     #[inline]
@@ -671,11 +739,10 @@ impl ToWire for CDomainName {
 impl FromWire for CDomainName {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
-        let mut label_count = 0;
         let mut pointer_count = 0;
-
         let mut fully_qualified = false;
         let mut octets = Vec::new();
+        let mut length_octets = TinyVec::new();
 
         let mut final_offset = wire.current_offset();
 
@@ -685,15 +752,14 @@ impl FromWire for CDomainName {
 
             match first_byte & 0b1100_0000 {
                 0b0000_0000 => {
-                    let label_length = u8::from_wire_format(wire)?;
-                    if (octets.len() + 1 + label_length as usize) > Self::MAX_OCTETS as usize {
+                    let label_length = first_byte;
+                    if (octets.len() + 1 + (label_length as usize)) > Self::MAX_OCTETS as usize {
                         return Err(CDomainNameError::LongDomain)?;
                     }
 
+                    octets.extend_from_slice(wire.take((label_length as usize) + 1)?);
+                    length_octets.push(label_length);
                     fully_qualified = label_length == 0;
-                    octets.push(label_length);
-                    octets.extend_from_slice(wire.take(label_length as usize)?);
-                    label_count += 1;
                 },
                 0b1100_0000 => {
                     pointer_count += 1;
@@ -731,7 +797,7 @@ impl FromWire for CDomainName {
         }
 
         octets.shrink_to_fit();
-        Ok(Self { label_count, fully_qualified, octets })
+        Ok(Self { octets, length_octets })
     }
 }
 
@@ -774,8 +840,10 @@ impl CompressionMap {
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
-    use super::CDomainName;
+    use tinyvec::TinyVec;
+
+    use crate::{serde::wire::{circular_test::gen_test_circular_serde_sanity_test, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}, types::ascii::AsciiString};
+    use super::{CDomainName, CmpDomainName, OwnedLabel};
 
     gen_test_circular_serde_sanity_test!(
         root_record_circular_serde_sanity_test,
@@ -797,4 +865,38 @@ mod circular_serde_sanity_test {
         repetitive_2_record_circular_serde_sanity_test,
         CDomainName::from_utf8("www.example.com.www.example.com.www.example.com.").unwrap()
     );
+
+    #[test]
+    fn c_domain_name_to_labels() {
+        let domain_label_pairs = vec![
+            (".", vec![""]),
+            ("com.", vec!["com", ""]),
+            ("www.example.com.", vec!["www", "example", "com", ""]),
+            ("www.example.com.www.example.com.", vec!["www", "example", "com", "www", "example", "com", ""]),
+            ("www.example.com.www.example.com.www.example.com.", vec!["www", "example", "com", "www", "example", "com", "www", "example", "com", ""]),
+        ];
+        for (domain, expected_labels) in domain_label_pairs {
+            let domain_name = CDomainName::from_utf8(domain).unwrap();
+            let expected_labels = expected_labels.into_iter().map(|label| OwnedLabel { octets: TinyVec::from(AsciiString::from_utf8(label).unwrap().as_slice()) }).collect::<Vec<_>>();
+            let actual_labels = domain_name.labels().map(|label| label.as_owned_label()).collect::<Vec<_>>();
+            assert_eq!(expected_labels, actual_labels);
+        }
+    }
+
+    #[test]
+    fn c_domain_name_to_search_names() {
+        let domain_search_name_pairs = vec![
+            (".", vec!["."]),
+            ("com.", vec!["com.", "."]),
+            ("www.example.com.", vec!["www.example.com.", "example.com.", "com.", "."]),
+            ("www.example.com.www.example.com.", vec!["www.example.com.www.example.com.", "example.com.www.example.com.", "com.www.example.com.", "www.example.com.", "example.com.", "com.", "."]),
+            ("www.example.com.www.example.com.www.example.com.", vec!["www.example.com.www.example.com.www.example.com.", "example.com.www.example.com.www.example.com.", "com.www.example.com.www.example.com.", "www.example.com.www.example.com.", "example.com.www.example.com.", "com.www.example.com.", "www.example.com.", "example.com.", "com.", "."]),
+        ];
+        for (domain, expected_search_names) in domain_search_name_pairs {
+            let domain_name = CDomainName::from_utf8(domain).unwrap();
+            let expected_search_names = expected_search_names.into_iter().map(|search_name| CDomainName::from_utf8(search_name).unwrap()).collect::<Vec<_>>();
+            let actual_search_names = domain_name.search_domains().collect::<Vec<_>>();
+            assert_eq!(expected_search_names, actual_search_names);
+        }
+    }
 }

@@ -288,7 +288,7 @@ impl Context {
     pub fn is_cname_allowed(&self, child: &Question) -> Result<(), ContextErr> {
         match &self {
             Context::Root { query } => {
-                if query.qname().is_subdomain(child.qname()) {
+                if query.qname().is_parent_domain_of(child.qname()) {
                     Err(ContextErr::CNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     Ok(())
@@ -299,7 +299,7 @@ impl Context {
           | Context::CNameSearch { query, parent }
           | Context::DName { query, parent }
           | Context::DNameSearch { query, parent } => {
-                if query.qname().is_subdomain(child.qname()) {
+                if query.qname().is_parent_domain_of(child.qname()) {
                     Err(ContextErr::CNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     parent.is_cname_allowed(child)
@@ -318,7 +318,7 @@ impl Context {
     pub fn is_dname_allowed(&self, child: &Question) -> Result<(), ContextErr> {
         match &self {
             Context::Root { query } => {
-                if query.qname().is_subdomain(child.qname()) {
+                if query.qname().is_parent_domain_of(child.qname()) {
                     Err(ContextErr::DNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     Ok(())
@@ -329,7 +329,7 @@ impl Context {
           | Context::CNameSearch { query, parent }
           | Context::DName { query, parent }
           | Context::DNameSearch { query, parent } => {
-                if query.qname().is_subdomain(child.qname()) {
+                if query.qname().is_parent_domain_of(child.qname()) {
                     Err(ContextErr::DNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
                     parent.is_dname_allowed(child)

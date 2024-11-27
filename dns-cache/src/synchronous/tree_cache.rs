@@ -64,7 +64,7 @@ impl<Records> TreeCache<Records> {
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().labels().collect::<Vec<_>>().iter().rev().skip(1) {
+        for label in question.qname().labels().rev().skip(1) {
             let lowercase_label = label.as_lower();
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
@@ -104,7 +104,7 @@ impl<Records> TreeCache<Records> {
         }
     
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().labels().collect::<Vec<_>>().iter().rev().skip(1) {
+        for label in question.qname().labels().rev().skip(1) {
             let lowercase_label = label.as_lower();
             if let Some(child_node) = current_node.children.get(&lowercase_label) {
                 current_node = child_node;
@@ -136,10 +136,10 @@ impl<Records> TreeCache<Records> {
             return Ok(None);
         }
 
-        let qlabels = qname.labels().collect::<Vec<_>>();
+        let qlabels = qname.labels();
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
-        for label in qlabels[1..qlabels.len()-1].iter().rev() {
+        for label in qlabels.skip(1).rev().skip(1) {
             let lowercase_label = label.as_lower();
             if let Some(child_node) = parent_node.children.get_mut(&lowercase_label) {
                 parent_node = child_node;
@@ -148,7 +148,11 @@ impl<Records> TreeCache<Records> {
             }
         }
 
-        return Ok(parent_node.children.remove(&qlabels[0].as_lower()));
+        let last_label = match qname.labels().next() {
+            Some(last_label) => last_label.as_lower(),
+            None => return Err(TreeCacheError::InconsistentState(format!("Could not determine the last label in the qname '{qname}'"))),
+        };
+        return Ok(parent_node.children.remove(&last_label));
     }
 
     #[inline]

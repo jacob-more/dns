@@ -74,7 +74,7 @@ impl DomainName {
     /// Converts this domain into a fully qualified domain.
     #[inline]
     pub fn fully_qualified(&mut self) -> Result<(), DomainNameError> {
-        Ok(self.domain_name.fully_qualified()?)
+        Ok(self.domain_name.set_fully_qualified()?)
     }
 
     /// Creates a fully qualified domain from this domain.
@@ -105,12 +105,12 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn labels<'a>(&'a self) -> impl 'a + Iterator<Item = Label<'a>> {
+    pub fn labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Label<'a>> {
         self.domain_name.labels()
     }
 
     #[inline]
-    pub fn search_domains<'a>(&'a self) -> impl 'a + Iterator<Item = Self> {
+    pub fn search_domains<'a>(&'a self) -> impl 'a + ExactSizeIterator<Item = Self> {
         self.domain_name.search_domains().map(|domain_name| DomainName { domain_name })
     }
 }
@@ -146,8 +146,8 @@ impl CmpDomainName<CDomainName> for DomainName {
     }
 
     #[inline]
-    fn is_subdomain(&self, child: &CDomainName) -> bool {
-        self.domain_name.is_subdomain(child)
+    fn is_parent_domain_of(&self, child: &CDomainName) -> bool {
+        self.domain_name.is_parent_domain_of(child)
     }
 }
 
@@ -158,7 +158,7 @@ impl CmpDomainName<DomainName> for DomainName {
     }
 
     #[inline]
-    fn is_subdomain(&self, child: &DomainName) -> bool {
+    fn is_parent_domain_of(&self, child: &DomainName) -> bool {
         self.domain_name.matches(&child.domain_name)
     }
 }

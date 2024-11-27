@@ -43,10 +43,10 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
     // down the tree from there.
     let context = Arc::new(context);
     let search_names_context = context.clone();
-    let search_names: Vec<_> = search_names_context.qname().search_domains().take(search_names_max_index).collect();
+    let search_names = search_names_context.qname().search_domains().take(search_names_max_index);
 
     // Query Stage: Query name servers for the next subdomain, following the tree to our answer.
-    for (index, search_name) in search_names.into_iter().enumerate().rev() {
+    for (index, search_name) in search_names.enumerate().rev() {
         // Query the name servers for the child domain (aka. search_name).
         // We set the qtype to be RRTypeCode::A to hide the actual qtype
         // that we're looking for.
@@ -214,7 +214,7 @@ async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
     debug!(context:?; "Recursive search redirected by dname");
     for record in &records {
         if let ResourceRecord::DNAME(header, dname_rdata) = record {
-            if !context.qname().is_subdomain(header.get_name()) {
+            if !context.qname().is_parent_domain_of(header.get_name()) {
                 trace!(context:?; "Recursive search new dname error: The query name '{}' is not a subdomain of the dname's owner name '{}'", context.qname(), header.get_name());
                 return QueryResponse::Error(RCode::ServFail);
             }
