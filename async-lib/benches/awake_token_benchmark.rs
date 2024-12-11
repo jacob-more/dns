@@ -64,7 +64,7 @@ fn append_with_heavy_contention_benchmark(c: &mut Criterion) {
         );
     
         contention_alive.store(false, Ordering::Release);
-        contention_threads.drain(..).for_each(|contention_thread| {
+        contention_threads.into_iter().for_each(|contention_thread| {
             let _ = contention_thread.join();
         });
     }
@@ -126,7 +126,7 @@ fn append_with_heavy_contention_multiadd_benchmark(c: &mut Criterion) {
         );
     
         contention_alive.store(false, Ordering::Release);
-        contention_threads.drain(..).for_each(|contention_thread| {
+        contention_threads.into_iter().for_each(|contention_thread| {
             let _ = contention_thread.join();
         });
     }
@@ -180,7 +180,7 @@ fn append_with_light_contention_benchmark(c: &mut Criterion) {
         );
     
         contention_alive.store(false, Ordering::Release);
-        contention_threads.drain(..).for_each(|contention_thread| {
+        contention_threads.into_iter().for_each(|contention_thread| {
             let _ = contention_thread.join();
         });
     }
@@ -244,7 +244,7 @@ fn append_with_light_contention_multiadd_benchmark(c: &mut Criterion) {
         );
     
         contention_alive.store(false, Ordering::Release);
-        contention_threads.drain(..).for_each(|contention_thread| {
+        contention_threads.into_iter().for_each(|contention_thread| {
             let _ = contention_thread.join();
         });
     }

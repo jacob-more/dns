@@ -111,7 +111,7 @@ impl MainTreeCache {
     }
 
     #[inline]
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&RType, &Vec<CacheRecord>)> + 'a {
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a RType, &'a Vec<CacheRecord>)> + 'a {
         self.cache.iter().flat_map(|node| &node.records)
     }
 }

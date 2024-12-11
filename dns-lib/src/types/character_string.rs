@@ -178,22 +178,22 @@ impl CharacterString {
 
     #[inline]
     pub fn as_lower(&self) -> Self {
-        Self { ascii: self.ascii.as_lower(), }
+        Self { ascii: self.ascii.as_lowercase(), }
     }
 
     #[inline]
-    pub fn lower(&mut self) {
-        self.ascii.lower()
+    pub fn make_lowercase(&mut self) {
+        self.ascii.make_lowercase()
     }
 
     #[inline]
-    pub fn as_upper(&self) -> Self {
-        Self { ascii: self.ascii.as_upper(), }
+    pub fn as_uppercase(&self) -> Self {
+        Self { ascii: self.ascii.as_uppercase(), }
     }
 
     #[inline]
-    pub fn upper(&mut self) {
-        self.ascii.upper()
+    pub fn make_uppercase(&mut self) {
+        self.ascii.make_uppercase()
     }
 
     #[inline]
@@ -208,12 +208,12 @@ impl CharacterString {
 
     #[inline]
     pub fn is_lower_alphanumeric_or_empty(&self) -> bool {
-        self.ascii.is_lower_alphanumeric_or_empty()
+        self.ascii.is_lowercase_alphanumeric_or_empty()
     }
 
     #[inline]
     pub fn is_upper_alphanumeric_or_empty(&self) -> bool {
-        self.ascii.is_upper_alphanumeric_or_empty()
+        self.ascii.is_uppercase_alphanumeric_or_empty()
     }
 
     #[inline]
@@ -228,12 +228,12 @@ impl CharacterString {
 
     #[inline]
     pub fn is_lower_alphanumeric(&self) -> bool {
-        self.ascii.is_lower_alphanumeric()
+        self.ascii.is_lowercase_alphanumeric()
     }
 
     #[inline]
     pub fn is_upper_alphanumeric(&self) -> bool {
-        self.ascii.is_upper_alphanumeric()
+        self.ascii.is_uppercase_alphanumeric()
     }
 }
 

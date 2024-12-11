@@ -152,7 +152,7 @@ impl Base32 {
     #[inline]
     pub fn from_case_insensitive_ascii(string: &AsciiString) -> Result<Self, Base32Error> {
         Self::from_ascii(
-            &string.as_upper()
+            &string.as_uppercase()
         )
     }
 

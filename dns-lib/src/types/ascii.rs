@@ -4,8 +4,6 @@ use tinyvec::{tiny_vec, TinyVec};
 
 use crate::serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::non_escaped_to_escaped::NonEscapedIntoEscapedIter, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
 
-use self::constants::*;
-
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum AsciiError {
     BadChar,
@@ -157,134 +155,6 @@ pub mod constants {
     pub const ASCII_CLOSING_BRACE: AsciiChar             = 125;
     pub const ASCII_TILDE: AsciiChar                     = 126;
     pub const ASCII_DELETE: AsciiChar                    = 127;
-    pub const ASCII_EURO_SIGN: AsciiChar                 = 128;
-    // unused: AsciiChar { 129 };
-    pub const ASCII_SINGLE_LOW_9_QUOTATION_MARK: AsciiChar          = 130;
-    pub const ASCII_LATIN_SMALL_LETTER_F_WITH_HOOK: AsciiChar       = 131;
-    pub const ASCII_DOUBLE_LOW_9_QUOTATION_MARK: AsciiChar          = 132;
-    pub const ASCII_HORIZONTAL_ELLIPSE: AsciiChar                   = 133;
-    pub const ASCII_DAGGER: AsciiChar                               = 134;
-    pub const ASCII_DOUBLE_DAGGER: AsciiChar                        = 135;
-    pub const ASCII_MODIFIER_LETTER_CIRCUMFLEX_ACCENT: AsciiChar    = 136;
-    pub const ASCII_PER_MILE_SIGN: AsciiChar                        = 137;
-    pub const ASCII_LATIN_CAPITAL_S_WITH_CARON: AsciiChar           = 138;
-    pub const ASCII_SINGLE_LEFT_POINTING_ANGLE_QUOTATION: AsciiChar = 139;
-    pub const ASCII_LATIN_CAPITAL_LIGATURE_OE: AsciiChar            = 140;
-    // unused: AsciiChar { 141 };
-    pub const ASCII_LATIN_CAPITAL_LETTER_Z_WITH_CARON: AsciiChar    = 142;
-    // unused: AsciiChar { 143 };
-    // unused: AsciiChar { 144 };
-    pub const ASCII_LEFT_SINGLE_QUOTATION_MARK: AsciiChar                   = 145;
-    pub const ASCII_RIGHT_SINGLE_QUOTATION_MARK: AsciiChar                  = 146;
-    pub const ASCII_LEFT_DOUBLE_QUOTATION_MARK: AsciiChar                   = 147;
-    pub const ASCII_RIGHT_DOUBLE_QUOTATION_MARK: AsciiChar                  = 148;
-    pub const ASCII_BULLET: AsciiChar                                       = 149;
-    pub const ASCII_EN_DASH: AsciiChar                                      = 150;
-    pub const ASCII_EM_DASH: AsciiChar                                      = 151;
-    pub const ASCII_SMALL_TILDE: AsciiChar                                  = 152;
-    pub const ASCII_TRADE_MARK_SIGN: AsciiChar                              = 153;
-    pub const ASCII_LATIN_SMALL_LETTER_S_WITH_CARON: AsciiChar              = 154;
-    pub const ASCII_SINGLE_RIGHT_POINTING_ANGLE_QUOTATION_MARK: AsciiChar   = 155;
-    pub const ASCII_LATIN_SMALL_LIGATURE_OE: AsciiChar                      = 156;
-    // unused: AsciiChar { 157 };
-    pub const ASCII_LATIN_SMALL_LETTER_Z_WITH_CARON: AsciiChar          = 158;
-    pub const ASCII_LATIN_CAPITAL_LETTER_Y_WITH_DIAERESIS: AsciiChar    = 159;
-    pub const ASCII_NON_BREAKING_SPACE: AsciiChar                       = 160;
-    pub const ASCII_INVERTED_EXCLAMATION_MARK: AsciiChar                = 161;
-    pub const ASCII_CENT_SIGN: AsciiChar                                = 162;
-    pub const ASCII_POUND_SIGN: AsciiChar                               = 163;
-    pub const ASCII_CURRENCY_SIGN: AsciiChar                            = 164;
-    pub const ASCII_YEN_SIGN: AsciiChar                                 = 165;
-    pub const ASCII_PIPE_BROKEN_VERTICAL: AsciiChar                     = 166;
-    pub const ASCII_SECTION_SIGN: AsciiChar                             = 167;
-    pub const ASCII_SPACING_DIAERESIS_UMLAUT: AsciiChar                 = 168;
-    pub const ASCII_COPYRIGHT_SIGN: AsciiChar                           = 169;
-    pub const ASCII_FEMININE_ORDINAL_INDICATOR: AsciiChar               = 170;
-    pub const ASCII_LEFT_DOUBLE_ANGLE_BRACKET: AsciiChar                = 171;
-    pub const ASCII_NEGATION: AsciiChar                                 = 172;
-    pub const ASCII_SOFT_HYPHEN: AsciiChar                              = 173;
-    pub const ASCII_REGISTERED_TRADE_MARK_SIGN: AsciiChar               = 174;
-    pub const ASCII_SPACING_MACRON_OVERLINE: AsciiChar                  = 175;
-    pub const ASCII_DEGREE_SIGN: AsciiChar                              = 176;
-    pub const ASCII_PLUS_OR_MINUS_SIGN: AsciiChar                       = 177;
-    pub const ASCII_SUPERSCRIPT_TWO: AsciiChar                          = 178;
-    pub const ASCII_SUPERSCRIPT_THREE: AsciiChar                        = 179;
-    pub const ASCII_ACUTE_ACCENT: AsciiChar                             = 180;
-    pub const ASCII_MICRO_SIGN: AsciiChar                               = 181;
-    pub const ASCII_PILCROW_SIGN: AsciiChar                             = 182;
-    pub const ASCII_MIDDLE_DOT: AsciiChar                               = 183;
-    pub const ASCII_SPACING_CEDILLA: AsciiChar                          = 184;
-    pub const ASCII_SUPERSCRIPT_1: AsciiChar                            = 185;
-    pub const ASCII_MASCULINE_ORDINAL_INDICATOR: AsciiChar              = 186;
-    pub const ASCII_RIGHT_DOUBLE_ANGLE_QUOTES: AsciiChar                = 187;
-    pub const ASCII_FRACTION_ONE_QUARTER: AsciiChar                     = 188;
-    pub const ASCII_FRACTION_ONE_HALF: AsciiChar                        = 189;
-    pub const ASCII_FRACTION_THREE_QUARTERS: AsciiChar                  = 190;
-    pub const ASCII_INVERTED_QUESTION_MARK: AsciiChar                   = 191;
-    pub const ASCII_LATIN_CAPITAL_LETTER_A_WITH_GRAVE: AsciiChar        = 192;
-    pub const ASCII_LATIN_CAPITAL_LETTER_A_WITH_ACUTE: AsciiChar        = 193;
-    pub const ASCII_LATIN_CAPITAL_LETTER_A_WITH_CIRCUMFLEX: AsciiChar   = 194;
-    pub const ASCII_LATIN_CAPITAL_LETTER_A_WITH_TILDE: AsciiChar        = 195;
-    pub const ASCII_LATIN_CAPITAL_LETTER_A_WITH_DIAERESIS: AsciiChar    = 196;
-    pub const ASCII_LATIN_CAPITAL_LETTER_A_WITH_RING_ABOVE: AsciiChar   = 197;
-    pub const ASCII_LATIN_CAPITAL_LETTER_AE: AsciiChar                  = 198;
-    pub const ASCII_LATIN_CAPITAL_LETTER_C_WITH_CEDILLA: AsciiChar      = 199;
-    pub const ASCII_LATIN_CAPITAL_LETTER_E_WITH_GRAVE: AsciiChar        = 200;
-    pub const ASCII_LATIN_CAPITAL_LETTER_E_WITH_ACUTE: AsciiChar        = 201;
-    pub const ASCII_LATIN_CAPITAL_LETTER_E_WITH_CIRCUMFLEX: AsciiChar   = 202;
-    pub const ASCII_LATIN_CAPITAL_LETTER_E_WITH_DIAERESIS: AsciiChar    = 203;
-    pub const ASCII_LATIN_CAPITAL_LETTER_I_WITH_GRAVE: AsciiChar        = 204;
-    pub const ASCII_LATIN_CAPITAL_LETTER_I_WITH_ACUTE: AsciiChar        = 205;
-    pub const ASCII_LATIN_CAPITAL_LETTER_I_WITH_CIRCUMFLEX: AsciiChar   = 206;
-    pub const ASCII_LATIN_CAPITAL_LETTER_I_WITH_DIAERESIS: AsciiChar    = 207;
-    pub const ASCII_LATIN_CAPITAL_LETTER_ETH: AsciiChar                 = 208;
-    pub const ASCII_LATIN_CAPITAL_LETTER_N_WITH_TILDE: AsciiChar        = 209;
-    pub const ASCII_LATIN_CAPITAL_LETTER_O_WITH_GRAVE: AsciiChar        = 210;
-    pub const ASCII_LATIN_CAPITAL_LETTER_O_WITH_ACUTE: AsciiChar        = 211;
-    pub const ASCII_LATIN_CAPITAL_LETTER_O_WITH_CIRCUMFLEX: AsciiChar   = 212;
-    pub const ASCII_LATIN_CAPITAL_LETTER_O_WITH_TILDE: AsciiChar        = 213;
-    pub const ASCII_LATIN_CAPITAL_LETTER_O_WITH_DIAERESIS: AsciiChar    = 214;
-    pub const ASCII_MULTIPLICATION_SIGN: AsciiChar                      = 215;
-    pub const ASCII_LATIN_CAPITAL_LETTER_O_WITH_SLASH: AsciiChar        = 216;
-    pub const ASCII_LATIN_CAPITAL_LETTER_U_WITH_GRAVE: AsciiChar        = 217;
-    pub const ASCII_LATIN_CAPITAL_LETTER_ACUTE: AsciiChar               = 218;
-    pub const ASCII_LATIN_CAPITAL_LETTER_CIRCUMFLEX: AsciiChar          = 219;
-    pub const ASCII_LATIN_CAPITAL_LETTER_DIAERESIS: AsciiChar           = 220;
-    pub const ASCII_LATIN_CAPITAL_LETTER_Y_WITH_ACUTE: AsciiChar        = 221;
-    pub const ASCII_LATIN_CAPITAL_LETTER_THORN: AsciiChar               = 222;
-    pub const ASCII_LATIN_SMALL_LETTER_SHARP_S: AsciiChar               = 223;
-    pub const ASCII_LATIN_SMALL_LETTER_A_WITH_GRAVE: AsciiChar          = 224;
-    pub const ASCII_LATIN_SMALL_LETTER_A_WITH_ACUTE: AsciiChar          = 225;
-    pub const ASCII_LATIN_SMALL_LETTER_A_WITH_CIRCUMFLEX: AsciiChar     = 226;
-    pub const ASCII_LATIN_SMALL_LETTER_A_WITH_TILDE: AsciiChar          = 227;
-    pub const ASCII_LATIN_SMALL_LETTER_A_WITH_DIAERESIS: AsciiChar      = 228;
-    pub const ASCII_LATIN_SMALL_LETTER_A_WITH_RING_ABOVE: AsciiChar     = 229;
-    pub const ASCII_LATIN_SMALL_LETTER_AE: AsciiChar                    = 230;
-    pub const ASCII_LATIN_SMALL_LETTER_C_WITH_CEDILLA: AsciiChar        = 231;
-    pub const ASCII_LATIN_SMALL_LETTER_E_WITH_GRAVE: AsciiChar          = 232;
-    pub const ASCII_LATIN_SMALL_LETTER_E_WITH_ACUTE: AsciiChar          = 233;
-    pub const ASCII_LATIN_SMALL_LETTER_E_WITH_CIRCUMFLEX: AsciiChar     = 234;
-    pub const ASCII_LATIN_SMALL_LETTER_E_WITH_DIAERESIS: AsciiChar      = 235;
-    pub const ASCII_LATIN_SMALL_LETTER_I_WITH_GRAVE: AsciiChar          = 236;
-    pub const ASCII_LATIN_SMALL_LETTER_I_WITH_ACUTE: AsciiChar          = 237;
-    pub const ASCII_LATIN_SMALL_LETTER_I_WITH_CIRCUMFLEX: AsciiChar     = 238;
-    pub const ASCII_LATIN_SMALL_LETTER_I_WITH_DIAERESIS: AsciiChar      = 239;
-    pub const ASCII_LATIN_SMALL_LETTER_ETH: AsciiChar                   = 240;
-    pub const ASCII_LATIN_SMALL_LETTER_N_WITH_TILDE: AsciiChar          = 241;
-    pub const ASCII_LATIN_SMALL_LETTER_O_WITH_GRAVE: AsciiChar          = 242;
-    pub const ASCII_LATIN_SMALL_LETTER_O_WITH_ACUTE: AsciiChar          = 243;
-    pub const ASCII_LATIN_SMALL_LETTER_O_WITH_CIRCUMFLEX: AsciiChar     = 244;
-    pub const ASCII_LATIN_SMALL_LETTER_O_WITH_TILDE: AsciiChar          = 245;
-    pub const ASCII_LATIN_SMALL_LETTER_O_WITH_DIAERESIS: AsciiChar      = 246;
-    pub const ASCII_DIVISION_SIGN: AsciiChar                            = 247;
-    pub const ASCII_LATIN_SMALL_LETTER_O_WITH_SLASH: AsciiChar          = 248;
-    pub const ASCII_LATIN_SMALL_LETTER_U_WITH_GRAVE: AsciiChar          = 249;
-    pub const ASCII_LATIN_SMALL_LETTER_U_WITH_ACUTE: AsciiChar          = 250;
-    pub const ASCII_LATIN_SMALL_LETTER_U_WITH_CIRCUMFLEX: AsciiChar     = 251;
-    pub const ASCII_LATIN_SMALL_LETTER_U_WITH_DIAERESIS: AsciiChar      = 252;
-    pub const ASCII_LATIN_SMALL_LETTER_Y_WITH_ACUTE: AsciiChar          = 253;
-    pub const ASCII_LATIN_SMALL_LETTER_THORN: AsciiChar                 = 254;
-    pub const ASCII_LATIN_SMALL_LETTER_Y_WITH_DIAERESIS: AsciiChar      = 255;
 }
 
 // TODO: I am not sure whether it is better to do large match statements, like I have now that match
@@ -292,143 +162,63 @@ pub mod constants {
 //       32. Both solutions have merits but I don't know which is better.
 
 #[inline]
-pub const fn ascii_char_as_lower(character: AsciiChar) -> AsciiChar {
-    match character {
-        ASCII_UPPERCASE_A => ASCII_LOWERCASE_A,
-        ASCII_UPPERCASE_B => ASCII_LOWERCASE_B,
-        ASCII_UPPERCASE_C => ASCII_LOWERCASE_C,
-        ASCII_UPPERCASE_D => ASCII_LOWERCASE_D,
-        ASCII_UPPERCASE_E => ASCII_LOWERCASE_E,
-        ASCII_UPPERCASE_F => ASCII_LOWERCASE_F,
-        ASCII_UPPERCASE_G => ASCII_LOWERCASE_G,
-        ASCII_UPPERCASE_H => ASCII_LOWERCASE_H,
-        ASCII_UPPERCASE_I => ASCII_LOWERCASE_I,
-        ASCII_UPPERCASE_J => ASCII_LOWERCASE_J,
-        ASCII_UPPERCASE_K => ASCII_LOWERCASE_K,
-        ASCII_UPPERCASE_L => ASCII_LOWERCASE_L,
-        ASCII_UPPERCASE_M => ASCII_LOWERCASE_M,
-        ASCII_UPPERCASE_N => ASCII_LOWERCASE_N,
-        ASCII_UPPERCASE_O => ASCII_LOWERCASE_O,
-        ASCII_UPPERCASE_P => ASCII_LOWERCASE_P,
-        ASCII_UPPERCASE_Q => ASCII_LOWERCASE_Q,
-        ASCII_UPPERCASE_R => ASCII_LOWERCASE_R,
-        ASCII_UPPERCASE_S => ASCII_LOWERCASE_S,
-        ASCII_UPPERCASE_T => ASCII_LOWERCASE_T,
-        ASCII_UPPERCASE_U => ASCII_LOWERCASE_U,
-        ASCII_UPPERCASE_V => ASCII_LOWERCASE_V,
-        ASCII_UPPERCASE_W => ASCII_LOWERCASE_W,
-        ASCII_UPPERCASE_X => ASCII_LOWERCASE_X,
-        ASCII_UPPERCASE_Y => ASCII_LOWERCASE_Y,
-        ASCII_UPPERCASE_Z => ASCII_LOWERCASE_Z,
-        _ => character,
-    }
+pub const fn to_ascii_lowercase(character: &AsciiChar) -> AsciiChar {
+    character.to_ascii_lowercase()
 }
 
 #[inline]
-pub const fn ascii_char_as_upper(character: AsciiChar) -> AsciiChar {
-    match character {
-        ASCII_LOWERCASE_A => ASCII_UPPERCASE_A,
-        ASCII_LOWERCASE_B => ASCII_UPPERCASE_B,
-        ASCII_LOWERCASE_C => ASCII_UPPERCASE_C,
-        ASCII_LOWERCASE_D => ASCII_UPPERCASE_D,
-        ASCII_LOWERCASE_E => ASCII_UPPERCASE_E,
-        ASCII_LOWERCASE_F => ASCII_UPPERCASE_F,
-        ASCII_LOWERCASE_G => ASCII_UPPERCASE_G,
-        ASCII_LOWERCASE_H => ASCII_UPPERCASE_H,
-        ASCII_LOWERCASE_I => ASCII_UPPERCASE_I,
-        ASCII_LOWERCASE_J => ASCII_UPPERCASE_J,
-        ASCII_LOWERCASE_K => ASCII_UPPERCASE_K,
-        ASCII_LOWERCASE_L => ASCII_UPPERCASE_L,
-        ASCII_LOWERCASE_M => ASCII_UPPERCASE_M,
-        ASCII_LOWERCASE_N => ASCII_UPPERCASE_N,
-        ASCII_LOWERCASE_O => ASCII_UPPERCASE_O,
-        ASCII_LOWERCASE_P => ASCII_UPPERCASE_P,
-        ASCII_LOWERCASE_Q => ASCII_UPPERCASE_Q,
-        ASCII_LOWERCASE_R => ASCII_UPPERCASE_R,
-        ASCII_LOWERCASE_S => ASCII_UPPERCASE_S,
-        ASCII_LOWERCASE_T => ASCII_UPPERCASE_T,
-        ASCII_LOWERCASE_U => ASCII_UPPERCASE_U,
-        ASCII_LOWERCASE_V => ASCII_UPPERCASE_V,
-        ASCII_LOWERCASE_W => ASCII_UPPERCASE_W,
-        ASCII_LOWERCASE_X => ASCII_UPPERCASE_X,
-        ASCII_LOWERCASE_Y => ASCII_UPPERCASE_Y,
-        ASCII_LOWERCASE_Z => ASCII_UPPERCASE_Z,
-        _ => character,
-    }
+pub const fn to_ascii_uppercase(character: &AsciiChar) -> AsciiChar {
+    character.to_ascii_uppercase()
 }
 
 #[inline]
-pub const fn is_upper(character: AsciiChar) -> bool {
-    match character {
-        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
-        _ => false,
-    }
+pub const fn is_ascii_uppercase(character: &AsciiChar) -> bool {
+    character.is_ascii_uppercase()
 }
 
 #[inline]
-pub const fn is_lower(character: AsciiChar) -> bool {
-    match character {
-        ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
-        _ => false,
-    }
+pub const fn is_ascii_lowercase(character: &AsciiChar) -> bool {
+    character.is_ascii_lowercase()
 }
 
 #[inline]
-pub const fn is_numeric(character: AsciiChar) -> bool {
-    match character {
-        ASCII_ZERO..=ASCII_NINE => true,
-        _ => false,
-    }
+pub const fn is_ascii_digit(character: &AsciiChar) -> bool {
+    character.is_ascii_digit()
 }
 
 #[inline]
-pub const fn is_alphanumeric(character: AsciiChar) -> bool {
-    match character {
-        ASCII_ZERO..=ASCII_NINE => true,
-        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
-        ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
-        _ => false,
-    }
+pub const fn is_ascii_alphabetic(character: &AsciiChar) -> bool {
+    character.is_ascii_alphabetic()
 }
 
 #[inline]
-pub const fn is_lower_alphanumeric(character: AsciiChar) -> bool {
-    match character {
-        ASCII_ZERO..=ASCII_NINE => true,
-        ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
-        _ => false,
-    }
+pub const fn is_ascii_alphanumeric(character: &AsciiChar) -> bool {
+    character.is_ascii_alphanumeric()
 }
 
 #[inline]
-pub const fn is_upper_alphanumeric(character: AsciiChar) -> bool {
-    match character {
-        ASCII_ZERO..=ASCII_NINE => true,
-        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
-        _ => false,
-    }
+pub const fn is_ascii_lowercase_alphanumeric(character: &AsciiChar) -> bool {
+    character.is_ascii_lowercase() || character.is_ascii_digit()
 }
 
 #[inline]
-pub const fn is_control_char(character: AsciiChar) -> bool {
-    match character {
-        ASCII_NUL..=ASCII_UNIT_SEPARATOR => true,
-        ASCII_SPACE..=ASCII_TILDE => false,
-        ASCII_DELETE.. => true,
-    }
+pub const fn is_ascii_uppercase_alphanumeric(character: &AsciiChar) -> bool {
+    character.is_ascii_uppercase() || character.is_ascii_digit()
 }
 
 #[inline]
-pub const fn is_printable(character: AsciiChar) -> bool {
-    match character {
-        ASCII_EXCLAMATION_MARK..=ASCII_TILDE => true,
-        _ => false,
-    }
+pub const fn is_ascii_control(character: &AsciiChar) -> bool {
+    character.is_ascii_control()
+}
+
+#[inline]
+pub const fn is_ascii_printable(character: &AsciiChar) -> bool {
+    character.is_ascii_graphic()
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct AsciiString {
-    string: TinyVec<[AsciiChar; 5]>,
+    string: TinyVec<[AsciiChar; 14]>,
 }
 
 impl Display for AsciiString {
@@ -614,55 +404,57 @@ impl AsciiString {
     }
 
     #[inline]
-    pub fn as_lower(&self) -> Self {
-        Self {
-            string: self.string.iter()
-                .map(|character| ascii_char_as_lower(*character))
-                .collect()
-        }
+    pub fn as_lowercase(&self) -> Self {
+        let mut string = self.string.clone();
+        string.make_ascii_lowercase();
+        Self { string }
     }
 
     #[inline]
-    pub fn lower(&mut self) {
-        for character in self.string.iter_mut() {
-            *character = ascii_char_as_lower(*character)
-        }
+    pub fn make_lowercase(&mut self) {
+        self.string.make_ascii_lowercase();
     }
 
     #[inline]
-    pub fn as_upper(&self) -> Self {
-        Self {
-            string: self.string.iter()
-                .map(|character| ascii_char_as_upper(*character))
-                .collect()
-        }
+    pub fn as_uppercase(&self) -> Self {
+        let mut string = self.string.clone();
+        string.make_ascii_uppercase();
+        Self { string }
     }
 
     #[inline]
-    pub fn upper(&mut self) {
-        for character in self.string.iter_mut() {
-            *character = ascii_char_as_upper(*character)
-        }
+    pub fn make_uppercase(&mut self) {
+        self.string.make_ascii_uppercase();
+    }
+
+    #[inline]
+    pub fn is_alphabetic_or_empty(&self) -> bool {
+        self.string.iter().all(|character| is_ascii_digit(character))
     }
 
     #[inline]
     pub fn is_numeric_or_empty(&self) -> bool {
-        self.string.iter().all(|character| is_numeric(*character))
+        self.string.iter().all(|character| is_ascii_digit(character))
     }
 
     #[inline]
     pub fn is_alphanumeric_or_empty(&self) -> bool {
-        self.string.iter().all(|character| is_alphanumeric(*character))
+        self.string.iter().all(|character| is_ascii_alphanumeric(character))
     }
 
     #[inline]
-    pub fn is_lower_alphanumeric_or_empty(&self) -> bool {
-        self.string.iter().all(|character| is_lower_alphanumeric(*character))
+    pub fn is_lowercase_alphanumeric_or_empty(&self) -> bool {
+        self.string.iter().all(|character| is_ascii_lowercase_alphanumeric(character))
     }
 
     #[inline]
-    pub fn is_upper_alphanumeric_or_empty(&self) -> bool {
-        self.string.iter().all(|character| is_upper_alphanumeric(*character))
+    pub fn is_uppercase_alphanumeric_or_empty(&self) -> bool {
+        self.string.iter().all(|character| is_ascii_uppercase_alphanumeric(character))
+    }
+
+    #[inline]
+    pub fn is_alphabetic(&self) -> bool {
+        (!self.string.is_empty()) && self.is_alphabetic_or_empty()
     }
 
     #[inline]
@@ -676,13 +468,13 @@ impl AsciiString {
     }
 
     #[inline]
-    pub fn is_lower_alphanumeric(&self) -> bool {
-        (!self.string.is_empty()) && self.is_lower_alphanumeric_or_empty()
+    pub fn is_lowercase_alphanumeric(&self) -> bool {
+        (!self.string.is_empty()) && self.is_lowercase_alphanumeric_or_empty()
     }
 
     #[inline]
-    pub fn is_upper_alphanumeric(&self) -> bool {
-        (!self.string.is_empty()) && self.is_upper_alphanumeric_or_empty()
+    pub fn is_uppercase_alphanumeric(&self) -> bool {
+        (!self.string.is_empty()) && self.is_uppercase_alphanumeric_or_empty()
     }
 }
 
@@ -776,9 +568,9 @@ mod upper_lower_case_tests {
         let expected_string = AsciiString::from_utf8(UPPER_STRING).expect("The upper case string could not convert from utf8 to ascii");
 
         // Test & Check
-        assert_eq!(expected_string, ascii_mixed_case.as_upper());
-        assert_eq!(expected_string, ascii_upper_case.as_upper());
-        assert_eq!(expected_string, ascii_lower_case.as_upper());
+        assert_eq!(expected_string, ascii_mixed_case.as_uppercase());
+        assert_eq!(expected_string, ascii_upper_case.as_uppercase());
+        assert_eq!(expected_string, ascii_lower_case.as_uppercase());
     }
 
     #[test]
@@ -791,9 +583,9 @@ mod upper_lower_case_tests {
         let expected_string = AsciiString::from_utf8(UPPER_STRING).expect("The upper case string could not convert from utf8 to ascii");
 
         // Test & Check
-        ascii_mixed_case.upper();
-        ascii_upper_case.upper();
-        ascii_lower_case.upper();
+        ascii_mixed_case.make_uppercase();
+        ascii_upper_case.make_uppercase();
+        ascii_lower_case.make_uppercase();
 
         assert_eq!(expected_string, ascii_mixed_case);
         assert_eq!(expected_string, ascii_upper_case);
@@ -810,9 +602,9 @@ mod upper_lower_case_tests {
         let expected_string = AsciiString::from_utf8(LOWER_STRING).expect("The upper case string could not convert from utf8 to ascii");
 
         // Test & Check
-        assert_eq!(expected_string, ascii_mixed_case.as_lower());
-        assert_eq!(expected_string, ascii_upper_case.as_lower());
-        assert_eq!(expected_string, ascii_lower_case.as_lower());
+        assert_eq!(expected_string, ascii_mixed_case.as_lowercase());
+        assert_eq!(expected_string, ascii_upper_case.as_lowercase());
+        assert_eq!(expected_string, ascii_lower_case.as_lowercase());
     }
 
     #[test]
@@ -825,9 +617,9 @@ mod upper_lower_case_tests {
         let expected_string = AsciiString::from_utf8(LOWER_STRING).expect("The upper case string could not convert from utf8 to ascii");
 
         // Test & Check
-        ascii_mixed_case.lower();
-        ascii_upper_case.lower();
-        ascii_lower_case.lower();
+        ascii_mixed_case.make_lowercase();
+        ascii_upper_case.make_lowercase();
+        ascii_lower_case.make_lowercase();
 
         assert_eq!(expected_string, ascii_mixed_case);
         assert_eq!(expected_string, ascii_upper_case);
@@ -866,19 +658,19 @@ mod upper_lower_case_tests {
         let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
 
         // Test & Check
-        assert!(!ascii_mixed_case_alpha.is_lower_alphanumeric());
-        assert!(!ascii_upper_case_alpha.is_lower_alphanumeric());
-        assert!(ascii_lower_case_alpha.is_lower_alphanumeric());
+        assert!(!ascii_mixed_case_alpha.is_lowercase_alphanumeric());
+        assert!(!ascii_upper_case_alpha.is_lowercase_alphanumeric());
+        assert!(ascii_lower_case_alpha.is_lowercase_alphanumeric());
 
-        assert!(ascii_numeric.is_lower_alphanumeric());
+        assert!(ascii_numeric.is_lowercase_alphanumeric());
 
-        assert!(!ascii_mixed_case_alphanumeric.is_lower_alphanumeric());
-        assert!(!ascii_upper_case_alphanumeric.is_lower_alphanumeric());
-        assert!(ascii_lower_case_alphanumeric.is_lower_alphanumeric());
+        assert!(!ascii_mixed_case_alphanumeric.is_lowercase_alphanumeric());
+        assert!(!ascii_upper_case_alphanumeric.is_lowercase_alphanumeric());
+        assert!(ascii_lower_case_alphanumeric.is_lowercase_alphanumeric());
 
-        assert!(!ascii_mixed_case_non_alphanumeric.is_lower_alphanumeric());
-        assert!(!ascii_upper_case_non_alphanumeric.is_lower_alphanumeric());
-        assert!(!ascii_lower_case_non_alphanumeric.is_lower_alphanumeric());
+        assert!(!ascii_mixed_case_non_alphanumeric.is_lowercase_alphanumeric());
+        assert!(!ascii_upper_case_non_alphanumeric.is_lowercase_alphanumeric());
+        assert!(!ascii_lower_case_non_alphanumeric.is_lowercase_alphanumeric());
     }
 
     #[test]
@@ -899,19 +691,19 @@ mod upper_lower_case_tests {
         let ascii_lower_case_non_alphanumeric = AsciiString::from_utf8(LOWER_STRING_NON_ALPHA_NUMERIC).expect("The lower case string could not convert from utf8 to ascii");
 
         // Test & Check
-        assert!(!ascii_mixed_case_alpha.is_upper_alphanumeric());
-        assert!(ascii_upper_case_alpha.is_upper_alphanumeric());
-        assert!(!ascii_lower_case_alpha.is_upper_alphanumeric());
+        assert!(!ascii_mixed_case_alpha.is_uppercase_alphanumeric());
+        assert!(ascii_upper_case_alpha.is_uppercase_alphanumeric());
+        assert!(!ascii_lower_case_alpha.is_uppercase_alphanumeric());
 
-        assert!(ascii_numeric.is_upper_alphanumeric());
+        assert!(ascii_numeric.is_uppercase_alphanumeric());
 
-        assert!(!ascii_mixed_case_alphanumeric.is_upper_alphanumeric());
-        assert!(ascii_upper_case_alphanumeric.is_upper_alphanumeric());
-        assert!(!ascii_lower_case_alphanumeric.is_upper_alphanumeric());
+        assert!(!ascii_mixed_case_alphanumeric.is_uppercase_alphanumeric());
+        assert!(ascii_upper_case_alphanumeric.is_uppercase_alphanumeric());
+        assert!(!ascii_lower_case_alphanumeric.is_uppercase_alphanumeric());
 
-        assert!(!ascii_mixed_case_non_alphanumeric.is_upper_alphanumeric());
-        assert!(!ascii_upper_case_non_alphanumeric.is_upper_alphanumeric());
-        assert!(!ascii_lower_case_non_alphanumeric.is_upper_alphanumeric());
+        assert!(!ascii_mixed_case_non_alphanumeric.is_uppercase_alphanumeric());
+        assert!(!ascii_upper_case_non_alphanumeric.is_uppercase_alphanumeric());
+        assert!(!ascii_lower_case_non_alphanumeric.is_uppercase_alphanumeric());
     }
 
     #[test]

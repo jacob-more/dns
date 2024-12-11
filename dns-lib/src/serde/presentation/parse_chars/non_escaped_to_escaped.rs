@@ -1,4 +1,4 @@
-use crate::types::ascii::{AsciiChar, constants::ASCII_BACKSLASH, is_control_char};
+use crate::types::ascii::{AsciiChar, constants::ASCII_BACKSLASH, is_ascii_control};
 
 use super::char_token::EscapableChar;
 
@@ -31,7 +31,7 @@ impl<T> Iterator for NonEscapedIntoEscapedIter<T> where T: Iterator<Item = Ascii
         match self.chars.next() {
             None => None,
             Some(ASCII_BACKSLASH) => Some(EscapableChar::EscapedAscii(ASCII_BACKSLASH)),
-            Some(character) if is_control_char(character) => Some(EscapableChar::EscapedOctal(character)),
+            Some(character) if is_ascii_control(&character) => Some(EscapableChar::EscapedOctal(character)),
             Some(character) => Some(EscapableChar::Ascii(character)),
         }
     }

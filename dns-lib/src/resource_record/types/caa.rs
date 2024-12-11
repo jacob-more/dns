@@ -132,7 +132,7 @@ impl FromTokenizedRData for CAA {
                     tag_length @ 256.. => return Err(TokenizedRecordError::ValueError(format!("Expected CAA tag length to be at most 255. it was {}", tag_length))),
                     _ => (),
                 }
-                if !tag.is_lower_alphanumeric() {
+                if !tag.is_lowercase_alphanumeric() {
                     return Err(TokenizedRecordError::ValueError("Expected CAA tag to contain only ASCII characters a-z (lowercase only) and 0-9".to_string()));
                 }
 

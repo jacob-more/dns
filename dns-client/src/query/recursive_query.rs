@@ -218,12 +218,11 @@ async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
                 trace!(context:?; "Recursive search new dname error: The query name '{}' is not a subdomain of the dname's owner name '{}'", context.qname(), header.get_name());
                 return QueryResponse::Error(RCode::ServFail);
             }
-            let dname = CDomainName::from_labels(
+            let dname = CDomainName::from_ref_labels(
                 context.qname()
-                    .labels()
+                    .case_sensitive_labels()
                     .take(header.get_name().label_count())
-                    .chain(dname_rdata.target_name().labels())
-                    .map(|label| label.as_owned_label())
+                    .chain(dname_rdata.target_name().case_sensitive_labels())
                     .collect()
             );
 

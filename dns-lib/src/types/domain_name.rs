@@ -2,9 +2,9 @@ use std::{error::Error, fmt::{Debug, Display}, ops::Add};
 
 use dns_macros::ToPresentation;
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, Label}}};
+use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, CaseSensitiveRefLabel}}};
 
-use super::c_domain_name::{CmpDomainName, OwnedLabel};
+use super::c_domain_name::{CaseInsensitiveRefLabel, CmpDomainName, LabelOwned, LabelRef};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
@@ -50,8 +50,13 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn from_labels(labels: Vec<OwnedLabel>) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: CDomainName::from_labels(labels)? })
+    pub fn from_ref_labels<'a, T: LabelRef<'a>>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
+        Ok(Self { domain_name: CDomainName::from_ref_labels(labels)? })
+    }
+
+    #[inline]
+    pub fn from_owned_labels<T: LabelOwned>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
+        Ok(Self { domain_name: CDomainName::from_owned_labels(labels)? })
     }
 
     #[inline]
@@ -73,8 +78,8 @@ impl DomainName {
 
     /// Converts this domain into a fully qualified domain.
     #[inline]
-    pub fn fully_qualified(&mut self) -> Result<(), DomainNameError> {
-        Ok(self.domain_name.set_fully_qualified()?)
+    pub fn make_fully_qualified(&mut self) -> Result<(), DomainNameError> {
+        Ok(self.domain_name.make_fully_qualified()?)
     }
 
     /// Creates a fully qualified domain from this domain.
@@ -89,24 +94,29 @@ impl DomainName {
     }
     
     #[inline]
-    pub fn canonical_name(&mut self) -> Result<(), DomainNameError> {
-        self.domain_name.canonical_name()?;
+    pub fn make_canonical_name(&mut self) -> Result<(), DomainNameError> {
+        self.domain_name.make_canonical_name()?;
         Ok(())
     }
 
     #[inline]
-    pub fn as_lower(&self) -> Self {
-        Self { domain_name: self.domain_name.as_lower() }
+    pub fn as_lowercase(&self) -> Self {
+        Self { domain_name: self.domain_name.as_lowercase() }
     }
 
     #[inline]
-    pub fn lower(&mut self) {
-        self.domain_name.lower()
+    pub fn make_lowercase(&mut self) {
+        self.domain_name.make_lowercase()
     }
 
     #[inline]
-    pub fn labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Label<'a>> {
-        self.domain_name.labels()
+    pub fn case_sensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = CaseSensitiveRefLabel<'a>> + ExactSizeIterator<Item = CaseSensitiveRefLabel<'a>> {
+        self.domain_name.case_sensitive_labels()
+    }
+
+    #[inline]
+    pub fn case_insensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = CaseInsensitiveRefLabel<'a>> + ExactSizeIterator<Item = CaseInsensitiveRefLabel<'a>> {
+        self.domain_name.case_insensitive_labels()
     }
 
     #[inline]
