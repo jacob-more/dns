@@ -430,20 +430,17 @@ impl CDomainName {
     /// length octets still ends up being malformed so the true max is 128.
     pub const MAX_LABELS: u16 = Self::MAX_OCTETS.div_ceil(2);
 
-    pub const MAX_COMPRESSION_OFFSET: u16 = 2 << 13;  // We have 14 bits for the compression pointer
-    /// This is the maximum number of compression pointers that should occur in a
-    /// semantically valid message. Each label in a domain name must be at least one
-    /// octet and is separated by a period. The root label won't be represented by a
-    /// compression pointer to a compression pointer, hence the -2 to exclude the
-    /// smallest valid root label.
+    /// We have 14 bits for the compression pointer
+    pub const MAX_COMPRESSION_OFFSET: u16 = 2 << 13;
+    /// This is the maximum number of compression pointers that should occur in a valid message.
+    /// Each label in a domain name must be at least one octet and be separated by a period. The
+    /// root label won't be represented by a compression pointer, hence the -1 to exclude the root
+    /// label.
     ///
-    /// It is possible to construct a valid message that has more compression pointers
-    /// than this, and still doesn't loop, by pointing to a previous pointer. This is
-    /// not something a well written implementation should ever do, so we leave them
-    /// to trip the maximum compression pointer check.
-    /// 
-    /// TODO: Update this to allow for the true max.
-    pub const MAX_COMPRESSION_POINTERS: u16 = ((Self::MAX_OCTETS + 1) / 2) - 2;
+    /// It is possible to construct a valid message that has more compression pointers than this,
+    /// and still doesn't loop, by pointing to a previous pointer. This is not something a well
+    /// written implementation should ever do and is not supported by this implementation.
+    pub const MAX_COMPRESSION_POINTERS: u16 = Self::MAX_LABELS - 1;
 
     pub fn new_root() -> Self {
         Self { octets: vec![0], length_octets: tiny_vec![0] }
