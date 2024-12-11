@@ -12,7 +12,7 @@ dns-lib = { path = "../dns-lib" }
 async-recursion = "1.1"
 async-trait = "0.1"
 atomic = { version = "0.6", features = ["std"] }
-bytemuck = { version = "1.19", features = ["derive"]}
+bytemuck = { version = "1.20", features = ["derive"]}
 futures = "0.3"
 lazy_static = "1.5"
 log = { version = "0.4", features = ["std", "kv"] }
@@ -21,7 +21,7 @@ quinn = "0.11"
 rand = "0.8"
 socket2 = "0.5"
 tinyvec = { version = "1.8", features = ["alloc"] }
-tokio = { version = "1.41", features = ["full"] }
+tokio = { version = "1.42", features = ["full"] }
 
 [dev-dependencies]
 ux = "0.1"

@@ -4,7 +4,7 @@
 <registry xmlns="http://www.iana.org/assignments" id="service-names-port-numbers">
   <title>Service Name and Transport Protocol Port Number Registry</title>
   <category>Service Names and Transport Protocol Port Numbers</category>
-  <updated>2024-10-15</updated>
+  <updated>2024-12-06</updated>
   <xref type="rfc" data="rfc6335"/>
   <expert>TCP/UDP: Joe Touch; Eliot Lear, Kumiko Ono, Wes Eddy, Brian Trammell, 
 Jana Iyengar, and Michael Scharf
@@ -35762,9 +35762,25 @@ common service discovery mechanisms.</note>
     <description>initlsmsad</description>
     <number>2793</number>
   </record>
-  <record updated="2006-12-04">
-    <description>Unassigned</description>
+  <record date="2024-11-26">
+    <name>urp</name>
+    <protocol>tcp</protocol>
+    <assignee>
+      <xref type="person" data="Liu_Hongyan"/>
+    </assignee>
+    <description>Uniform Resource Platform</description>
     <number>2794</number>
+    <xref type="person" data="Han_Yingying"/>
+  </record>
+  <record date="2024-11-26">
+    <name>urp</name>
+    <protocol>udp</protocol>
+    <assignee>
+      <xref type="person" data="Liu_Hongyan"/>
+    </assignee>
+    <description>Uniform Resource Platform</description>
+    <number>2794</number>
+    <xref type="person" data="Han_Yingying"/>
   </record>
   <record>
     <name>livestats</name>
@@ -67301,9 +67317,42 @@ common service discovery mechanisms.</note>
     <description>Automatic Dependent Surveillance</description>
     <number>5913</number>
   </record>
+  <record date="2024-11-19">
+    <name>ipsdtls</name>
+    <protocol>tcp</protocol>
+  	<assignee>
+     <xref type="person" data="International_Civil_Aviation_Organisation"/>
+	  </assignee>
+    <description>Security for Internet Protocol Suite</description>
+	  <note>Defined TXT keys: IPSDTLS</note>
+    <number>5914</number>
+	  <xref type="person" data="Nathan_Lackey"/>
+  </record>
+  <record date="2024-11-19">
+    <name>ipsdtls</name>
+    <protocol>udp</protocol>
+	  <assignee>
+      <xref type="person" data="International_Civil_Aviation_Organisation"/>
+	  </assignee>
+    <description>Security for Internet Protocol Suite</description>
+    <note>Defined TXT keys: IPSDTLS</note>
+    <number>5914</number>
+	  <xref type="person" data="Nathan_Lackey"/>
+  </record>
+  <record date="2024-11-19">
+    <name>ipsdtls</name>
+    <protocol>sctp</protocol>
+	  <assignee>
+      <xref type="person" data="International_Civil_Aviation_Organisation"/>
+	  </assignee>
+    <description>Security for Internet Protocol Suite</description>
+    <note>Defined TXT keys: IPSDTLS</note>
+    <number>5914</number>
+  	<xref type="person" data="Nathan_Lackey"/>
+  </record>
   <record>
     <description>Unassigned</description>
-    <number>5914-5962</number>
+    <number>5915-5962</number>
   </record>
   <record date="2004-11">
     <name>indy</name>
@@ -67742,8 +67791,7 @@ common service discovery mechanisms.</note>
     <description>Generic UDP Encapsulation</description>
     <number>6080</number>
     <xref type="person" data="Tom_Herbert"/>
-    <xref type="draft" data="draft-herbert-gue"/>
-    
+    <xref type="draft" data="draft-herbert-gue-02"/>
   </record>
   <record>
     <protocol>tcp</protocol>
@@ -85981,7 +86029,17 @@ common service discovery mechanisms.</note>
   </record>
   <record>
     <description>Unassigned</description>
-    <number>18244-18261</number>
+    <number>18244-18258</number>
+  </record>
+  <record>
+    <description>Unassigned</description>
+    <number>18259</number>
+    <unauthorized>Known Unauthorized Use on port 18259</unauthorized>
+    
+  </record>
+  <record>
+    <description>Unassigned</description>
+    <number>18260-18261</number>
   </record>
   <record date="2008-01-29">
     <name>gv-pf</name>
@@ -92872,6 +92930,30 @@ common service discovery mechanisms.</note>
     <note>Defined TXT keys: None</note>
     <xref type="person" data="Eric_Sawade"/>
   </record>
+  <record date="2024-11-22">
+    <name>adaptive-rn</name>
+    <protocol>tcp</protocol>
+    <assignee>
+      <xref type="person" data="Hongyi_Huang"/>
+    </assignee>
+    <description>ARN (Adaptive Routing Notification) is a protocol designed to enable 
+      dynamic routing adjustments by sharing network status information between nodes 
+      in data center networks, improving efficiency and fault tolerance.</description>
+    <note>Defined TXT keys: arn-protocol, adaptive-routing</note>
+    <xref type="person" data="Hongyi_Huang"/>
+  </record>
+  <record date="2024-11-22">
+    <name>adaptive-rn</name>
+    <protocol>udp</protocol>
+    <assignee>
+      <xref type="person" data="Hongyi_Huang"/>
+    </assignee>
+    <description>ARN (Adaptive Routing Notification) is a protocol designed to enable 
+      dynamic routing adjustments by sharing network status information between nodes 
+      in data center networks, improving efficiency and fault tolerance.</description>
+    <note>Defined TXT keys: arn-protocol, adaptive-routing</note>
+    <xref type="person" data="Hongyi_Huang"/>
+  </record>
   <record>
     <name>addressbook</name>
     <description>Address-O-Matic</description>
@@ -95411,6 +95493,16 @@ There is no possibility of name conflict because (by definition) GUIDs are globa
     <description>Protocol for home hub communication</description>
     <note>Defined TXT keys: Name, sw</note>
     <xref type="person" data="Matthew_Lucas"/>
+  </record>
+  <record date="2024-11-18">
+    <name>homewizard</name>
+    <protocol>tcp</protocol>
+    <assignee>
+      <xref type="person" data="HomeWizard"/>
+    </assignee>
+    <description>HomeWizard Local API</description>
+    <note>Defined TXT keys: api_version, id, serial, product_name, product_type</note>
+    <xref type="person" data="Duco_Sebel"/>
   </record>
   <record>
     <name>honeywell-vid</name>
@@ -107173,6 +107265,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <name>Duane Wessels</name>
       <uri>mailto:wessels&amp;nlanr.net</uri>
     </person>
+    <person id="Duco_Sebel">
+      <name>Duco Sebel</name>
+      <uri>mailto:d.sebel&amp;homewizard.nl</uri>
+      <updated>2024-11-18</updated>
+    </person>
     <person id="Dudi_Hazan">
       <name>Dudi Hazan</name>
       <uri>mailto:dudi&amp;checkpoint.com</uri>
@@ -109403,6 +109500,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <uri>mailto:Hamed.i&amp;icloud.com</uri>
       <updated>2014-07-30</updated>
     </person>
+    <person id="Han_Yingying">
+      <name>Han Yingying</name>
+      <uri>mailto:hanyingying&amp;caict.ac.cn</uri>
+      <updated>2024-11-26</updated>
+    </person>
     <person id="Hani_Abdelazim">
       <name>Hani Abdelazim</name>
       <uri>mailto:hani&amp;apple.com</uri>
@@ -109830,6 +109932,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <uri>mailto:internet-assignments-contact&amp;holvonix.com</uri>
       <updated>2017-11-29</updated>
     </person>
+    <person id="HomeWizard">
+      <org>HomeWizard</org>
+      <uri>mailto:administration&amp;homewizard.com</uri>
+      <updated>2024-11-18</updated>
+    </person>
     <person id="Honeywell_Security_Group">
       <org>Honeywell Security Group</org>
       <uri>mailto:john.dziadosz&amp;honeywell.com</uri>
@@ -109839,6 +109946,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <name>Hong, Jungkih</name>
       <uri>mailto:jungkih.hong&amp;samsung.com</uri>
       <updated>2010-09-20</updated>
+    </person>
+    <person id="Hongyi_Huang">
+      <name>Hongyi Huang</name>
+      <uri>mailto:hhy.hongyi&amp;outlook.com</uri>
+      <updated>2024-11-22</updated>
     </person>
     <person id="Horizon_Digital_Ente">
       <org>Horizon Digital Enterprise Inc.</org>
@@ -110349,7 +110461,7 @@ implementations.  See RFC 3692 for details.</footnote>
     <person id="International_Civil_Aviation_Organisation">
       <org>International Civil Aviation Organisation (ICAO)</org>
       <uri>mailto:gisinbox&amp;icao.int</uri>
-      <updated>2022-06-03</updated>
+      <updated>2024-11-19</updated>
     </person>
     <person id="Internet_Systems_Consortium_Inc">
       <org>Internet Systems Consortium, Inc.</org>
@@ -114194,6 +114306,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <uri>mailto:blzhang&amp;infospark.cn</uri>
       <updated>2008-11-05</updated>
     </person>
+    <person id="Liu_Hongyan">
+      <name>Liu Hongyan</name>
+      <uri>mailto:liuhongyan&amp;caict.ac.cn</uri>
+      <updated>2024-11-26</updated>
+    </person>
     <person id="Lloyd_Wood">
       <name>Lloyd Wood</name>
       <uri>mailto:lwood&amp;cisco.com</uri>
@@ -117054,6 +117171,11 @@ implementations.  See RFC 3692 for details.</footnote>
       <org>Garmin International, Inc.</org>
       <uri>mailto:nettel&amp;garmin.com</uri>
       <updated>2015-07-23</updated>
+    </person>
+    <person id="Nathan_Lackey">
+      <name>Nathan Lackey</name>
+      <uri>mailto:nathan.lackey&amp;boeing.com</uri>
+      <updated>2024-11-19</updated>
     </person>
     <person id="Nathan_Sadia">
       <name>Nathan Sadia</name>
