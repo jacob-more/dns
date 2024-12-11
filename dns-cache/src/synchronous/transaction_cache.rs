@@ -1,3 +1,5 @@
+use std::collections::hash_map::Entry;
+
 use dns_lib::{interface::cache::{transaction_cache::TransactionCache, CacheQuery, CacheRecord, CacheResponse}, query::question::Question, resource_record::{rcode::RCode, rtype::RType}};
 
 use super::tree_cache::{TreeCache, TreeCacheError};
@@ -61,13 +63,17 @@ impl TransactionTreeCache {
             record.record.rclass()
         );
         let node = self.cache.get_or_create_node(&question)?;
-        if let Some(cached_records) = node.records.get_mut(&question.qtype()) {
-            if !cached_records.iter().any(|cached_record| cached_record.record.matches(&record.record)) {
-                cached_records.push(record);
-            }
-        } else {
-            let new_cache_array = vec![record];
-            node.records.insert(question.qtype(), new_cache_array);
+        match node.records.entry(question.qtype()) {
+            Entry::Occupied(mut entry) => {
+                let cached_records = entry.get_mut();
+                if !cached_records.iter().any(|cached_record| cached_record.record.matches(&record.record)) {
+                    cached_records.push(record);
+                }
+            },
+            Entry::Vacant(entry) => {
+                let new_cache_array = vec![record];
+                entry.insert(new_cache_array);
+            },
         }
         Ok(())
     }

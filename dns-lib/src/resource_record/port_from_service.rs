@@ -1,6 +1,6 @@
 use super::{ports::PortError, protocol::Protocol};
 
-use std::{collections::HashMap, fs::File, io::{self, BufReader, Read}, time::Instant};
+use std::{collections::{hash_map::Entry, HashMap}, fs::File, io::{self, BufReader, Read}, time::Instant};
 
 use lazy_static::lazy_static;
 use xml::{reader::XmlEvent, EventReader, ParserConfig};
@@ -201,10 +201,14 @@ fn load_port_service_map() -> io::Result<HashMap<(String, Protocol), Vec<u16>>> 
                 XmlEvent::StartElement { name, attributes: _, namespace: _ } => match name.local_name.as_str() {
                     RECORD_LOCAL_NAME => match parse_record(&mut parser) {
                         Ok(Some((name, protocol, ports))) => {
-                            if let Some(stored_ports) = port_service_map.get_mut(&(name.clone(), protocol.clone())) {
-                                stored_ports.extend(ports)
-                            } else {
-                                port_service_map.insert((name, protocol), ports);
+                            match port_service_map.entry((name, protocol)) {
+                                Entry::Occupied(mut entry) => {
+                                    let stored_ports = entry.get_mut();
+                                    stored_ports.extend(ports);
+                                },
+                                Entry::Vacant(entry) => {
+                                    entry.insert(ports);
+                                },
                             }
                         },
                         Ok(None) => (),

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, error::Error, fmt::Display};
+use std::{collections::{hash_map::Entry, HashMap}, error::Error, fmt::Display};
 
 use crate::types::c_domain_name::{CDomainName, CmpDomainName};
 
@@ -42,9 +42,13 @@ impl RRSet {
             if !name.matches(record.name()) {
                 return Err(RRSetError::DifferingDomainName(name.clone(), record.name().clone()));
             }
-            match rrset_records.get_mut(&record.rtype()) {
-                Some(records_vec) => records_vec.push(record.clone()),
-                None => {rrset_records.insert(record.rtype(), vec![record.clone()]); ()},
+            match rrset_records.entry(record.rtype()) {
+                Entry::Occupied(mut entry) => {
+                    entry.get_mut().push(record.clone());
+                },
+                Entry::Vacant(entry) => {
+                    entry.insert(vec![record.clone()]);
+                },
             }
         }
 

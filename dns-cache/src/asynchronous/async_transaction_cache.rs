@@ -1,3 +1,5 @@
+use std::collections::hash_map::Entry;
+
 use async_trait::async_trait;
 use dns_lib::{interface::cache::{transaction_cache::AsyncTransactionCache, CacheQuery, CacheRecord, CacheResponse}, query::question::Question, resource_record::{rcode::RCode, rtype::RType}};
 
@@ -71,12 +73,16 @@ impl AsyncTransactionTreeCache {
         );
         let node = self.cache.get_or_create_node(&question).await?;
         let mut write_records = node.records.write().await;
-        if let Some(cached_records) = write_records.get_mut(&question.qtype()) {
-            if !cached_records.iter().any(|cached_record| cached_record.record.matches(&record.record)) {
-                cached_records.push(record);
-            }
-        } else {
-            write_records.insert(question.qtype(), vec![record]);
+        match write_records.entry(question.qtype()) {
+            Entry::Occupied(mut entry) => {
+                let cached_records = entry.get_mut();
+                if !cached_records.iter().any(|cached_record| cached_record.record.matches(&record.record)) {
+                    cached_records.push(record);
+                }
+            },
+            Entry::Vacant(entry) => {
+                entry.insert(vec![record]);
+            },
         }
         drop(write_records);
         Ok(())

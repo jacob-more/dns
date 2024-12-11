@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, hash_map::Values}, error::Error, fmt::Display};
+use std::{collections::{hash_map::{Entry, Values}, HashMap}, error::Error, fmt::Display};
 
 use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, CaseInsensitiveOwnedLabel, Label, LabelOwned}};
 
@@ -48,39 +48,31 @@ impl<Records> TreeCache<Records> {
 
         // If the node does not exist, create it. Then, we can get a shared reference back out of
         // the map.
-        if !self.root_nodes.contains_key(&question.qclass()) {
-            let new_node = TreeNode {
-                children: ChildNodes::new(),
-                records: MappedRecords::new(),
-            };
-            self.root_nodes.insert(question.qclass(), new_node);
-        }
-
-        let mut current_node;
-        if let Some(root_node) = self.root_nodes.get_mut(&question.qclass()) {
-            current_node = root_node;
-        } else {
-            return Err(TreeCacheError::InconsistentState(format!("A root node was added for RClass '{}' but could not be retrieved", question.qclass())));
-        }
+        let mut current_node = match self.root_nodes.entry(question.qclass()) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let new_node = TreeNode {
+                    children: ChildNodes::new(),
+                    records: MappedRecords::new(),
+                };
+                entry.insert(new_node)
+            },
+        };
 
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().case_insensitive_labels().rev().skip(1) {
             let lowercase_label = label.as_lowercase().into_case_insensitive_owned();
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
-            if !current_node.children.contains_key(&lowercase_label) {
-                let child_node = TreeNode {
-                    children: HashMap::new(),
-                    records: HashMap::new(),
-                };
-                current_node.children.insert(lowercase_label.clone(), child_node);
-            }
-
-            if let Some(child_node) = current_node.children.get_mut(&lowercase_label) {
-                current_node = child_node;
-                continue;
-            } else {
-                return Err(TreeCacheError::InconsistentState(format!("A root node was added for RType '{}' but could not be retrieved", question.qtype())));
+            current_node = match current_node.children.entry(lowercase_label) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => {
+                    let child_node = TreeNode {
+                        children: HashMap::new(),
+                        records: HashMap::new(),
+                    };
+                    entry.insert(child_node)
+                },
             }
         }
 

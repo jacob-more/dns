@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{collections::hash_map::Entry, time::Instant};
 
 use dns_lib::{interface::cache::{main_cache::MainCache, CacheQuery, CacheRecord, CacheResponse}, query::question::Question, resource_record::{rcode::RCode, rtype::RType}};
 
@@ -66,46 +66,47 @@ impl MainTreeCache {
             record.record.rclass()
         );
         let node = self.cache.get_or_create_node(&question)?;
-        if let Some(cached_records) = node.records.get_mut(&question.qtype()) {
-            let mut record_matched = false;
-            let mut indexes_to_remove = Vec::new();
-            // Step 1: Go through all of the cached records.
-            //          If a matching record is found, update the ttl. Since the record is already cached, nothing else needs to be done.
-            //          If one of the cached records has expired, record the index. It will be removed during a second pass.
-            //          Keep track of if a match record was found so we can add the new one if needed.
-            for (index, cached_record) in cached_records.iter_mut().enumerate() {
-                if record.record.matches(&cached_record.record) {
-                    record_matched = true;
-                    if record.is_authoritative() && cached_record.is_authoritative() {
-                        cached_record.record.set_ttl(*record.record.ttl());
-                        cached_record.meta.insertion_time = received_time;
-                    } else if !record.is_authoritative() && !cached_record.is_authoritative() {
-                        cached_record.record.set_ttl(*record.record.ttl());
-                        cached_record.meta.insertion_time = received_time;
+        match node.records.entry(question.qtype()) {
+            Entry::Occupied(mut entry) => {
+                let cached_records = entry.get_mut();
+                let mut record_matched = false;
+                let mut indexes_to_remove = Vec::new();
+                // Step 1: Go through all of the cached records.
+                //          If a matching record is found, update the ttl. Since the record is already cached, nothing else needs to be done.
+                //          If one of the cached records has expired, record the index. It will be removed during a second pass.
+                //          Keep track of if a match record was found so we can add the new one if needed.
+                for (index, cached_record) in cached_records.iter_mut().enumerate() {
+                    if record.record.matches(&cached_record.record) {
+                        record_matched = true;
+                        if record.is_authoritative() && cached_record.is_authoritative() {
+                            cached_record.record.set_ttl(*record.record.ttl());
+                            cached_record.meta.insertion_time = received_time;
+                        } else if !record.is_authoritative() && !cached_record.is_authoritative() {
+                            cached_record.record.set_ttl(*record.record.ttl());
+                            cached_record.meta.insertion_time = received_time;
+                        }
+                    }
+                    if cached_record.meta.insertion_time.elapsed().as_secs() >= cached_record.record.ttl().as_secs() as u64 {
+                        indexes_to_remove.push(index);
                     }
                 }
-                if cached_record.meta.insertion_time.elapsed().as_secs() >= cached_record.record.ttl().as_secs() as u64 {
-                    indexes_to_remove.push(index);
+    
+                // Step 2: Remove any of the records that were expired uses the indexes recorded in the first pass.
+                //         However, use a reversed order so that the later indexes are not screwed up by removing
+                //         something near the beginning.
+                for index in indexes_to_remove.iter().rev() {
+                    cached_records.remove(*index);
                 }
-            }
-
-            // Step 2: Remove any of the records that were expired uses the indexes recorded in the first pass.
-            //         However, use a reversed order so that the later indexes are not screwed up by removing
-            //         something near the beginning.
-            for index in indexes_to_remove.iter().rev() {
-                cached_records.remove(*index);
-            }
-
-            // Step 3: If no matches were found, we can now add the newest record to the cache.
-            //         Note: This must be done AFTER the expired records are removed to make sure the indexes are accurate.
-            if !record_matched {
-                cached_records.push(record);
-            }
-        } else {
-            node.records.insert(
-                question.qtype(),
-                vec![record]
-            );
+    
+                // Step 3: If no matches were found, we can now add the newest record to the cache.
+                //         Note: This must be done AFTER the expired records are removed to make sure the indexes are accurate.
+                if !record_matched {
+                    cached_records.push(record);
+                }
+            },
+            Entry::Vacant(entry) => {
+                entry.insert(vec![record]);
+            },
         }
         Ok(())
     }

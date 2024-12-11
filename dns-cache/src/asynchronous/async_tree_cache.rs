@@ -1,4 +1,4 @@
-use std::{collections::{HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
+use std::{collections::{hash_map::Entry, HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
 
 use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, CaseInsensitiveOwnedLabel, Label, LabelOwned}};
 use futures::StreamExt;
@@ -63,17 +63,18 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                 let mut write_root_node = self.root_nodes.write().await;
                 // Need to check again since the read lock was dropped before the write lock was
                 // obtained. The state could have changed in that time.
-                match write_root_node.get(&qclass) {
-                    Some(root_node) => {
+                match write_root_node.entry(qclass) {
+                    Entry::Occupied(entry) => {
+                        let root_node = entry.get();
                         current_node = root_node.clone();
                         drop(write_root_node);
                     },
-                    None => {
+                    Entry::Vacant(entry) => {
                         let new_node = Arc::new(TreeNode {
                             children: RwLock::new(HashMap::new()),
                             records: RwLock::new(HashMap::new()),
                         });
-                        write_root_node.insert(qclass, new_node.clone());
+                        entry.insert(new_node.clone());
                         drop(write_root_node);
                         current_node = new_node;
                     },
@@ -98,18 +99,18 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                     let mut write_current_node_children = current_node.children.write().await;
                     // Need to check again since the read lock was dropped before the write lock was
                     // obtained. The state could have changed in that time.
-                    match write_current_node_children.get(&lowercase_label) {
-                        Some(child_node) => {
-                            let child_node = child_node.clone();
+                    match write_current_node_children.entry(lowercase_label) {
+                        Entry::Occupied(entry) => {
+                            let child_node = entry.get().clone();
                             drop(write_current_node_children);
                             current_node = child_node;
                         },
-                        None => {
+                        Entry::Vacant(entry) => {
                             let child_node = Arc::new(TreeNode {
                                 children: RwLock::new(HashMap::new()),
                                 records: RwLock::new(HashMap::new()),
                             });
-                            write_current_node_children.insert(lowercase_label.clone(), child_node.clone());
+                            entry.insert(child_node.clone());
                             drop(write_current_node_children);
                             current_node = child_node;
                         },
