@@ -32,6 +32,7 @@ impl<T> Iterator for NonEscapedIntoEscapedIter<T> where T: Iterator<Item = Ascii
             None => None,
             Some(ASCII_BACKSLASH) => Some(EscapableChar::EscapedAscii(ASCII_BACKSLASH)),
             Some(character) if is_ascii_control(&character) => Some(EscapableChar::EscapedOctal(character)),
+            Some(character @ 128..) => Some(EscapableChar::EscapedOctal(character)),
             Some(character) => Some(EscapableChar::Ascii(character)),
         }
     }
