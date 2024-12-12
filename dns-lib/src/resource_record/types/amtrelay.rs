@@ -1,6 +1,6 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use dns_macros::RTypeCode;
+use dns_macros::RData;
 use ux::{u1, u7};
 
 use crate::{serde::{presentation::{from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::domain_name::DomainName};
@@ -8,7 +8,7 @@ use crate::{serde::{presentation::{from_presentation::FromPresentation, from_tok
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8777#name-amtrelay-rdata-format
 ///
 /// AMT = Automatic Multicast Tunneling
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, RData)]
 pub struct AMTRELAY {
     precedence: u8,
     discovery_optional: u1,

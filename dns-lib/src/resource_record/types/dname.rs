@@ -1,11 +1,11 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RData, ToPresentation};
 
 use crate::types::domain_name::DomainName;
 
 /// TODO: read RFC 2672
 /// 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc6672
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct DNAME {
     target: DomainName,
 }

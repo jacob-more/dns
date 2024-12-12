@@ -1,6 +1,6 @@
 use std::net::Ipv6Addr;
 
-use dns_macros::RTypeCode;
+use dns_macros::RData;
 
 use crate::{types::domain_name::DomainName, serde::{wire::{to_wire::ToWire, write_wire::WriteWire, from_wire::FromWire, read_wire::{ReadWireError, ReadWire}}, presentation::{from_tokenized_rdata::FromTokenizedRData, from_presentation::FromPresentation, to_presentation::ToPresentation}}};
 
@@ -11,7 +11,7 @@ const IPV6_ADDRESS_LENGTH: usize = 128 / 8;
 /// (Original)  https://datatracker.ietf.org/doc/html/rfc2874#section-3
 /// (Updated)   https://datatracker.ietf.org/doc/html/rfc3226
 /// (Obsoleted) https://datatracker.ietf.org/doc/html/rfc6563
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, RData)]
 pub struct A6 {
     prefix_length: u8,
     ipv6_address: Option<Ipv6Addr>,

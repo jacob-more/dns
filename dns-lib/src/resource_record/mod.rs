@@ -14,5 +14,3 @@ pub(crate) mod port_from_service;
 pub mod ports;
 pub mod address_family;
 pub mod time;
-
-pub mod rrset;

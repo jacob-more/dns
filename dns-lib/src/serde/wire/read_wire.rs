@@ -8,6 +8,10 @@ pub enum ReadWireError {
     OverflowError(String),
     OutOfBoundsError(String),
     UnsupportedRType(RType),
+    UnexpectedRType {
+        expected: RType,
+        actual: RType,
+    },
     ValueError(String),
     VersionError(String),
     CDomainNameError(CDomainNameError),
@@ -26,6 +30,7 @@ impl Display for ReadWireError {
             Self::OverflowError(error) => write!(f, "Read Wire Overflow Error: {error}"),
             Self::OutOfBoundsError(error) => write!(f, "Read Wire Out Of Bounds Error: {error}"),
             Self::UnsupportedRType(rtype) => write!(f, "Resource Record Type {rtype} is not supported"),
+            Self::UnexpectedRType { expected, actual} => write!(f, "Expected Resource Record Type {expected} but found {actual}"),
             Self::ValueError(error) => write!(f, "Read Wire Value Error: {error}"),
             Self::VersionError(error) => write!(f, "Read Wire Version Error: {error}"),
 

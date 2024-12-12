@@ -1,9 +1,9 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RData, ToPresentation};
 
 use crate::types::character_string::CharacterString;
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.2
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct HINFO {
     cpu: CharacterString,
     os: CharacterString,

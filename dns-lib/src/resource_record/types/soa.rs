@@ -1,9 +1,9 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RData, ToPresentation};
 
 use crate::{types::c_domain_name::CDomainName, resource_record::time::Time};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.13
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct SOA {
     mname: CDomainName,
     rname: CDomainName,

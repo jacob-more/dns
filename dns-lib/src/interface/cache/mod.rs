@@ -26,7 +26,7 @@ impl CacheQuery {
     pub const fn qclass(&self) -> RClass { self.question.qclass() }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 pub enum CacheResponse {
     Records(Vec<CacheRecord>),
     Err(RCode),
@@ -45,7 +45,7 @@ pub struct CacheMeta {
     pub insertion_time: Instant,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 pub struct CacheRecord {
     pub meta: CacheMeta,
     pub record: ResourceRecord,
@@ -54,7 +54,7 @@ pub struct CacheRecord {
 impl CacheRecord {
     #[inline]
     pub fn is_expired(&self) -> bool {
-        self.meta.insertion_time.elapsed().as_secs() >= self.record.ttl().as_secs() as u64
+        self.meta.insertion_time.elapsed().as_secs() >= self.record.get_ttl().as_secs() as u64
     }
 
     #[inline]

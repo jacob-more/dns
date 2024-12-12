@@ -1,4 +1,4 @@
-use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
+use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
 use crate::{resource_record::dnssec_alg::DnsSecAlgorithm, types::base64::Base64};
 
@@ -9,7 +9,7 @@ const SECURE_ENTRY_POINT_FLAG_MASK: u16 = 0b0000_0000_0000_0001;
 /// (Update) https://datatracker.ietf.org/doc/html/rfc3225
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6840
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6944
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct DNSKEY {
     ///                     1 1 1 1 1 1
     /// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5

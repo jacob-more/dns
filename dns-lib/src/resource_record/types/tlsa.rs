@@ -1,4 +1,4 @@
-use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
+use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
 use crate::{gen_enum::enum_encoding, types::base16::Base16};
 
@@ -6,7 +6,7 @@ use crate::{gen_enum::enum_encoding, types::base16::Base16};
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc8749#name-moving-dlv-to-historic-stat
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc7218
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc7671
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct TLSA {
     certificate_usage: CertificateUsage,
     selector: Selector,

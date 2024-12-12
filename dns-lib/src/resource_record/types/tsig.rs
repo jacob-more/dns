@@ -1,10 +1,10 @@
-use dns_macros::RTypeCode;
+use dns_macros::RData;
 use ux::u48;
 
 use crate::{resource_record::rcode::RCode, serde::wire::{from_wire::FromWire, to_wire::ToWire}, types::domain_name::DomainName};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8945#name-tsig-rr-format
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, RData)]
 pub struct TSIG {
     algorithm_name: DomainName,
     time_signed: u48,
@@ -35,11 +35,11 @@ impl ToWire for TSIG {
         + self.time_signed.serial_length()
         + self.fudge.serial_length()
         + (self.mac.len() as u16).serial_length()
-        + self.mac.serial_length()
+        + (self.mac.len() as u16)
         + self.original_id.serial_length()
         + self.error.serial_length()
         + (self.other_data.len() as u16).serial_length()
-        + self.other_data.serial_length()
+        + (self.other_data.len() as u16)
     }
 }
 

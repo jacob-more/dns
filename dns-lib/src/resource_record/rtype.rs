@@ -119,7 +119,3 @@ enum_encoding!(
     mnemonic_presentation,
     mnemonic_display
 );
-
-pub trait RTypeCode {
-    fn rtype(&self) -> RType;
-}

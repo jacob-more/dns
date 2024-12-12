@@ -1,4 +1,4 @@
-use dns_macros::{FromWire, RTypeCode, ToPresentation, ToWire};
+use dns_macros::{FromWire, RData, ToPresentation, ToWire};
 
 use crate::{serde::presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData}, types::{domain_name::DomainName, rtype_bitmap::RTypeBitmap}};
 
@@ -7,7 +7,7 @@ use crate::{serde::presentation::{errors::TokenizedRecordError, from_presentatio
 /// (Update) https://datatracker.ietf.org/doc/html/rfc3225
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6840
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6944
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, RData)]
 pub struct NSEC {
     next_domain_name: DomainName,
     type_bit_map: RTypeBitmap,

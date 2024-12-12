@@ -1,12 +1,12 @@
 use std::net::Ipv4Addr;
 
-use dns_macros::{ToWire, FromWire, RTypeCode};
+use dns_macros::{ToWire, FromWire, RData};
 use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::{serde::presentation::{from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation, errors::{TokenizedRecordError, TokenError}, from_presentation::FromPresentation}, resource_record::{protocol::Protocol, port_from_service::port_from_service}};
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RData)]
 pub struct WKS {
     address: Ipv4Addr,
     protocol: Protocol,

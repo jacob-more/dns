@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Display};
 
-use dns_macros::RTypeCode;
+use dns_macros::RData;
 
 use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::ReadWireError, to_wire::ToWire}}, types::ascii::{AsciiChar, AsciiString}};
 
@@ -23,7 +23,7 @@ impl Display for CAAError {
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.3
 /// (Updated)  https://datatracker.ietf.org/doc/html/rfc5936#section-2
-#[derive(Clone, PartialEq, Eq, Hash, Debug, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, RData)]
 pub struct CAA {
     flags: u8,
     tag: AsciiString,
@@ -90,7 +90,7 @@ impl ToWire for CAA {
         self.flags.serial_length()
         + (self.tag.len() as u8).serial_length()
         + self.tag.serial_length()
-        + self.value.serial_length()
+        + (self.value.len() as u16)
     }
 }
 

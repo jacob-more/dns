@@ -1,7 +1,7 @@
 use std::{borrow::BorrowMut, cmp::Reverse, collections::HashMap, future::Future, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
 use async_lib::once_watch::{self, OnceWatchSend, OnceWatchSubscribe};
-use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
+use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::{a::A, aaaa::AAAA}}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
 use network::mixed_tcp_udp::{errors::QueryError, MixedSocket};
@@ -14,16 +14,16 @@ use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
 use super::{network_query::query_network, recursive_query::{query_cache, QueryResponse}};
 
 
+fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
+    match record.get_rtype() {
+        RType::A => Some(IpAddr::V4(*<ResourceRecord<A>>::try_from(record).ok()?.get_rdata().ipv4_addr())),
+        RType::AAAA => Some(IpAddr::V6(*<ResourceRecord<AAAA>>::try_from(record).ok()?.get_rdata().ipv6_addr())),
+        _ => None,
+    }
+}
+
 async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(ns_domain: CDomainName, address_rtype: RType, context: Arc<Context>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
     let ns_question = context.query().with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
-
-    fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
-        match record {
-            ResourceRecord::A(_, rdata) => Some(IpAddr::V4(*rdata.ipv4_addr())),
-            ResourceRecord::AAAA(_, rdata) => Some(IpAddr::V6(*rdata.ipv6_addr())),
-            _ => None,
-        }
-    }
 
     let ns_addresses;
     let cache_response;
@@ -144,14 +144,6 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
 
         async fn query_for_sockets<CCache>(client: Arc<DNSAsyncClient>, sockets: Vec<SocketAddr>) -> Vec<Arc<MixedSocket>> where CCache: AsyncCache + Send {
             client.socket_manager.try_get_all(sockets.iter()).await
-        }
-
-        fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
-            match record {
-                ResourceRecord::A(_, rdata) => Some(IpAddr::V4(*rdata.ipv4_addr())),
-                ResourceRecord::AAAA(_, rdata) => Some(IpAddr::V6(*rdata.ipv6_addr())),
-                _ => None,
-            }
         }
 
         loop {
@@ -821,7 +813,7 @@ where
                         return Poll::Ready(result);
                     }
 
-                    return Poll::Pending;
+                    break;
                 },
                 InnerActiveQueryProj::WriteActiveQueries(w_active_queries) => {
                     if let Poll::Ready(mut w_active_queries) = w_active_queries.as_mut().poll(cx) {
@@ -864,7 +856,7 @@ where
                         return Poll::Ready(result);
                     }
 
-                    return Poll::Pending;
+                    break;
                 },
                 InnerActiveQueryProj::Following(mut result_receiver) => {
                     match result_receiver.as_mut().poll(cx) {
@@ -895,7 +887,7 @@ where
                         continue;
                     }
 
-                    return Poll::Pending;
+                    break;
                 },
                 InnerActiveQueryProj::Cleanup(w_active_queries, result) => {
                     match w_active_queries.as_mut().poll(cx) {
@@ -922,7 +914,7 @@ where
                         },
                         Poll::Pending => {
                             // TODO
-                            return Poll::Pending;
+                            break;
                         },
                     }
                 },

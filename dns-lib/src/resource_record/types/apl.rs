@@ -1,6 +1,6 @@
 use std::{fmt::Display, net::{Ipv4Addr, Ipv6Addr}};
 
-use dns_macros::{RTypeCode, ToWire, FromWire, ToPresentation};
+use dns_macros::{RData, ToWire, FromWire, ToPresentation};
 use lazy_static::lazy_static;
 use regex::Regex;
 use ux::{u1, u7};
@@ -8,7 +8,7 @@ use ux::{u1, u7};
 use crate::{resource_record::address_family::AddressFamily, serde::{wire::{to_wire::ToWire, from_wire::FromWire, write_wire::WriteWire, read_wire::{ReadWireError, ReadWire}}, presentation::{from_tokenized_rdata::FromTokenizedRData, from_presentation::FromPresentation, errors::TokenizedRecordError, to_presentation::ToPresentation}}};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc3123
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, RData)]
 pub struct APL {
     apitems: Vec<APItem>
 }

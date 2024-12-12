@@ -1,9 +1,9 @@
-use dns_macros::{ToWire, FromWire, RTypeCode};
+use dns_macros::{ToWire, FromWire, RData};
 
 use crate::{types::character_string::CharacterString, serde::presentation::{from_tokenized_rdata::FromTokenizedRData, from_presentation::FromPresentation, to_presentation::ToPresentation}};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.14
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RData)]
 pub struct TXT {
     strings: Vec<CharacterString>,
 }

@@ -1,9 +1,9 @@
 use std::net::Ipv6Addr;
 
-use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RData, ToPresentation};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc3596
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct AAAA {
     ipv6_address: Ipv6Addr,
 }

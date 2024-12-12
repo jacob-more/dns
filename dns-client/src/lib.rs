@@ -3,9 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use async_lib::once_watch;
 use async_trait::async_trait;
 use dns_cache::asynchronous::{async_cache::AsyncTreeCache, async_main_cache::AsyncMainTreeCache};
-use dns_lib::{interface::client::{Answer, AsyncClient, Context, Response}, query::{message::Message, question::Question}, resource_record::resource_record::ResourceRecord};
+use dns_lib::{interface::client::{Answer, AsyncClient, Context, Response}, query::question::Question, resource_record::resource_record::ResourceRecord};
 use log::info;
-use network::{mixed_tcp_udp::errors::QueryError, socket_manager::SocketManager};
+use network::socket_manager::SocketManager;
 use query::recursive_query::{recursive_query, QueryResponse};
 use tokio::sync::RwLock;
 

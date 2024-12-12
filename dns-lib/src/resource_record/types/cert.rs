@@ -1,12 +1,12 @@
 use std::{error::Error, fmt::Display};
 
-use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
+use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
 use crate::{gen_enum::enum_encoding, resource_record::dnssec_alg::DnsSecAlgorithm, types::base64::Base64};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc4398#section-2
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc6944
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct CERT {
     cert_type: CertificateType,
     key_tag: u16,

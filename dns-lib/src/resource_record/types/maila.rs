@@ -1,7 +1,7 @@
-use dns_macros::{ToWire, FromWire, RTypeCode};
+use dns_macros::{ToWire, FromWire, RData};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.3
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, RData)]
 pub struct MAILA {}
 
 impl MAILA {

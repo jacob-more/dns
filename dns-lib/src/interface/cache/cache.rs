@@ -37,7 +37,7 @@ pub trait AsyncCache {
                 join!(
                     self.insert_iter(message.answer.iter().map(|answer| CacheRecord {
                         meta: CacheMeta {
-                            auth: if message.authoritative_answer && answer.name().matches(qname) { MetaAuth::Authoritative } else { MetaAuth::NotAuthoritative },
+                            auth: if message.authoritative_answer && answer.get_name().matches(qname) { MetaAuth::Authoritative } else { MetaAuth::NotAuthoritative },
                             insertion_time,
                         },
                         record: answer.clone(),

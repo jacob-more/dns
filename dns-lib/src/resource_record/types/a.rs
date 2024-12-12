@@ -1,9 +1,9 @@
 use std::net::Ipv4Addr;
 
-use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RData, ToPresentation};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.4.1
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct A {
     ipv4_address: Ipv4Addr,
 }

@@ -6,7 +6,7 @@ use crate::{resource_record::{resource_record::ResourceRecord, rcode::RCode, opc
 use super::{qr::QR, question::Question};
 
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-4
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 pub struct Message {
     pub id: u16,
 

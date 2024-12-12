@@ -58,15 +58,15 @@ impl TransactionTreeCache {
     #[inline]
     fn insert_record(&mut self, record: CacheRecord) -> Result<(), TreeCacheError> {
         let question = Question::new(
-            record.record.name().clone(),
-            record.record.rtype(),
-            record.record.rclass()
+            record.record.get_name().clone(),
+            record.record.get_rtype(),
+            record.record.get_rclass()
         );
         let node = self.cache.get_or_create_node(&question)?;
         match node.records.entry(question.qtype()) {
             Entry::Occupied(mut entry) => {
                 let cached_records = entry.get_mut();
-                if !cached_records.iter().any(|cached_record| cached_record.record.matches(&record.record)) {
+                if !cached_records.iter().any(|cached_record| cached_record.record == record.record) {
                     cached_records.push(record);
                 }
             },

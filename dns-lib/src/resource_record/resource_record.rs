@@ -1,34 +1,42 @@
-use std::fmt::Display;
+use std::{error::Error, fmt::Display, hash::Hash};
 
 use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::{ReadWireError, SliceWireVisibility}, to_wire::ToWire}}, types::c_domain_name::CDomainName};
 
 use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cert::CERT, cname::CNAME, csync::CSYNC, dname::DNAME, dnskey::DNSKEY, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, naptr::NAPTR, ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, srv::SRV, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct RRHeader {
+
+#[derive(Debug)]
+pub enum TryFromResourceRecordError {
+    UnexpectedRType {
+        expected: RType,
+        actual: RType,
+    }
+}
+impl Error for TryFromResourceRecordError {}
+impl Display for TryFromResourceRecordError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnexpectedRType { expected, actual} => write!(f, "Expected Resource Record Type {expected} but was {actual}"),
+        }
+    }
+}
+
+pub trait RData: ToWire + PartialEq + Clone + Hash {
+    fn get_rtype(&self) -> RType;
+}
+
+#[derive(Debug, Clone)]
+pub struct ResourceRecord<RDataT: RData = RecordData> {
     name: CDomainName,
     rclass: RClass,
     ttl: Time,
+    rdata: RDataT,
 }
 
-impl RRHeader {
+impl<RDataT: RData> ResourceRecord<RDataT> {
     #[inline]
-    pub fn new(name: CDomainName, rclass: RClass, ttl: Time) -> Self {
-        Self { name, rclass, ttl }
-    }
-
-    /// A less strict version of equality. If two records match, that means that
-    /// the records have the following equalities:
-    /// 
-    ///  1. `name`
-    ///  2. `rclass`
-    /// 
-    /// The `ttl` value is not included because if two records that share rdata are compared,
-    /// it is often useful to consider them as being equal as having a different ttl does
-    /// not change that they are conveying the same information.
-    #[inline]
-    pub fn matches(&self, other: &Self) -> bool {
-        (self.name == other.name) && (self.rclass == other.rclass)
+    pub const fn new(name: CDomainName, rclass: RClass, ttl: Time, rdata: RDataT) -> Self {
+        Self { name, rclass, ttl, rdata }
     }
 
     #[inline]
@@ -47,174 +55,194 @@ impl RRHeader {
     }
 
     #[inline]
-    pub fn set_ttl(&mut self, new_ttl: Time) {
+    pub const fn set_ttl(&mut self, new_ttl: Time) {
         self.ttl = new_ttl;
+    }
+
+    #[inline]
+    pub fn get_rtype(&self) -> RType {
+        self.rdata.get_rtype()
+    }
+
+    #[inline]
+    pub const fn get_rdata(&self) -> &RDataT {
+        &self.rdata
+    }    
+}
+
+impl<RDataT: RData> PartialEq for ResourceRecord<RDataT> {
+    /// A less strict version of equality. If two records match, that means that
+    /// the records have the following equalities:
+    /// 
+    ///  1. `name`
+    ///  2. `rclass`
+    ///  3. `rdata`
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        (self.name == other.name)
+        && (self.rclass == other.rclass)
+        && (self.rdata == other.rdata)
     }
 }
 
-macro_rules! gen_resource_record {
+impl<RDataT: RData> Hash for ResourceRecord<RDataT> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.rclass.hash(state);
+        self.rdata.hash(state);
+    }
+}
+
+impl<RDataT: RData> ToWire for ResourceRecord<RDataT> {
+    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+        self.name.to_wire_format(wire, compression)?;
+        self.rdata.get_rtype().to_wire_format(wire, compression)?;
+        self.rclass.to_wire_format(wire, compression)?;
+        self.ttl.to_wire_format(wire, compression)?;
+
+        // If any compression is done, we may need to modify the rd_length.
+        let rd_length_offset = wire.current_len();
+        0_u16.to_wire_format(wire, compression)?;
+
+        let rdata_offset = wire.current_len();
+        self.rdata.to_wire_format(wire, compression)?;
+
+        // Replace the rd_length with the actual number of bytes that got written. This way,
+        // even if it got compressed, it will be accurate.
+        let actual_rd_length = (wire.current_len() - rdata_offset) as u16;
+        wire.write_bytes_at(&actual_rd_length.to_be_bytes(), rd_length_offset)?;
+
+        Ok(())
+    }
+
+    fn serial_length(&self) -> u16 {
+        let rd_length = self.rdata.serial_length();
+        return self.name.serial_length()
+            + self.rdata.get_rtype().serial_length()
+            + self.rclass.serial_length()
+            + self.ttl.serial_length()
+            + rd_length.serial_length()
+            + rd_length;
+    }
+}
+
+macro_rules! gen_record_data {
     ($(($record:ident, $presentation_rule:ident)),+$(,)?) => {
         /// https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.3
         #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-        pub enum ResourceRecord {
-            $($record(RRHeader, $record),)+
+        pub enum RecordData {
+            $($record($record),)+
         }
 
-        impl ResourceRecord {
+        impl RData for RecordData {
             #[inline]
-            const fn header_and_rtype(&self) -> (&RRHeader, RType) {
+            fn get_rtype(&self) -> RType {
                 match self {
-                    $(Self::$record(header, _) => (header, RType::$record),)+
-                }
-            }
-
-            #[inline]
-            fn mut_header_and_rtype(&mut self) -> (&mut RRHeader, RType) {
-                match self {
-                    $(Self::$record(header, _) => (header, RType::$record),)+
-                }
-            }
-
-            #[inline]
-            pub const fn name(&self) -> &CDomainName {
-                self.header_and_rtype().0.get_name()
-            }
-        
-            #[inline]
-            pub const fn rtype(&self) -> RType {
-                self.header_and_rtype().1
-            }
-        
-            #[inline]
-            pub const fn rclass(&self) -> RClass {
-                self.header_and_rtype().0.get_rclass()
-            }
-        
-            #[inline]
-            pub const fn ttl(&self) -> &Time {
-                &self.header_and_rtype().0.get_ttl()
-            }
-        
-            #[inline]
-            pub fn set_ttl(&mut self, new_ttl: Time) {
-                self.mut_header_and_rtype().0.set_ttl(new_ttl);
-            }
-
-            #[inline]
-            pub fn rd_length(&self) -> u16 {
-                match self {
-                    $(Self::$record(_, rdata) => rdata.serial_length(),)+
-                }
-            }
-
-            /// A less strict version of equality. If two records match, that means that
-            /// the records have the following equalities:
-            /// 
-            ///  1. `name`
-            ///  2. `rtype` if available
-            ///  3. `rclass`
-            ///  4. `rdata`
-            /// 
-            /// The `ttl` value is not included because if two records that share rdata are compared,
-            /// it is often useful to consider them as being equal as having a different ttl does
-            /// not change that they are conveying the same information.
-            #[inline]
-            pub fn matches(&self, other: &Self) -> bool {
-                match (self, other) {
-                    $((Self::$record(self_header, self_rdata), Self::$record(other_header, other_rdata)) => (self_header.matches(other_header)) && (self_rdata == other_rdata),)+
-
-                    // If the resource type is not the same, then the records are not the same.
-                    (_, _) => false,
+                    $(Self::$record(_) => RType::$record,)+
                 }
             }
         }
 
-        impl ToWire for ResourceRecord {
+        impl ToWire for RecordData {
             fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
-                let (header, rtype) = self.header_and_rtype();
-                header.name.to_wire_format(wire, compression)?;
-                rtype.to_wire_format(wire, compression)?;
-                header.rclass.to_wire_format(wire, compression)?;
-                header.ttl.to_wire_format(wire, compression)?;
-        
-                // If any compression is done, we may need to modify the rd_length.
-                let rd_length_offset = wire.current_len();
-                0_u16.to_wire_format(wire, compression)?;
-        
-                let rdata_offset = wire.current_len();
                 match self {
-                    $(Self::$record(_, rdata) => rdata.to_wire_format(wire, compression)?,)+
-                };
-        
-                // Replace the rd_length with the actual number of bytes that got written. This way,
-                // even if it got compressed, it will be accurate.
-                let actual_rd_length = (wire.current_len() - rdata_offset) as u16;
-                wire.write_bytes_at(&actual_rd_length.to_be_bytes(), rd_length_offset)?;
-        
-                Ok(())
+                    $(Self::$record(rdata) => rdata.to_wire_format(wire, compression),)+
+                }
             }
         
             fn serial_length(&self) -> u16 {
-                let (header, rtype) = self.header_and_rtype();
-                let rd_length = self.rd_length();
-                return header.name.serial_length()
-                    + rtype.serial_length()
-                    + header.rclass.serial_length()
-                    + header.ttl.serial_length()
-                    + rd_length.serial_length()
-                    + rd_length;
+                match self {
+                    $(Self::$record(rdata) => rdata.serial_length(),)+
+                }
             }
         }
 
-        impl FromWire for ResourceRecord {
-            fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+        impl FromWire for ResourceRecord<RecordData> {
+            fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
                 let name = CDomainName::from_wire_format(wire)?;
                 let rtype = RType::from_wire_format(wire)?;
                 let rclass = RClass::from_wire_format(wire)?;
                 let ttl = Time::from_wire_format(wire)?;
-                let header = RRHeader { name, rclass, ttl };
-                // We will not store the wire_rd_length, instead, we will recalculate it since
-                // things like domain name compression could cause it to change its value.
                 let wire_rd_length = u16::from_wire_format(wire)?;
         
-                // The lower bound is None because it needs access to the previous parts of the wire
-                // when de-referencing the domain name pointers. No pointer should point past the
-                // end of the rdata section (forward pointers) for domain name compression so
-                // blocking off the end should not cause any problems when decompressing.
-                // An upper bound is required to prevent any of the deserializers that fully consume
-                // the rdata section from continuing past the end.
+                // The lower bound is None because it needs access to the previous parts of the wire when
+                // de-referencing the domain name pointers. No pointer should point past the end of the
+                // rdata section (forward pointers) for domain name compression so blocking off the end
+                // should not cause any problems when decompressing. An upper bound is required to prevent
+                // any of the deserializers that fully consume the rdata section from continuing past the
+                // end.
                 let mut rdata_wire = wire.slice_from_current(..(wire_rd_length as usize), SliceWireVisibility::Entire)?;
-                let (rr_record, rd_length) = match rtype {
-                    $(RType::$record => {
-                        let rdata = <$record>::from_wire_format(&mut rdata_wire)?;
-                        let rd_length = rdata.serial_length();
-                        (Self::$record(header, rdata), rd_length)
-                    },)+
+                let rdata = match &rtype {
+                    $(RType::$record => RecordData::$record(<$record>::from_wire_format(&mut rdata_wire)?),)+
                     _ => return Err(ReadWireError::UnsupportedRType(rtype)),
                 };
-                wire.shift(rdata_wire.current_offset() - wire.current_offset())?;
-        
+
+                // The true size might be different than the expected size due to factors such as
+                // domain name decompression.
+                let rd_length = rdata.serial_length();
                 if rd_length > u16::MAX {
                     return Err(ReadWireError::OverflowError(
                         format!("Expected rd_length to be at most {0} bytes. rd_length is actually {1}", u16::MAX, rd_length)
                     ));
                 }
-        
-                return Ok(rr_record);
+
+                wire.shift(wire_rd_length as usize)?;
+
+                return Ok(Self { name, rclass, ttl, rdata });
             }
         }
 
-        impl ResourceRecord {
+        $(
+            impl FromWire for ResourceRecord<$record> {
+                fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
+                    let name = CDomainName::from_wire_format(wire)?;
+                    let rtype = RType::from_wire_format(wire)?;
+                    if rtype != RType::$record {
+                        return Err(ReadWireError::UnexpectedRType{
+                            expected: RType::$record,
+                            actual: rtype
+                        });
+                    }
+                    let rclass = RClass::from_wire_format(wire)?;
+                    let ttl = Time::from_wire_format(wire)?;
+                    // We will not store the `wire_rd_length`, instead, we will recalculate it since things like
+                    // domain name decompression could cause it to change.
+                    let wire_rd_length = u16::from_wire_format(wire)?;
+
+                    // The lower bound is None because it needs access to the previous parts of the wire when
+                    // de-referencing the domain name pointers. No pointer should point past the end of the
+                    // rdata section (forward pointers) for domain name compression so blocking off the end
+                    // should not cause any problems when decompressing. An upper bound is required to prevent
+                    // any of the deserializers that fully consume the rdata section from continuing past the
+                    // end.
+                    let mut rdata_wire = wire.slice_from_current(..(wire_rd_length as usize), SliceWireVisibility::Entire)?;
+                    let rdata = <$record>::from_wire_format(&mut rdata_wire)?;
+
+                    // The true size might be different than the expected size due to factors such as
+                    // domain name decompression.
+                    let rd_length = rdata.serial_length();
+                    if rd_length > u16::MAX {
+                        return Err(ReadWireError::OverflowError(
+                            format!("Expected rd_length to be at most {0} bytes. rd_length is actually {1}", u16::MAX, rd_length)
+                        ));
+                    }
+
+                    wire.shift(wire_rd_length as usize)?;
+            
+                    return Ok(Self { name, rclass, ttl, rdata });
+                }
+            }
+        )+
+
+        impl ResourceRecord<RecordData> {
             pub fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecordToken<'a>) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
-                let rr_header = RRHeader {
-                    name: CDomainName::from_token_format(&[record.domain_name])?.0,
-                    rclass: RClass::from_token_format(&[record.rclass])?.0,
-                    ttl: Time::from_token_format(&[record.ttl])?.0,
-                };
+                let name = CDomainName::from_token_format(&[record.domain_name])?.0;
+                let rclass = RClass::from_token_format(&[record.rclass])?.0;
+                let ttl = Time::from_token_format(&[record.ttl])?.0;
 
                 let (rtype, _) = RType::from_token_format(&[record.rtype])?;
                 let record = match rtype {
-                    $(RType::$record => gen_from_presentation!($record, rtype, rr_header, record, $presentation_rule),)+
+                    $(RType::$record => gen_from_presentation!($record, rtype, name, rclass, ttl, record, $presentation_rule),)+
                     _ => return Err(TokenizedRecordError::UnsupportedRType(rtype)),
                 };
 
@@ -222,32 +250,133 @@ macro_rules! gen_resource_record {
             }
         }
 
-        impl ToPresentation for ResourceRecord {
+        impl ToPresentation for ResourceRecord<RecordData> {
             fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-                let (rr_header, rtype) = self.header_and_rtype();
-                rr_header.name.to_presentation_format(out_buffer);
-                rr_header.ttl.to_presentation_format(out_buffer);
-                rr_header.rclass.to_presentation_format(out_buffer);
+                let rtype = self.get_rtype();
+                self.name.to_presentation_format(out_buffer);
+                self.ttl.to_presentation_format(out_buffer);
+                self.rclass.to_presentation_format(out_buffer);
                 rtype.to_presentation_format(out_buffer);
-                match self {
-                    $(Self::$record(_, rdata) => gen_to_presentation!($record, rtype, rdata, out_buffer, $presentation_rule),)+
+                match &self.rdata {
+                    $(RecordData::$record(rdata) => gen_to_presentation!($record, rtype, rdata, out_buffer, $presentation_rule),)+
                 }
+            }
+        }
+
+        $(resource_record_to_presentation!($record, $presentation_rule);)+
+
+        impl Display for ResourceRecord<RecordData> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let mut buffer = Vec::new();
+                self.to_presentation_format(&mut buffer);
+                write!(f, "{}", buffer.join("\t"))
+            }
+        }
+
+        $(resource_record_gen_display!($record, $presentation_rule);)+
+
+        $(
+            impl From<ResourceRecord<$record>> for ResourceRecord<RecordData> {
+                fn from(rr: ResourceRecord<$record>) -> Self {
+                    Self {
+                        name: rr.name,
+                        rclass: rr.rclass,
+                        ttl: rr.ttl,
+                        rdata: RecordData::$record(rr.rdata),
+                    }
+                }
+            }
+        )+
+
+        $(
+            impl TryFrom<ResourceRecord<RecordData>> for ResourceRecord<$record> {
+                type Error = TryFromResourceRecordError;
+            
+                fn try_from(rr: ResourceRecord<RecordData>) -> Result<Self, Self::Error> {
+                    match rr.rdata {
+                        RecordData::$record(rdata) => {
+                            Ok(Self {
+                                name: rr.name,
+                                rclass: rr.rclass,
+                                ttl: rr.ttl,
+                                rdata,
+                            })
+                        },
+                        rdata @ _ => {
+                            Err(TryFromResourceRecordError::UnexpectedRType {
+                                expected: RType::$record,
+                                actual: rdata.get_rtype(),
+                            })
+                        }
+                    }
+                }
+            }
+        )+
+    };
+}
+
+macro_rules! gen_to_presentation {
+    ($record:ident, $rtype_var:expr, $rdata_var:expr, $out_buffer_var:expr, presentation_forbidden) => {
+        {
+            // clears the warning generated because the `rdata` field is unused.
+            let _ = $rdata_var;
+
+            panic!("Cannot convert {} to presentation", $rtype_var);
+        }
+    };
+    ($record:ident, $rtype_var:expr, $rdata_var:expr, $out_buffer_var:expr, presentation_allowed) => {
+        $rdata_var.to_presentation_format($out_buffer_var)
+    };
+}
+
+macro_rules! resource_record_to_presentation {
+    ($record:ident, presentation_forbidden) => {
+        // No presentation format
+    };
+    ($record:ident, presentation_allowed) => {
+        impl ToPresentation for ResourceRecord<$record> {
+            fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+                let rtype = self.get_rtype();
+                self.name.to_presentation_format(out_buffer);
+                self.ttl.to_presentation_format(out_buffer);
+                self.rclass.to_presentation_format(out_buffer);
+                rtype.to_presentation_format(out_buffer);
+                self.rdata.to_presentation_format(out_buffer);
             }
         }
     };
 }
 
-macro_rules! gen_to_presentation {
-    ($record:ident, $rtype_var:expr, $rdata_var:expr, $out_buffer_var:expr, presentation_forbidden) => { panic!("Cannot convert {} to presentation", $rtype_var) };
-    ($record:ident, $rtype_var:expr, $rdata_var:expr, $out_buffer_var:expr, presentation_allowed) => { $rdata_var.to_presentation_format($out_buffer_var) };
+macro_rules! resource_record_gen_display {
+    ($record:ident, presentation_forbidden) => {
+        // No presentation format
+    };
+    ($record:ident, presentation_allowed) => {
+        impl Display for ResourceRecord<$record> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let mut buffer = Vec::new();
+                self.rdata.to_presentation_format(&mut buffer);
+                write!(f, "{}", buffer.join("\t"))
+            }
+        }
+    };
 }
 
 macro_rules! gen_from_presentation {
-    ($record:ident, $rtype_var:expr, $rr_header_var:expr, $record_var:expr, presentation_forbidden) => { return Err(TokenizedRecordError::RTypeNotAllowed($rtype_var)) };
-    ($record:ident, $rtype_var:expr, $rr_header_var:expr, $record_var:expr, presentation_allowed) => { Self::$record($rr_header_var, <$record>::from_tokenized_rdata(&$record_var.rdata)?) };
+    ($record:ident, $rtype_var:expr, $name_var:expr, $rclass_var:expr, $ttl_var:expr, $record_var:expr, presentation_forbidden) => {
+        return Err(TokenizedRecordError::RTypeNotAllowed($rtype_var))
+    };
+    ($record:ident, $rtype_var:expr, $name_var:expr, $rclass_var:expr, $ttl_var:expr, $record_var:expr, presentation_allowed) => {
+        Self {
+            name: $name_var,
+            rclass: $rclass_var,
+            ttl: $ttl_var,
+            rdata: RecordData::$record(<$record>::from_tokenized_rdata(&$record_var.rdata)?),
+        }
+    };
 }
 
-gen_resource_record!(
+gen_record_data!(
     // Unknown(RRHeader, RType, Unknown),
     (A, presentation_allowed),
     (A6, presentation_allowed),
@@ -339,11 +468,3 @@ gen_resource_record!(
     // X25(RRHeader, X25),
     // ZONEMD(RRHeader, ZONEMD),
 );
-
-impl Display for ResourceRecord {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut buffer = Vec::new();
-        self.to_presentation_format(&mut buffer);
-        write!(f, "{}", buffer.join("\t"))
-    }
-}

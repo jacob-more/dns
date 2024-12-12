@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use dns_lib::{interface::{cache::{cache::AsyncCache, main_cache::AsyncMainCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::{CDomainName, CmpDomainName}};
+use dns_lib::{interface::{cache::{cache::AsyncCache, main_cache::AsyncMainCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{rcode::RCode, resource_record::{RecordData, ResourceRecord}, rtype::RType}, types::c_domain_name::{CDomainName, CmpDomainName}};
 use log::{debug, trace};
 use rand::{thread_rng, seq::SliceRandom};
 
@@ -75,15 +75,15 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
                 trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context response: '{response_records:?}'");
 
                 if (index != 0) || (context.qtype() != RType::DNAME) {
-                    if response_records.iter().any(|record| record.rtype() == RType::DNAME) {
+                    if response_records.iter().any(|record| record.get_rtype() == RType::DNAME) {
                         return handle_dname(client, joined_cache, context, response_records).await;
                     }
                 }
 
-                if response_records.iter().any(|record| record.rtype() == RType::NS) {
+                if response_records.iter().any(|record| record.get_rtype() == RType::NS) {
                     name_servers.clear();
                     for record in &response_records {
-                        if let ResourceRecord::NS(_, ns_rdata) = record {
+                        if let RecordData::NS(ns_rdata) = record.get_rdata() {
                             name_servers.push(ns_rdata.name_server_domain_name().clone())
                         }
                     }
@@ -103,11 +103,11 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         },
         QueryResponse::Records(response_records) => {
             trace!(context:?; "Recursive search secondary cache response: '{response_records:?}'");
-            if (context.qtype() != RType::CNAME) && response_records.iter().any(|record| record.rtype() == RType::CNAME) {
+            if (context.qtype() != RType::CNAME) && response_records.iter().any(|record| record.get_rtype() == RType::CNAME) {
                 return handle_cname(client, joined_cache, context, response_records).await;
             }
 
-            if (context.qtype() != RType::DNAME) && response_records.iter().any(|record| record.rtype() == RType::DNAME) {
+            if (context.qtype() != RType::DNAME) && response_records.iter().any(|record| record.get_rtype() == RType::DNAME) {
                 return handle_dname(client, joined_cache, context, response_records).await;
             }
 
@@ -127,11 +127,11 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         },
         QueryResponse::Records(response_records) => {
             trace!(context:?; "Recursive search name server response: '{response_records:?}'");
-            if (context.qtype() != RType::CNAME) && response_records.iter().any(|record| record.rtype() == RType::CNAME) {
+            if (context.qtype() != RType::CNAME) && response_records.iter().any(|record| record.get_rtype() == RType::CNAME) {
                 return handle_cname(client, joined_cache, context, response_records).await;
             }
 
-            if (context.qtype() != RType::DNAME) && response_records.iter().any(|record| record.rtype() == RType::DNAME) {
+            if (context.qtype() != RType::DNAME) && response_records.iter().any(|record| record.get_rtype() == RType::DNAME) {
                 return handle_dname(client, joined_cache, context, response_records).await;
             }
 
@@ -172,7 +172,7 @@ async fn get_closest_name_server<CCache>(_client: &Arc<DNSAsyncClient>, joined_c
             QueryResponse::Records(cached_name_servers) => {
                 name_servers.reserve_exact(cached_name_servers.len());
                 for record in cached_name_servers {
-                    if let ResourceRecord::NS(_, ns_rdata) = record {
+                    if let RecordData::NS(ns_rdata) = record.get_rdata() {
                         name_servers.push(ns_rdata.name_server_domain_name().clone())
                     }
                 }
@@ -186,7 +186,7 @@ async fn get_closest_name_server<CCache>(_client: &Arc<DNSAsyncClient>, joined_c
 async fn handle_cname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, records: Vec<ResourceRecord>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
     debug!(context:?; "Recursive search redirected by cname");
     for record in &records {
-        if let ResourceRecord::CNAME(_, cname_rdata) = record {
+        if let RecordData::CNAME(cname_rdata) = record.get_rdata() {
             match context.clone().new_cname(cname_rdata.primary_name().clone()) {
                 Ok(cname_context) => {
                     match recursive_query(client, joined_cache, cname_context).await {
@@ -213,15 +213,15 @@ async fn handle_cname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
 async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, records: Vec<ResourceRecord>) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
     debug!(context:?; "Recursive search redirected by dname");
     for record in &records {
-        if let ResourceRecord::DNAME(header, dname_rdata) = record {
-            if !context.qname().is_parent_domain_of(header.get_name()) {
-                trace!(context:?; "Recursive search new dname error: The query name '{}' is not a subdomain of the dname's owner name '{}'", context.qname(), header.get_name());
+        if let RecordData::DNAME(dname_rdata) = record.get_rdata() {
+            if !context.qname().is_parent_domain_of(record.get_name()) {
+                trace!(context:?; "Recursive search new dname error: The query name '{}' is not a subdomain of the dname's owner name '{}'", context.qname(), record.get_name());
                 return QueryResponse::Error(RCode::ServFail);
             }
             let dname = CDomainName::from_ref_labels(
                 context.qname()
                     .case_sensitive_labels()
-                    .take(header.get_name().label_count())
+                    .take(record.get_name().label_count())
                     .chain(dname_rdata.target_name().case_sensitive_labels())
                     .collect()
             );

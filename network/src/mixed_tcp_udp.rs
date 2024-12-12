@@ -3739,7 +3739,7 @@ async fn read_tcp_message(tcp_stream: &mut OwnedReadHalf) -> Result<Message, err
 mod mixed_udp_tcp_tests {
     use std::{net::{IpAddr, Ipv4Addr, SocketAddr}, time::Duration};
 
-    use dns_lib::{query::{message::Message, qr::QR, question::Question}, resource_record::{opcode::OpCode, rclass::RClass, rcode::RCode, resource_record::{RRHeader, ResourceRecord}, rtype::RType, time::Time, types::a::A}, serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire}, types::c_domain_name::CDomainName};
+    use dns_lib::{query::{message::Message, qr::QR, question::Question}, resource_record::{opcode::OpCode, rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType, time::Time, types::a::A}, serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire}, types::c_domain_name::CDomainName};
     use tinyvec::TinyVec;
     use tokio::{io::AsyncReadExt, select};
     use ux::u3;
@@ -3763,8 +3763,10 @@ mod mixed_udp_tcp_tests {
             RType::A,
             RClass::Internet
         );
-        let answer = ResourceRecord::A(
-            RRHeader::new(example_domain, example_class, Time::from_secs(3600)),
+        let answer = ResourceRecord::new(
+            example_domain,
+            example_class,
+            Time::from_secs(3600),
             A::new(Ipv4Addr::LOCALHOST),
         );
         let query = Message {
@@ -3793,7 +3795,7 @@ mod mixed_udp_tcp_tests {
             z: u3::new(0),
             rcode: RCode::NoError,
             question: TinyVec::from([question.clone()]),
-            answer: vec![answer],
+            answer: vec![answer.into()],
             authority: vec![],
             additional: vec![],
         };

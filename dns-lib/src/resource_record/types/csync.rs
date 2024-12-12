@@ -1,4 +1,4 @@
-use dns_macros::{ToWire, FromWire, FromTokenizedRData, RTypeCode, ToPresentation};
+use dns_macros::{ToWire, FromWire, FromTokenizedRData, RData, ToPresentation};
 
 use crate::types::rtype_bitmap::RTypeBitmap;
 
@@ -8,7 +8,7 @@ const SOA_MINIMUM_FLAG_MASK: u16 = 0b0000_0000_0000_0010;
 
 
 /// https://datatracker.ietf.org/doc/html/rfc7477#section-2.1
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct CSYNC {
     serial: u32,
     flags: u16,

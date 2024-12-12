@@ -1,4 +1,4 @@
-use dns_macros::{FromTokenizedRData, FromWire, RTypeCode, ToPresentation, ToWire};
+use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
 use crate::{resource_record::{dnssec_alg::DnsSecAlgorithm, rtype::RType, time::Time}, types::{base64::Base64, domain_name::DomainName}};
 
@@ -7,7 +7,7 @@ use crate::{resource_record::{dnssec_alg::DnsSecAlgorithm, rtype::RType, time::T
 /// (Update) https://datatracker.ietf.org/doc/html/rfc3225
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6840
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6944
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RTypeCode)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
 pub struct RRSIG {
     type_covered: RType,
     algorithm: DnsSecAlgorithm,

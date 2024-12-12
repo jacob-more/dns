@@ -4,7 +4,7 @@ use crate::{resource_record::resource_record::ResourceRecord, types::c_domain_na
 
 use super::{tokenizer::tokenizer::{Tokenizer, Token}, errors::TokenizedRecordError, from_presentation::FromPresentation};
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Hash, Debug)]
 pub enum ZoneToken<'a> {
     ResourceRecord(ResourceRecord),
     Include{ file_path: &'a Path, domain_name: Option<CDomainName> }

@@ -12,8 +12,8 @@ use from_tokenized_rdata::impl_from_tokenized_rdata_macro;
 mod to_presentation;
 use to_presentation::impl_to_presentation_macro;
 
-mod rtype_code;
-use rtype_code::impl_rtype_code_macro;
+mod rdata;
+use rdata::impl_rdata_macro;
 
 #[proc_macro_derive(ToWire)]
 pub fn derive_to_wire(input: TokenStream) -> TokenStream {
@@ -55,12 +55,12 @@ pub fn derive_to_presentation(input: TokenStream) -> TokenStream {
     impl_to_presentation_macro(&ast)
 }
 
-#[proc_macro_derive(RTypeCode)]
-pub fn derive_rtype_code(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(RData)]
+pub fn derive_rdata(input: TokenStream) -> TokenStream {
     // Construct a representation of Rust code as a syntax tree
     // that we can manipulate
     let ast = syn::parse(input).unwrap();
 
     // Build the trait implementation
-    impl_rtype_code_macro(&ast)
+    impl_rdata_macro(&ast)
 }
