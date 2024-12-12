@@ -17,7 +17,7 @@ enum_encoding!(
         (NotAuth,   "NotAuth",   9),
         (NotZone,   "NotZone",   10),
         (DsoTypeNI, "DSOTYPENI", 11),
-    
+
         (BadVers,   "BADVERS",   16),
         (BadSig,    "BADSIG",    16),
         (BadKey,    "BADKEY",    17),

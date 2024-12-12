@@ -41,7 +41,7 @@ fn impl_to_wire_struct_macro(data: &DataStruct, ast: &DeriveInput) -> proc_macro
                 fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
                     Ok(())
                 }
-            
+
                 #[inline]
                 fn serial_length(&self) -> u16 { 0 }
             }
@@ -55,7 +55,7 @@ fn impl_to_wire_struct_macro(data: &DataStruct, ast: &DeriveInput) -> proc_macro
                     #to_wire_calls
                     Ok(())
                 }
-            
+
                 #[inline]
                 fn serial_length(&self) -> u16 {
                     #serial_len_calls

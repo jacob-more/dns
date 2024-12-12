@@ -140,7 +140,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
             drop(read_root_node);
             return Ok(None);
         }
-    
+
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().case_insensitive_labels().rev().skip(1) {
             let lowercase_label = label.as_lowercase().into_case_insensitive_owned();
@@ -236,7 +236,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
     }
 
     pub async fn get_domains(&self) -> HashSet<CDomainName> {
-        let read_root_node = self.root_nodes.read().await;        
+        let read_root_node = self.root_nodes.read().await;
         let root_nodes = read_root_node.clone();
         drop(read_root_node);
 

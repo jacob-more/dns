@@ -37,7 +37,7 @@ fn impl_from_wire_struct_macro(data: &DataStruct, ast: &DeriveInput) -> proc_mac
                 fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
                     Ok(Self {})
                 }
-            }  
+            }
         };
     } else {
         // Case 2: Struct has 1+ fields.

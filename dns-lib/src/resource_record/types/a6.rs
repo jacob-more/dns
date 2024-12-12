@@ -229,7 +229,7 @@ mod tokenizer_tests {
     gen_fail_record_test!(test_fail_one_token_max_prefix, A6, ["128"]);
     gen_fail_record_test!(test_fail_one_token, A6, ["64"]);
     gen_fail_record_test!(test_fail_no_tokens, A6, []);
-    
+
     gen_fail_record_test!(test_fail_two_tokens_bad_ip, A6, ["0", BAD_IP]);
     gen_fail_record_test!(test_fail_two_tokens_bad_negative_prefix, A6, ["-1", GOOD_IP]);
     gen_fail_record_test!(test_fail_two_tokens_bad_large_prefix, A6, ["129", GOOD_IP]);

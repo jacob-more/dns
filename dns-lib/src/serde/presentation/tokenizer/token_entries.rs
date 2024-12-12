@@ -116,7 +116,7 @@ impl<'a> Iterator for EntryIter<'a> {
             match entry_tokens.as_slice() {
                 // <blank>[<comment>]
                 &[] => continue,    //< Skip entries that are empty
-    
+
                 // $ORIGIN <domain-name> [<comment>]
                 &[RawItem::Text("$ORIGIN"), RawItem::Text("@")] => return Some(Ok(
                     Entry::Origin{ origin: StringLiteral::Origin }
@@ -137,7 +137,7 @@ impl<'a> Iterator for EntryIter<'a> {
                 &[RawItem::Text("$RCLASS"), RawItem::Text(rclass_str) | RawItem::QuotedText(rclass_str)] => return Some(Ok(
                     Entry::RClass { rclass: rclass_str }
                 )),
-    
+
                 // $INCLUDE <file-name> [<domain-name>] [<comment>]
                 &[RawItem::Text("$INCLUDE"), RawItem::Text(file_name)] => return Some(Ok(
                     Entry::Include{ file_name, domain_name: None }

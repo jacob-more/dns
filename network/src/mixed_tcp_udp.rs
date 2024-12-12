@@ -167,7 +167,7 @@ pub mod errors {
             }
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum SocketSendError {
         Tcp(TcpSendError),
@@ -192,7 +192,7 @@ pub mod errors {
             Self::Udp(error)
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum TcpSendError {
         Serialization(WriteWireError),
@@ -227,7 +227,7 @@ pub mod errors {
             Self::Io(IoError::from(error))
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum UdpSendError {
         Serialization(WriteWireError),
@@ -262,7 +262,7 @@ pub mod errors {
             Self::Io(IoError::from(error))
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum TcpReceiveError {
         IncorrectNumberBytes {
@@ -302,7 +302,7 @@ pub mod errors {
             Self::Io(IoError::from(error))
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum UdpReceiveError {
         IncorrectNumberBytes {
@@ -337,7 +337,7 @@ pub mod errors {
             Self::Io(IoError::from(error))
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum SocketError {
         Udp(UdpSocketError),
@@ -362,7 +362,7 @@ pub mod errors {
             Self::Tcp(error)
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum TcpSocketError {
         Disabled,
@@ -384,7 +384,7 @@ pub mod errors {
             Self::Init(error)
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum UdpSocketError {
         Disabled,
@@ -438,7 +438,7 @@ pub mod errors {
             Self::Both(error.0, error.1)
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum TcpInitError {
         SocketDisabled,
@@ -480,7 +480,7 @@ pub mod errors {
             Self::Io(IoError::from(error))
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum UdpInitError {
         SocketDisabled,
@@ -509,7 +509,7 @@ pub mod errors {
             Self::Io(IoError::from(error))
         }
     }
-    
+
     #[derive(Debug, Clone)]
     pub enum IoError {
         OsError(io::ErrorKind),
@@ -532,7 +532,7 @@ pub mod errors {
                 return Self::Message(error.kind());
             }
         }
-    }    
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -1142,7 +1142,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 
                     this.tcp_socket_sender.close();
                     this.kill_tcp.awake();
                     let error = errors::TcpInitError::SocketShutdown;
-                    
+
                     *this.inner = InnerInitTcp::Complete;
 
                     // Exit loop: query killed.
@@ -1741,7 +1741,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
             match this.inner.as_mut().project() {
                 InnerTQProj::Fresh => {
                     this.inner.set_running(Query::Initial);
-            
+
                     // Next loop: poll tq_socket and in_flight to start getting the TCP socket and
                     // inserting the query ID into the in-flight map.
                     continue;
@@ -1754,13 +1754,13 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                       | (QSendQueryProj::Fresh(_), TQSocketProj::InitTcp { join_handle: _ })
                       | (QSendQueryProj::Fresh(_), TQSocketProj::Closed(_)) => {
                             // We don't poll the receiver until the QSendQuery state is Complete.
-            
+
                             match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
                                     this.inner.set_cleanup(TcpResponseTime::None, this.socket);
-            
+
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
                                     continue;
@@ -1779,40 +1779,40 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                         },
                         (QSendQueryProj::Fresh(_), TQSocketProj::Acquired { tcp_socket, kill_tcp: _ }) => {
                             // We don't poll the receiver until the QSendQuery state is Complete.
-            
+
                             let socket = this.socket.clone();
                             let tcp_socket = tcp_socket.clone();
-            
+
                             if let PollSocket::Error(error) = tq_socket.poll(this.socket, cx) {
                                 let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
                                 this.inner.set_cleanup(TcpResponseTime::None, this.socket);
-            
+
                                 // Next loop will poll for the in-flight map lock to clean up the
                                 // query ID before returning the response.
                                 continue;
                             }
-            
+
                             let mut raw_message = [0_u8; MAX_MESSAGE_SIZE as usize];
                             let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                             if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
                                 let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(errors::TcpSendError::from(wire_error))));
 
                                 this.inner.set_cleanup(TcpResponseTime::None, this.socket);
-            
+
                                 // Next loop will poll for the in-flight map lock to clean up the
                                 // query ID before returning the response.
                                 continue;
                             };
                             let wire_length = write_wire.current_len();
-            
+
                             println!("Sending on TCP socket {} {{ drop rate {:.2}%, truncation rate {:.2}%, response time {:.2} ms, timeout {} ms }} :: {:?}", this.socket.upstream_socket, this.socket.average_dropped_tcp_packets() * 100.0, this.socket.average_truncated_udp_packets() * 100.0, this.socket.average_tcp_response_time(), this.tcp_timeout.as_millis(), this.query);
-            
+
                             let send_query_future = async move {
                                 let socket = socket;
                                 let tcp_socket = tcp_socket;
                                 let wire_length = wire_length;
-            
+
                                 socket.recent_messages_sent.store(true, Ordering::Release);
                                 let mut w_tcp_stream = tcp_socket.lock().await;
                                 let bytes_written = w_tcp_stream.write(&raw_message[..wire_length]).await?;
@@ -1821,12 +1821,12 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 if bytes_written != wire_length {
                                     return Err(errors::TcpSendError::IncorrectNumberBytes { expected: wire_length as u16, sent: bytes_written });
                                 }
-            
+
                                 return Ok(());
                             }.boxed();
-            
+
                             send_query.set_send_query(send_query_future);
-            
+
                             // Next loop will begin to poll SendQuery. This will get the lock and
                             // the TcpStream and write the bytes out.
                             continue;
@@ -1838,7 +1838,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
                                     this.inner.set_cleanup(TcpResponseTime::None, this.socket);
-            
+
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
                                     continue;
@@ -1847,14 +1847,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
                                     this.inner.set_cleanup(TcpResponseTime::None, this.socket);
-            
+
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
                                     continue;
                                 },
                                 (Poll::Ready(Ok(())), PollSocket::Continue | PollSocket::Pending) => {
                                     send_query.set_complete();
-            
+
                                     // Next loop will poll the receiver, now that a message has been
                                     // sent out.
                                     continue;
@@ -1878,26 +1878,26 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                     let execution_time = this.tcp_start_time.elapsed();
 
                                     this.inner.set_cleanup(TcpResponseTime::Responded(execution_time), this.socket);
-            
+
                                     // TODO
                                     continue;
                                 },
                                 Poll::Ready(Ok(Err(_)))
                               | Poll::Ready(Err(_)) => {
                                     this.inner.set_cleanup(TcpResponseTime::None, this.socket);
-            
+
                                     // TODO
                                     continue;
                                 },
                                 Poll::Pending => (),
                             }
-            
+
                             match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
                                     this.inner.set_cleanup(TcpResponseTime::None, this.socket);
-            
+
                                     // Next loop will poll for the in-flight map lock to clean up
                                     // the query ID before returning the response.
                                     continue;
@@ -2064,7 +2064,7 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
                                     this.inner.set_write_active_query(this.socket);
 
                                     // TODO
-                                    continue;                
+                                    continue;
                                 },
                             }
                         },
@@ -2121,7 +2121,7 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
                                     // println!("{} Following(3) active query '{}'", this.socket.upstream_socket, this.query.question);
 
                                     // TODO
-                                    continue;                
+                                    continue;
                                 },
                             }
                         },
@@ -2154,7 +2154,7 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
                     }
                 },
                 QInitQueryProj::Complete => panic!("TcpQuery cannot be polled after completion"),
-            }    
+            }
         }
     }
 }
@@ -3036,7 +3036,7 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                     this.inner.set_write_active_query(this.socket);
 
                                     // TODO
-                                    continue;                
+                                    continue;
                                 },
                             }
                         },
@@ -3098,7 +3098,7 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                     // println!("{} Following(3) active query '{}'", this.socket.upstream_socket, this.query.question);
 
                                     // TODO
-                                    continue;                
+                                    continue;
                                 },
                             }
                         },

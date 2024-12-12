@@ -36,7 +36,7 @@ enum_encoding!(
         (MTIpv4,                             29),
         (MTIpv6,                             30),
         (BGP_SFC,                            31),
-        
+
         (EIGRPCommonServiceFamily,    16384),
         (EIGRPIpv4ServiceFamily,      16385),
         (EIGRPIpv6ServiceFamily,      16386),

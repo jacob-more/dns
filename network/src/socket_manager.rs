@@ -52,7 +52,7 @@ impl InternalSocketManager {
                                         // the garbage collection if the new timeout is shorter or
                                         // hold off on running it if the timeout is longer.
                                         option_deadline = start.checked_add(gc_interval);
-                                        
+
                                     },
                                     // If the send channel is lost, that means that socket manager was
                                     // dropped somehow.
@@ -160,7 +160,7 @@ impl SocketManager {
     }
 
     /// # Cancel Safety
-    /// 
+    ///
     /// This function is cancel safe.
     #[inline]
     pub async fn get(&self, address: &SocketAddr) -> Arc<MixedSocket> {
@@ -183,7 +183,7 @@ impl SocketManager {
     }
 
     /// # Cancel Safety
-    /// 
+    ///
     /// This function is cancel safe.
     #[inline]
     pub async fn try_get(&self, address: &SocketAddr) -> Option<Arc<MixedSocket>> {
@@ -194,7 +194,7 @@ impl SocketManager {
     }
 
     /// # Cancel Safety
-    /// 
+    ///
     /// This function is cancel safe.
     #[inline]
     pub async fn get_all(&self, addresses: impl Iterator<Item = &SocketAddr>) -> Vec<Arc<MixedSocket>> {
@@ -214,7 +214,7 @@ impl SocketManager {
     }
 
     /// # Cancel Safety
-    /// 
+    ///
     /// This function is cancel safe.
     #[inline]
     pub async fn try_get_all(&self, addresses: impl Iterator<Item = &SocketAddr>) -> Vec<Arc<MixedSocket>> {

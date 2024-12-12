@@ -67,13 +67,13 @@ impl<RDataT: RData> ResourceRecord<RDataT> {
     #[inline]
     pub const fn get_rdata(&self) -> &RDataT {
         &self.rdata
-    }    
+    }
 }
 
 impl<RDataT: RData> PartialEq for ResourceRecord<RDataT> {
     /// A less strict version of equality. If two records match, that means that
     /// the records have the following equalities:
-    /// 
+    ///
     ///  1. `name`
     ///  2. `rclass`
     ///  3. `rdata`
@@ -149,7 +149,7 @@ macro_rules! gen_record_data {
                     $(Self::$record(rdata) => rdata.to_wire_format(wire, compression),)+
                 }
             }
-        
+
             fn serial_length(&self) -> u16 {
                 match self {
                     $(Self::$record(rdata) => rdata.serial_length(),)+
@@ -164,7 +164,7 @@ macro_rules! gen_record_data {
                 let rclass = RClass::from_wire_format(wire)?;
                 let ttl = Time::from_wire_format(wire)?;
                 let wire_rd_length = u16::from_wire_format(wire)?;
-        
+
                 // The lower bound is None because it needs access to the previous parts of the wire when
                 // de-referencing the domain name pointers. No pointer should point past the end of the
                 // rdata section (forward pointers) for domain name compression so blocking off the end
@@ -228,7 +228,7 @@ macro_rules! gen_record_data {
                     }
 
                     wire.shift(wire_rd_length as usize)?;
-            
+
                     return Ok(Self { name, rclass, ttl, rdata });
                 }
             }
@@ -291,7 +291,7 @@ macro_rules! gen_record_data {
         $(
             impl TryFrom<ResourceRecord<RecordData>> for ResourceRecord<$record> {
                 type Error = TryFromResourceRecordError;
-            
+
                 fn try_from(rr: ResourceRecord<RecordData>) -> Result<Self, Self::Error> {
                     match rr.rdata {
                         RecordData::$record(rdata) => {

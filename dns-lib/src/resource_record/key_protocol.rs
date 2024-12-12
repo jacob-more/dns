@@ -10,7 +10,7 @@ enum_encoding!(
         (Email,  "EMAIL",  2),
         (DnsSec, "DNSSEC", 3),
         (IpSec,  "IPSEC",  4),
-    
+
         (All, "ALL", 255),
     ),
     code_presentation,

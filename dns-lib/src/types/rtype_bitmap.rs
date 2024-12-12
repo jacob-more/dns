@@ -60,7 +60,7 @@ impl FromWire for WindowBlock {
                 format!("the bitmap length must be between {0} and {1} (inclusive)", Self::MIN_BITMAP_LENGTH, Self::MAX_BITMAP_LENGTH)
             ));
         }
-        
+
         let map = <ArrayVec<[u8; WindowBlock::MAX_BITMAP_LENGTH as usize]>>::from_wire_format(
             &mut wire.take_as_read_wire(bitmap_length as usize)?
         )?;
@@ -91,7 +91,7 @@ impl RTypeBitmap {
             let byte_index = (code % 256) / 8;
             let bit_index = (code % 256) % 8;
             let mask = 0b1000_0000_u8 >> bit_index;
-            
+
             all_windows[window_index].0[byte_index] |= mask;
             all_windows[window_index].1 = all_windows[window_index].1.max((byte_index as u8) + 1);
         }

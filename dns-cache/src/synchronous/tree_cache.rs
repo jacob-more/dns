@@ -94,7 +94,7 @@ impl<Records> TreeCache<Records> {
         } else {
             return Ok(None);
         }
-    
+
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().case_insensitive_labels().rev().skip(1) {
             let lowercase_label = label.as_lowercase().into_case_insensitive_owned();

@@ -5,7 +5,7 @@ macro_rules! gen_ok_token_test {
             let expected =  $expected;
             let tokens = $tokens;
             let result = <$type as $crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(tokens);
-    
+
             assert!(result.is_ok());
             let (actual_record, remaining_tokens) = result.unwrap();
             assert_eq!(actual_record, expected);
@@ -20,7 +20,7 @@ macro_rules! gen_fail_token_test {
         fn $test_name() {
             let tokens = $tokens;
             let result = <$type as $crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(tokens);
-    
+
             assert!(result.is_err());
         }
     }

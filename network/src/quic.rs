@@ -106,7 +106,7 @@ impl QuicSocket {
             let quic_connection = quic_connection.clone();
             let quic_kill = quic_kill.clone();
             drop(r_quic);
-            
+
             println!("Shutting down QUIC connection {}", self.upstream_socket);
             // TODO: provide a better reason than default and an empty reason
             quic_connection.close(VarInt::default(), &[]);
@@ -121,7 +121,7 @@ impl QuicSocket {
     #[inline]
     pub async fn disable_quic(self: Arc<Self>) -> io::Result<()> {
         println!("Disabling QUIC connection {}", self.upstream_socket);
-        
+
         let mut w_quic = self.quic_shared.write().await;
         match &w_quic.state {
             QuicState::Connected(quic_connection, quic_kill) => {
@@ -156,7 +156,7 @@ impl QuicSocket {
     #[inline]
     pub async fn enable_quic(self: Arc<Self>) -> io::Result<()> {
         println!("Enabling QUIC connection {}", self.upstream_socket);
-        
+
         let mut w_quic = self.quic_shared.write().await;
         match &w_quic.state {
             QuicState::Connected(_, _) => (), //< Already enabled

@@ -281,13 +281,13 @@ impl<'a> ReadWire<'a> {
     /// Gets a slice of `self` for the given range. The amount of wire that is visible to the
     /// returned `ReadWire` is dependent on the value of `visibility`. However, this `ReadWire` can
     /// only make as much of the wire visible as `self` can see.
-    /// 
+    ///
     /// `start` is the lower bound of the range, where `start == 0` is equivalent to the current
     /// wire offset.
     /// `end` is the upper bound of the range, where `end == 0` is equivalent to the current wire
     /// offset.
     /// In other words, both `start` and `end` are relative to `self.current_offset()`.
-    /// 
+    ///
     /// SliceWireVisibility::Entire - The entire wire, from `0` to `len` can be made visible.
     ///   `start` will be used to determine the new offset. `end` will limit how much of the tail
     ///   of the wire is visible.

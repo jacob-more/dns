@@ -129,7 +129,7 @@ impl<'a> Iterator for RawEntryIter<'a> {
                 (Some(Err(error)), _) => return Some(Err(error)),
             }
         }
-        
+
         return Some(Ok(RawEntry { raw_items: entry_items }));
     }
 }

@@ -43,7 +43,7 @@ macro_rules! ux_to_token_impl {
             fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
                 out_buffer.push(self.to_string())
             }
-        }     
+        }
     }
 }
 

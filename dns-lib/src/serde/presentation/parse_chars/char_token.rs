@@ -69,7 +69,7 @@ mod non_escaped_to_escaped_tests {
     fn test_escapable_octal_to_display_mapping(character: EscapableChar, display: &str, digits: (char, char, char)) {
         // Check for incorrect input.
         assert_eq!(display, format!("\\{}{}{}", digits.0, digits.1, digits.2).as_str(), "The expected display ({display}) did not match the provided digits {digits:?}");
-        
+
         let byte_digits = (digits.0 as u8, digits.1 as u8, digits.2 as u8);
 
         // Test octal ascii -> octal

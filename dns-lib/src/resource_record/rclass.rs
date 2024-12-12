@@ -25,7 +25,7 @@ enum_encoding!(
         (CSNet,    "CS", 2),
         (Chaos,    "CH", 3),
         (Hesiod,   "HS", 4),
-    
+
         (QClassNone, "NONE", 254),
         (QClassAny,  "ANY",  255),
     ),

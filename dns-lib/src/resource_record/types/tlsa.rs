@@ -23,7 +23,7 @@ enum_encoding!(
         (PkixEe, "PKIX-EE", 1),
         (DaneTa, "DANE-TA", 2),
         (DaneEe, "DANE-EE", 3),
-    
+
         (PrivCert, "PrivCert", 255),
     ),
     code_presentation,
@@ -36,7 +36,7 @@ enum_encoding!(
     (
         (Cert, "Cert", 0),
         (Spki, "SPKI", 1),
-    
+
         (PrivSel, "PrivSel", 255),
     ),
     code_presentation,
@@ -50,7 +50,7 @@ enum_encoding!(
         (Full,     "Full",     0),
         (Sha2_256, "SHA2-256", 1),
         (Sha2_512, "SHA2-512", 2),
-    
+
         (PrivMatch, "PrivMatch", 255),
     ),
     code_presentation,

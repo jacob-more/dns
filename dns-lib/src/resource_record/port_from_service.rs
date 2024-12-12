@@ -40,7 +40,7 @@ fn parse_protocol<R>(parser: &mut EventReader<R>) -> io::Result<Option<Protocol>
             Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
         }
     }
-    
+
     return Ok(protocol);
 }
 
@@ -68,7 +68,7 @@ fn parse_name<R>(parser: &mut EventReader<R>) -> io::Result<Option<String>> wher
             Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
         }
     }
-    
+
     return Ok(name);
 }
 
@@ -121,7 +121,7 @@ fn parse_ports<R>(parser: &mut EventReader<R>) -> io::Result<Option<Vec<u16>>> w
             Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
         }
     }
-    
+
     return Ok(ports);
 }
 
@@ -225,7 +225,7 @@ fn load_port_service_map() -> io::Result<HashMap<(String, Protocol), Vec<u16>>> 
     let end_time = Instant::now();
     let total_duration = end_time - start_time;
     println!("Loading Port Service Mappings took {} ms", total_duration.as_millis());
-    
+
     Ok(port_service_map)
 }
 

@@ -24,7 +24,7 @@ impl InternalBytes {
 
     /// Splits the bytes at the index, returning the two halves. The first `Bytes` will contain
     /// elements from `[0, at)`. The second `Bytes` will contain elements from `[0, at)`.
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if `at > len`.
@@ -198,7 +198,7 @@ impl Bytes {
 
     /// Splits the bytes at the index, returning the two halves. The first `Bytes` will contain
     /// elements from `[0, at)`. The second `Bytes` will contain elements from `[0, at)`.
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if `at > len`.
@@ -219,7 +219,7 @@ impl Bytes {
 
     /// Splits the bytes at the index. 'self' will contain elements from `[0, at)`. The returned
     /// `Bytes` will contain elements from '[at, len)'.
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if `at > len`.
@@ -232,7 +232,7 @@ impl Bytes {
 
     /// Splits the bytes at the index. 'self' will contain elements from `[at, len)`. The returned
     /// `Bytes` will contain elements from '[0, at)'.
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if `at > len`.
@@ -248,7 +248,7 @@ impl Bytes {
     pub fn get(&self, at: usize) -> Option<u8> { self.bytes.get(at) }
 
     /// Gets the byte at the index 'at' or `None`.
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if `at > len`.
@@ -265,7 +265,7 @@ impl Bytes {
     pub fn first(&self) -> Option<u8> { self.get(0) }
 
     /// Gets the first byte.
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if `self.is_empty()`.
@@ -277,7 +277,7 @@ impl Bytes {
     pub fn last(&self) -> Option<u8> { self.get(self.len() - 1) }
 
     /// Gets the last byte.
-    /// 
+    ///
     /// # Panics
     ///
     /// Panics if `self.is_empty()`.

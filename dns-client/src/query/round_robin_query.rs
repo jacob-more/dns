@@ -205,7 +205,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                                 let client = this.client.clone();
                                 let context = &self.context;
                                 trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::GettingSocketStats");
-            
+
                                 self.state = InnerNSQuery::GettingSocketStats(query_for_sockets::<CCache>(client, sockets_addresses).boxed());
 
                                 // TODO
@@ -933,7 +933,7 @@ where
                     },
                     InnerActiveQueryProj::Following(result_receiver) => {
                         let _ = result_receiver.get_sender().send(result.clone());
-    
+
                         this.inner.set_cleanup(result, this.round_robin.client);
                     },
                     InnerActiveQueryProj::Cleanup(_, old_result) => {

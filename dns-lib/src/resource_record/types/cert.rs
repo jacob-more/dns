@@ -42,7 +42,7 @@ enum_encoding!(
         (Ipgp,    "IPGP",    6),
         (Acpkix,  "ACPKIX",  7),
         (Iacpkix, "IACPKIX", 8),
-    
+
         (Uri, "URI", 253),
         (Oid, "OID", 254),
     ),

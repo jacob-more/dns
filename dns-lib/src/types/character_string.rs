@@ -29,9 +29,9 @@ impl From<AsciiError> for CharacterStringError {
 
 /// Implemented as a wrapper around AsciiString, but follows the rules of a DNS
 /// character string so this is preferred when those rules need to be followed.
-/// 
+///
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-3.3
-/// 
+///
 /// <character-string> is a single length octet followed by that number of characters.
 /// <character-string> is treated as binary information, and can be up to 256
 /// characters in length (including the length octet).
@@ -305,7 +305,7 @@ impl ToPresentation for CharacterString {
                 ASCII_SPACE | ASCII_HORIZONTAL_TAB | ASCII_SEMICOLON | ASCII_OPEN_PARENTHESIS | ASCII_CLOSE_PARENTHESIS => vec![ASCII_BACKSLASH as char, *character as char],
                 _ => vec![*character as char]
             }).collect::<String>();
-        
+
         out_buffer.push(out_string)
     }
 }

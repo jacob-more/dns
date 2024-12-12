@@ -20,7 +20,7 @@ pub struct DNSKEY {
     /// The Protocol Field MUST have value 3, and the DNSKEY RR MUST be
     /// treated as invalid during signature verification if it is found to be
     /// some value other than 3.
-    /// 
+    ///
     /// Although the Protocol Field always has value 3, it is retained for
     /// backward compatibility with early versions of the KEY record.
     protocol: u8,

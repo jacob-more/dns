@@ -1,5 +1,5 @@
 // https://www.rfc-editor.org/rfc/rfc1700
-// 
+//
 // When serializing and deserializing, recall that network order is defined to be Big Endian.
 // Therefore, all data output by serialization must be Big Endian.
 // All data input to a deserializer must be Big Endian.
@@ -29,7 +29,7 @@ macro_rules! int_from_wire_impl {
                 let bytes = wire.take_or_err($byte_count as usize, || format!("could not read {}; wire length less than {} bytes", $int_name, $byte_count))?
                     .try_into()
                     .unwrap();
-        
+
                 Ok(Self::from_be_bytes(bytes))
             }
         }
@@ -62,7 +62,7 @@ macro_rules! ux_from_wire_impl {
                     .collect();
                 // `unwrap()` is safe in this case because it will always have a fixed size.
                 let bytes: [u8; $super_byte_count as usize] = bytes.try_into().unwrap();
-        
+
                 Ok(Self::new(<$super_type>::from_be_bytes(bytes)))
             }
         }
@@ -87,7 +87,7 @@ macro_rules! ix_from_wire_impl {
                     .collect();
                 // `unwrap()` is safe in this case because it will always have a fixed size.
                 let bytes: [u8; $super_byte_count as usize] = bytes.try_into().unwrap();
-        
+
                 Ok(Self::new(<$super_type>::from_be_bytes(bytes)))
             }
         }
@@ -135,7 +135,7 @@ impl<T: FromWire> FromWire for Vec<T> {
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
         let mut vector = Vec::new();
-        
+
         while wire.current_len() > 0 {
             vector.push(T::from_wire_format(wire)?);
         }
@@ -149,7 +149,7 @@ impl<T: FromWire + Default, const SIZE: usize> FromWire for TinyVec<[T; SIZE]> w
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
         let mut vector = TinyVec::new();
-        
+
         while wire.current_len() > 0 {
             vector.push(T::from_wire_format(wire)?);
         }
@@ -163,7 +163,7 @@ impl<T: FromWire + Default, const SIZE: usize> FromWire for ArrayVec<[T; SIZE]> 
     #[inline]
     fn from_wire_format<'a, 'b>(wire: &'b mut ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
         let mut vector = ArrayVec::new();
-        
+
         while wire.current_len() > 0 {
             vector.push(T::from_wire_format(wire)?);
         }

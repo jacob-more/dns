@@ -5,7 +5,7 @@ macro_rules! gen_ok_record_test {
             let expected =  $expected;
             let rdata = $tokens.to_vec();
             let actual = <$rtype as $crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData>::from_tokenized_rdata(&rdata);
-    
+
             assert!(actual.is_ok());
             let actual_record = actual.unwrap();
             assert_eq!(actual_record, expected);
@@ -19,7 +19,7 @@ macro_rules! gen_fail_record_test {
         fn $test_name() {
             let rdata = $tokens.to_vec();
             let actual = <$rtype as $crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData>::from_tokenized_rdata(&rdata);
-    
+
             assert!(actual.is_err());
         }
     }

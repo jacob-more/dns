@@ -457,21 +457,21 @@ mod apitem_tokenizer_tests {
                 let expected =  $expected;
                 let rdata = $token;
                 let actual = $rtype::from_token_format(&rdata);
-        
+
                 assert!(actual.is_ok());
                 let actual_record = actual.unwrap();
                 assert_eq!(actual_record, expected);
             }
         }
     }
-    
+
     macro_rules! gen_fail_record_test {
         ($test_name:ident, $rtype:ident, $token:expr) => {
             #[test]
             fn $test_name() {
                 let rdata = $token;
                 let actual = $rtype::from_token_format(&rdata);
-        
+
                 assert!(actual.is_err());
             }
         }
@@ -492,7 +492,7 @@ mod apitem_tokenizer_tests {
         static ref TEST_OK_NEGATED_IPV4_TOKEN: String = format!("!{IPV4_FAMILY}:{GOOD_IPV4}/32");
         static ref TEST_OK_IPV6_TOKEN: String = format!("{IPV6_FAMILY}:{GOOD_IPV6}/128");
         static ref TEST_OK_NEGATED_IPV6_TOKEN: String = format!("!{IPV6_FAMILY}:{GOOD_IPV6}/128");
-    );  
+    );
 
     gen_ok_record_test!(
         test_ok_ipv4,
@@ -638,7 +638,7 @@ mod apl_tokenizer_tests {
     lazy_static!(
         static ref OK_IPV4_TOKEN: String = format!("{IPV4_FAMILY}:{GOOD_IPV4}/32");
         static ref OK_IPV6_TOKEN: String = format!("{IPV6_FAMILY}:{GOOD_IPV6}/128");
-    );  
+    );
 
     gen_ok_record_test!(
         test_ok_empty,

@@ -376,7 +376,7 @@ pub trait CmpDomainName<T>: Sized {
 
 /// This is a compressible domain name. This should only be used in situations where domain name
 /// compression is allowed. In all other cases, use a regular DomainName.
-/// 
+///
 /// https://www.rfc-editor.org/rfc/rfc1035
 ///
 /// "Domain names in messages are expressed in terms of a sequence of labels.
@@ -386,11 +386,11 @@ pub trait CmpDomainName<T>: Sized {
 /// high order two bits of every length octet must be zero, and the
 /// remaining six bits of the length field limit the label to 63 octets or
 /// less."
-/// 
+///
 /// "To simplify implementations, the total length of a domain name (i.e.,
 /// label octets and label length octets) is restricted to 255 octets or
 /// less."
-/// 
+///
 /// "Although labels can contain any 8 bit values in octets that make up a
 /// label, it is strongly recommended that labels follow the preferred
 /// syntax described elsewhere in this memo, which is compatible with
@@ -613,23 +613,23 @@ impl CDomainName {
     ///
     /// For the purposes of DNS security, the canonical form of an RR is the
     /// wire format of the RR where:
-    /// 
+    ///
     /// 1.  every domain name in the RR is fully expanded (no DNS name
     ///        compression) and fully qualified;
-    /// 
+    ///
     /// 2.  all uppercase US-ASCII letters in the owner name of the RR are
     ///        replaced by the corresponding lowercase US-ASCII letters;
-    /// 
+    ///
     /// 3.  if the type of the RR is NS, MD, MF, CNAME, SOA, MB, MG, MR, PTR,
     ///        HINFO, MINFO, MX, HINFO, RP, AFSDB, RT, SIG, PX, NXT, NAPTR, KX,
     ///        SRV, DNAME, A6, RRSIG, or NSEC, all uppercase US-ASCII letters in
     ///        the DNS names contained within the RDATA are replaced by the
     ///        corresponding lowercase US-ASCII letters;
-    /// 
+    ///
     /// 4.  if the owner name of the RR is a wildcard name, the owner name is
     ///        in its original unexpanded form, including the "*" label (no
     ///        wildcard substitution); and
-    /// 
+    ///
     /// 5.  the RR's TTL is set to its original value as it appears in the
     ///        originating authoritative zone or the Original TTL field of the
     ///        covering RRSIG RR.
@@ -639,7 +639,7 @@ impl CDomainName {
         dn.make_fully_qualified()?;
         return Ok(dn);
     }
-    
+
     #[inline]
     pub fn make_canonical_name(&mut self) -> Result<(), CDomainNameError> {
         self.make_lowercase();
@@ -911,7 +911,7 @@ impl ToWire for CDomainName {
                     // The pointer cannot make use of the first two bits. These are reserved for
                     // use indicating that this label is a pointer. If they are needed for the
                     // pointer itself, the pointer would be corrupted.
-                    // 
+                    //
                     // To solve this issue, we will just not use a pointer if using one would
                     // lead to a corrupted pointer. Easy as that.
                     if (pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000 {

@@ -1,5 +1,5 @@
 // https://www.rfc-editor.org/rfc/rfc1700
-// 
+//
 // When serializing and deserializing, recall that network order is defined to be Big Endian.
 // Therefore, all data output by serialization must be Big Endian.
 // All data input to a deserializer must be Big Endian.
@@ -27,7 +27,7 @@ macro_rules! int_to_wire_impl {
             fn to_wire_format<'a, 'b>(&self, wire: &'b mut WriteWire<'a>, _compression: &mut Option<CompressionMap>) -> Result<(), WriteWireError> where 'a: 'b {
                 wire.write_bytes(&self.to_be_bytes())
             }
-        
+
             #[inline]
             fn serial_length(&self) -> u16 {
                 $byte_count
@@ -57,7 +57,7 @@ macro_rules! ux_to_wire_impl {
             fn to_wire_format<'a, 'b>(&self, wire: &'b mut WriteWire<'a>, _compression: &mut Option<CompressionMap>) -> Result<(), WriteWireError> where 'a: 'b {
                 wire.write_bytes(&(<$super_type>::from(*self)).to_be_bytes()[(($super_byte_count as usize) - ($byte_count as usize))..])
             }
-        
+
             #[inline]
             fn serial_length(&self) -> u16 {
                 $byte_count

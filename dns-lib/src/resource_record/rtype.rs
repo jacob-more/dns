@@ -74,7 +74,7 @@ enum_encoding!(
         (NSEC3PARAM, "NSEC3PARAM", 51),
         (TLSA,       "TLSA",       52),
         (SMIMEA,     "SMIMEA",     53),
-    
+
         (HIP,        "HIP",        55),
         (NINFO,      "NINFO",      56),
         (RKEY,       "RKEY",       57),
@@ -86,7 +86,7 @@ enum_encoding!(
         (ZONEMD,     "ZONEMD",     63),
         (SVCB,       "SVCB",       64),
         (HTTPS,      "HTTPS",      65),
-                
+
         (SPF,    "SPF",    99),
         (UINFO,  "UINFO",  100),
         (UID,    "UID",    101),
@@ -98,7 +98,7 @@ enum_encoding!(
         (LP,     "LP",     107),
         (EUI48,  "EUI48",  108),
         (EUI64,  "EUI64",  109),
-    
+
         (TKEY,     "TKEY",     249),
         (TSIG,     "TSIG",     250),
         (IXFR,     "IXFR",     251),
@@ -111,7 +111,7 @@ enum_encoding!(
         (AVC,      "AVC",      258),
         (DOA,      "DOA",      259),
         (AMTRELAY, "AMTRELAY", 260),
-    
+
         (TA,  "TA",  32768),
         (DLV, "DLV", 32769),
     ),

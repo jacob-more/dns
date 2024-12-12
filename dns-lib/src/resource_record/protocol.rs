@@ -81,14 +81,14 @@ enum_encoding!(
         (IPv6_ICMP,    "IPv6-ICMP",   58),
         (IPv6_NoNxt,   "IPv6-NoNxt",  59),
         (IPv6_Opts,    "IPv6-Opts",   60),
-    
+
         (CFTP, "CFTP", 62),
-    
+
         (SAT_EXPAK, "SAT-EXPAK", 64),
         (KRYPTOLAN, "KRYPTOLAN", 65),
         (RVD,       "RVD",       66),
         (IPPC,      "IPPC",      67),
-    
+
         (SAT_MON,     "SAT-MON",     69),
         (VISA,        "VISA",        70),
         (IPCV,        "IPCV",        71),
@@ -119,7 +119,7 @@ enum_encoding!(
         (SCC_SP,      "SCC-SP",      96),
         (ETHERIP,     "ETHERIP",     97),
         (ENCAP,       "ENCAP",       98),
-    
+
         (GMTP,        "GMTP",        100),
         (IFMP,        "IFMP",        101),
         (PNNI,        "PNNI",        102),
@@ -134,7 +134,7 @@ enum_encoding!(
         (IPX_in_IP,   "IPX-in-IP",   111),
         (VRRP,        "VRRP",        112),
         (PGM,         "PGM",         113),
-    
+
         (L2TP,            "L2TP",            115),
         (DDX,             "DDX",             116),
         (IATP,            "IATP",            117),

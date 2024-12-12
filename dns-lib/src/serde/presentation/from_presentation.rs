@@ -132,7 +132,7 @@ macro_rules! ux_from_token_impl {
                     }
                 }
             }
-        }        
+        }
     }
 }
 
@@ -781,7 +781,7 @@ macro_rules! address_from_token_impl {
                     &[token, ..] => Ok((<$addr_type>::from_str(token)?, &tokens[1..]))
                 }
             }
-        }        
+        }
     }
 }
 

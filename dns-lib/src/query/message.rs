@@ -213,7 +213,7 @@ impl FromWire for Message {
     fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
         let id = u16::from_wire_format(wire)?;
         let (qr, opcode, aa, tc, rd) = <(u1, u4, u1, u1, u1)>::from_wire_format(wire)?;
-        
+
         let qr = match u16::from(qr) {
             0 => QR::Query,
             1 => QR::Response,

@@ -92,7 +92,7 @@ impl DomainName {
     pub fn as_canonical_name(&self) -> Result<Self, DomainNameError> {
         Ok(Self { domain_name: self.domain_name.as_canonical_name()? })
     }
-    
+
     #[inline]
     pub fn make_canonical_name(&mut self) -> Result<(), DomainNameError> {
         self.domain_name.make_canonical_name()?;

@@ -111,14 +111,14 @@ impl AsyncMainTreeCache {
                         indexes_to_remove.push(index);
                     }
                 }
-    
+
                 // Step 2: Remove any of the records that were expired uses the indexes recorded in the first pass.
                 //         However, use a reversed order so that the later indexes are not screwed up by removing
                 //         something near the beginning.
                 for index in indexes_to_remove.iter().rev() {
                     cached_records.remove(*index);
                 }
-    
+
                 // Step 3: If no matches were found, we can now add the newest record to the cache.
                 //         Note: This must be done AFTER the expired records are removed to make sure the indexes are accurate.
                 if !record_matched {

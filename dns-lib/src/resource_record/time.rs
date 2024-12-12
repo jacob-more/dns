@@ -109,7 +109,7 @@ impl Time {
     pub const fn as_duration(&self) -> Duration {
         Duration::from_secs(self.ttl as u64)
     }
-    
+
     /// Checked `TTL` addition. Computes `self + other`, returning [`None`]
     /// if overflow occurred.
     #[inline]

@@ -105,7 +105,7 @@ impl FromWire for AMTRELAY {
             4..=U7_MAX => RelayType::Unknown(relay_type, wire.take_all().to_vec()),
             _ => unreachable!("All numbers, 0-127, are represented by the u7 type. No value outside that range should be possible"),
         };
-        
+
         Ok(Self { precedence, discovery_optional, relay })
     }
 }

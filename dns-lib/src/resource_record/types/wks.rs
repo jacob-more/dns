@@ -85,7 +85,7 @@ impl FromTokenizedRData for WKS {
         if rdata.len() < 3 {
             return Err(TokenizedRecordError::TooFewRDataTokensError{expected: 3, received: rdata.len()});
         }
-        
+
         let (address, rdata) = Ipv4Addr::from_token_format(rdata)?;
         let (protocol, rdata) = Protocol::from_token_format(rdata)?;
         let mut port_bitmap: Vec<u8> = Vec::new();

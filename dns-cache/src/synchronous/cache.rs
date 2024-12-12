@@ -34,7 +34,7 @@ impl<'a> Cache for TreeCache<'a> {
 
         }
     }
-    
+
     fn insert_record(&mut self, record: CacheRecord) {
         self.transaction_cache.insert_record(record.clone());
         self.main_cache.insert_record(record);
