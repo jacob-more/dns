@@ -1,4 +1,4 @@
-use std::{error::Error, fmt::Display, hash::Hash};
+use std::{error::Error, fmt::Display, hash::Hash, ops::Deref};
 
 use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::{ReadWireError, SliceWireVisibility}, to_wire::ToWire}}, types::c_domain_name::CDomainName};
 
@@ -43,6 +43,11 @@ impl<RDataT: RData> ResourceRecord<RDataT> {
     pub const fn get_name(&self) -> &CDomainName {
         &self.name
     }
+    
+    #[inline]
+    pub fn into_name(self) -> CDomainName {
+        self.name
+    }
 
     #[inline]
     pub const fn get_rclass(&self) -> RClass {
@@ -52,6 +57,11 @@ impl<RDataT: RData> ResourceRecord<RDataT> {
     #[inline]
     pub const fn get_ttl(&self) -> &Time {
         &self.ttl
+    }
+    
+    #[inline]
+    pub fn into_ttl(self) -> Time {
+        self.ttl
     }
 
     #[inline]
@@ -67,6 +77,20 @@ impl<RDataT: RData> ResourceRecord<RDataT> {
     #[inline]
     pub const fn get_rdata(&self) -> &RDataT {
         &self.rdata
+    }
+    
+    #[inline]
+    pub fn into_rdata(self) -> RDataT {
+        self.rdata
+    }
+}
+
+impl<RDataT: RData> Deref for ResourceRecord<RDataT> {
+    type Target = RDataT;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.get_rdata()
     }
 }
 

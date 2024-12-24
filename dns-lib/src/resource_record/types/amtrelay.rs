@@ -33,6 +33,9 @@ impl AMTRELAY {
 
     #[inline]
     pub fn relay_type(&self) -> &RelayType { &self.relay }
+
+    #[inline]
+    pub fn into_relay_type(self) -> RelayType { self.relay }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]

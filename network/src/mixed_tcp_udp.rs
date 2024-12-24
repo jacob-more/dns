@@ -111,7 +111,7 @@ pub mod errors {
     use dns_lib::serde::wire::{read_wire::ReadWireError, write_wire::WriteWireError};
     use tokio::task::JoinError;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum QueryError {
         TcpSocket(TcpSocketError),
         TcpSend(TcpSendError),
@@ -168,7 +168,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum SocketSendError {
         Tcp(TcpSendError),
         Udp(UdpSendError),
@@ -193,7 +193,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum TcpSendError {
         Serialization(WriteWireError),
         IncorrectNumberBytes {
@@ -228,7 +228,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum UdpSendError {
         Serialization(WriteWireError),
         IncorrectNumberBytes {
@@ -263,7 +263,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum TcpReceiveError {
         IncorrectNumberBytes {
             expected: u16,
@@ -303,7 +303,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum UdpReceiveError {
         IncorrectNumberBytes {
             expected: u16,
@@ -338,7 +338,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum SocketError {
         Udp(UdpSocketError),
         Tcp(TcpSocketError),
@@ -363,7 +363,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum TcpSocketError {
         Disabled,
         Shutdown,
@@ -385,7 +385,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum UdpSocketError {
         Disabled,
         Shutdown,
@@ -407,7 +407,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum SocketInitError {
         Udp(UdpInitError),
         Tcp(TcpInitError),
@@ -439,7 +439,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum TcpInitError {
         SocketDisabled,
         SocketShutdown,
@@ -481,7 +481,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum UdpInitError {
         SocketDisabled,
         SocketShutdown,
@@ -510,7 +510,7 @@ pub mod errors {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Hash, PartialEq, Eq)]
     pub enum IoError {
         OsError(io::ErrorKind),
         Message(io::ErrorKind),

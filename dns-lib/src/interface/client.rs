@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, sync::Arc};
 
 use async_trait::async_trait;
 
-use crate::{query::{message::Message, question::Question}, resource_record::{rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::{CDomainName, CmpDomainName}};
+use crate::{query::{message::Message, question::Question}, resource_record::{rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::ns::NS}, types::c_domain_name::{CDomainName, CmpDomainName}};
 
 #[derive(Debug)]
 pub enum Response {
@@ -21,13 +21,15 @@ impl Display for Response {
 
 #[derive(Debug)]
 pub struct Answer {
-    pub records: Vec<ResourceRecord>,
+    pub answer: Vec<ResourceRecord>,
+    pub name_servers: Vec<ResourceRecord<NS>>,
+    pub additional: Vec<ResourceRecord>,
     pub authoritative: bool,
 }
 
 impl Display for Answer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut record_iter = self.records.iter();
+        let mut record_iter = self.answer.iter();
         match record_iter.next() {
             Some(record) => write!(f, "{record}")?,
             None => return Ok(()),

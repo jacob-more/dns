@@ -1,7 +1,7 @@
 use std::{borrow::BorrowMut, cmp::Reverse, collections::HashMap, future::Future, net::{IpAddr, SocketAddr}, pin::Pin, sync::Arc, task::Poll, time::Duration};
 
 use async_lib::once_watch::{self, OnceWatchSend, OnceWatchSubscribe};
-use dns_lib::{interface::{cache::cache::AsyncCache, client::Context}, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::{a::A, aaaa::AAAA}}, types::c_domain_name::CDomainName};
+use dns_lib::{interface::{cache::{cache::AsyncCache, CacheQuery, CacheResponse}, client::Context}, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::{RecordData, ResourceRecord}, rtype::RType}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
 use network::mixed_tcp_udp::{errors::QueryError, MixedSocket};
@@ -9,15 +9,12 @@ use pin_project::{pin_project, pinned_drop};
 use rand::{seq::IteratorRandom, thread_rng};
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
 
-use crate::{query::recursive_query::recursive_query, DNSAsyncClient};
-
-use super::{network_query::query_network, recursive_query::{query_cache, QueryResponse}};
-
+use crate::{query::{network_query::query_network, recursive_query::recursive_query}, result::{QError, QOk, QResult}, DNSAsyncClient};
 
 fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
-    match record.get_rtype() {
-        RType::A => Some(IpAddr::V4(*<ResourceRecord<A>>::try_from(record).ok()?.get_rdata().ipv4_addr())),
-        RType::AAAA => Some(IpAddr::V6(*<ResourceRecord<AAAA>>::try_from(record).ok()?.get_rdata().ipv6_addr())),
+    match record.into_rdata() {
+        RecordData::A(rdata) => Some(rdata.into_ipv4_addr().into()),
+        RecordData::AAAA(rdata) => Some(rdata.into_ipv6_addr().into()),
         _ => None,
     }
 }
@@ -27,17 +24,16 @@ async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(ns_domain: CDomainName
 
     let ns_addresses;
     let cache_response;
-    match query_cache(&joined_cache, &ns_question).await {
-        QueryResponse::Records(records) => {
+    match joined_cache.get(&CacheQuery { authoritative: false, question: &ns_question }).await {
+        CacheResponse::Records(records) => {
             ns_addresses = records.into_iter()
-                .filter_map(|record| rr_to_ip(record))
+                .filter_map(|record| rr_to_ip(record.record))
                 .collect();
             cache_response = NSQueryCacheResponse::Hit;
         },
         _ => {
             ns_addresses = vec![];
             cache_response = NSQueryCacheResponse::Miss;
-
         },
     };
 
@@ -58,8 +54,7 @@ async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(ns_domain: CDomainName
 #[derive(Debug)]
 enum NSQueryResult {
     OutOfAddresses,
-    NSAddressQueryErr(RCode),
-    QueryResult(Result<Message, QueryError>),
+    Result(QResult<Message, QError>),
 }
 
 #[pin_project]
@@ -79,7 +74,7 @@ struct NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
 enum InnerNSQuery<'a, 'b, 'c> {
     Fresh(NSQueryCacheResponse),
     QueryingNetworkNSAddresses {
-        ns_addresses_query: BoxFuture<'a, QueryResponse<ResourceRecord>>,
+        ns_addresses_query: BoxFuture<'a, QResult>,
     },
     GettingSocketStats(BoxFuture<'b, Vec<Arc<MixedSocket>>>),
     NetworkQueryStart,
@@ -102,9 +97,9 @@ impl<'a, 'b, 'c, CCache> NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + 
                 // which had not yet been explored.
                 .filter(|(average_dropped_udp_packets, _)| *average_dropped_udp_packets < 0.80)
                 .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32))))
-                .max()
-                .flatten()
-                .map(|val| val.0)
+            .max()
+            .flatten()
+            .map(|val| val.0)
     }
 }
 
@@ -134,7 +129,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
     type Output = NSQueryResult;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        async fn recursive_query_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Context) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
+        async fn recursive_query_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Context) -> QResult where CCache: AsyncCache + Send + Sync + 'static {
             recursive_query(client, joined_cache, context).await
         }
 
@@ -182,14 +177,24 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                             self.state = InnerNSQuery::OutOfAddresses;
 
                             // Exit loop. The was an error trying to query for the addresses.
-                            return Poll::Ready(NSQueryResult::NSAddressQueryErr(RCode::ServFail));
+                            return Poll::Ready(NSQueryResult::Result(QError::ContextErr(error).into()));
                         },
                     };
                 },
                 InnerNSQuery::QueryingNetworkNSAddresses { ns_addresses_query } => {
                     match ns_addresses_query.as_mut().poll(cx) {
-                        Poll::Ready(QueryResponse::Records(records)) => {
-                            this.ns_addresses.extend(records.into_iter().filter_map(|record| rr_to_ip(record)));
+                        Poll::Ready(QResult::Ok(QOk { answer, name_servers: _, additional: _ })) if answer.is_empty() => {
+                            let context = self.context.as_ref();
+                            trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::NoRecords when querying network for ns addresses");
+
+                            self.state = InnerNSQuery::OutOfAddresses;
+
+                            // Exit loop. There are no addresses to query.
+                            return Poll::Ready(NSQueryResult::OutOfAddresses);
+                        }
+                        Poll::Ready(QResult::Ok(QOk { answer, name_servers: _, additional: _ })) => {
+                            this.ns_addresses
+                                .extend(answer.into_iter().filter_map(|record| rr_to_ip(record)));
                             if this.ns_addresses.is_empty() {
                                 let context = &self.context;
                                 trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: tried to query first ns address but out of addresses");
@@ -212,37 +217,41 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                                 continue;
                             }
                         },
-                        Poll::Ready(QueryResponse::NoRecords) => {
+                        Poll::Ready(QResult::Err(error)) => {
                             let context = self.context.as_ref();
-                            trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::NoRecords when querying network for ns addresses");
+                            trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::Error({error}) when querying network for ns addresses");
 
                             self.state = InnerNSQuery::OutOfAddresses;
 
-                            // Exit loop. There are no addresses to query.
-                            return Poll::Ready(NSQueryResult::OutOfAddresses);
+                            // Exit loop. The was an error trying to query for the addresses.
+                            return Poll::Ready(NSQueryResult::Result(error.into()));
                         },
-                        Poll::Ready(QueryResponse::Error(rcode)) => {
+                        Poll::Ready(QResult::Fail(rcode)) => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::Error({rcode}) when querying network for ns addresses");
 
                             self.state = InnerNSQuery::OutOfAddresses;
 
                             // Exit loop. The was an error trying to query for the addresses.
-                            return Poll::Ready(NSQueryResult::NSAddressQueryErr(rcode));
+                            return Poll::Ready(NSQueryResult::Result(rcode.into()));
                         },
                         Poll::Pending => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses: waiting for network query response for ns addresses");
 
                             // Exit loop. Will be woken up by the ns address query.
-                            return Poll::Pending
+                            return Poll::Pending;
                         },
                     }
                 },
                 InnerNSQuery::GettingSocketStats(sockets_future) => {
                     match sockets_future.as_mut().poll(cx) {
                         Poll::Ready(sockets) => {
-                            self.sockets.extend(sockets.into_iter().map(|socket| (socket.socket_address().ip(), socket)));
+                            self.sockets.extend(
+                                sockets
+                                    .into_iter()
+                                    .map(|socket| (socket.socket_address().ip(), socket)),
+                            );
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::GettingSocketStats -> InnerNSQuery::NetworkQueryStart: getting sockets to determine the fastest addresses");
 
@@ -256,7 +265,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                             trace!(context:?; "NSQuery::GettingSocketStats: getting sockets to determine the fastest addresses");
 
                             // Exit loop. Will be woken up by the ns address query.
-                            return Poll::Pending
+                            return Poll::Pending;
                         },
                     }
                 },
@@ -280,7 +289,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::NetworkQueryStart -> NSQuery::OutOfAddresses: tried to query next ns address but out of addresses");
 
-                            return Poll::Ready(NSQueryResult::OutOfAddresses)
+                            return Poll::Ready(NSQueryResult::OutOfAddresses);
                         },
                     }
                 },
@@ -295,14 +304,17 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                             self.state = InnerNSQuery::NetworkQueryStart;
 
                             // Exit loop. A result was found.
-                            return Poll::Ready(NSQueryResult::QueryResult(result));
+                            match result {
+                                Ok(message) => return Poll::Ready(NSQueryResult::Result(QResult::Ok(message))),
+                                Err(error) => return Poll::Ready(NSQueryResult::Result(QResult::Err(error.into()))),
+                            }
                         },
                         Poll::Pending => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetwork: waiting for network query response for ns addresses");
 
                             // Exit loop. Will be woken up by the query.
-                            return Poll::Pending
+                            return Poll::Pending;
                         },
                     }
                 },
@@ -311,7 +323,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                     trace!(context:?; "NSQuery::OutOfAddresses");
 
                     // Exit loop. All addresses have been queried.
-                    return Poll::Ready(NSQueryResult::OutOfAddresses)
+                    return Poll::Ready(NSQueryResult::OutOfAddresses);
                 },
             }
         }
@@ -343,8 +355,7 @@ impl<'a, 'b, 'c, CCache> NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCa
     fn is_first_poll(&self) -> bool {
         // After the first poll, the running queue should never be left empty
         // between polls as long as there are more queries to try.
-        self.running.is_empty()
-        && !self.ns_queries.is_empty()
+        self.running.is_empty() && !self.ns_queries.is_empty()
     }
 }
 
@@ -468,7 +479,9 @@ impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCac
             (0, 0) => Poll::Ready(None),
             // At least 1 query is still running.
             (_, 1..) => Poll::Pending,
-            (1.., 0) => panic!("There are still queries in the queue but the running queue is empty"),
+            (1.., 0) => {
+                panic!("There are still queries in the queue but the running queue is empty")
+            },
         }
     }
 }
@@ -514,7 +527,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f
 }
 
 impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
-    type Output = QueryResponse<ResourceRecord>;
+    type Output = QResult;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         loop {
@@ -578,10 +591,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                 InnerNSRoundRobin::QueryNameServers { ns_query_select } => {
                     match ns_query_select.as_mut().poll(cx) {
                         // No error. Valid response.
-                        Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))))
+                        Poll::Ready(Some(NSQueryResult::Result(QResult::Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))))
                         // If a server does not support a query type, we can probably assume it is not in that zone.
                         // TODO: verify that this is a valid assumption. Should we return NotImpl?
-                      | Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })))) => {
+                      | Poll::Ready(Some(NSQueryResult::Result(QResult::Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NotImp, question: _, answer: _, authority: _, additional: _ })))) => {
                             let result = query_response(response);
 
                             let context = this.context.as_ref();
@@ -593,8 +606,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                             return Poll::Ready(result);
                         },
                         // Only authoritative servers can indicate that a name does not exist.
-                        Poll::Ready(Some(NSQueryResult::QueryResult(Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })))) => {
-                            let result = QueryResponse::Error(RCode::NXDomain);
+                        Poll::Ready(Some(NSQueryResult::Result(QResult::Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: true, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ })))) => {
+                            let result = QResult::Fail(RCode::NXDomain);
 
                             let context = this.context.as_ref();
                             trace!(context:?; "NSRoundRobin::QueryNameServers -> NSRoundRobin::Cleanup: Received error NXDomain in message '{response:?}'");
@@ -606,15 +619,15 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         },
                         // This server does not have the authority to say that the name
                         // does not exist. Ask others.
-                        Poll::Ready(Some(response @ NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }))))
+                        Poll::Ready(Some(response @ NSQueryResult::Result(QResult::Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: false, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NXDomain, question: _, answer: _, authority: _, additional: _ }))))
                         // If there is an IO error, try a different server.
-                      | Poll::Ready(Some(response @ NSQueryResult::QueryResult(Err(_))))
+                      | Poll::Ready(Some(response @ NSQueryResult::Result(QResult::Err(_))))
                         // If a particular name server cannot be queried anymore, then keep
                         // trying to query the others.
                       | Poll::Ready(Some(response @ NSQueryResult::OutOfAddresses))
                         // If there was an error looking up one of the name servers, keep
                         // trying to look up the others.
-                      | Poll::Ready(Some(response @ NSQueryResult::NSAddressQueryErr(_))) => {
+                      | Poll::Ready(Some(response @ NSQueryResult::Result(QResult::Fail(_)))) => {
                             let context = this.context.as_ref();
                             trace!(context:?; "NSRoundRobin::QueryNameServers: Received error in message '{response:?}'");
 
@@ -623,18 +636,18 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         },
                         // If a name server cannot interpret what we are sending it, asking other name servers probably will not help.
                         // Treat as a hard error.
-                        Poll::Ready(response @ Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ }))))
+                        Poll::Ready(response @ Some(NSQueryResult::Result(QResult::Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::FormErr, question: _, answer: _, authority: _, additional: _ }))))
                         // If a name server refuses to perform an operation, we should not keep asking the other servers.
                         // TODO: verify that this is a valid way of handling.
-                      | Poll::Ready(response @ Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ }))))
+                      | Poll::Ready(response @ Some(NSQueryResult::Result(QResult::Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::Refused, question: _, answer: _, authority: _, additional: _ }))))
                         // We don't know how to handle unknown errors.
                         // Assume they are a fatal failure.
-                      | Poll::Ready(response @ Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))))
+                      | Poll::Ready(response @ Some(NSQueryResult::Result(QResult::Ok(Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))))
                         // Malformed response.
-                      | Poll::Ready(response @ Some(NSQueryResult::QueryResult(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))))
+                      | Poll::Ready(response @ Some(NSQueryResult::Result(QResult::Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))))
                         // No more servers to query.
                       | Poll::Ready(response @ None) => {
-                            let result = QueryResponse::Error(RCode::ServFail);
+                            let result = QResult::Fail(RCode::ServFail);
 
                             *this.inner = InnerNSRoundRobin::Complete;
 
@@ -676,15 +689,18 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> PinnedDrop for NSRoundRobin<'a, 'b,
 }
 
 #[inline]
-fn query_response(answer: Message) -> QueryResponse<ResourceRecord> {
+fn query_response(answer: Message) -> QResult {
     match answer {
-        Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer, authority, additional: _ } if answer.is_empty() && authority.is_empty() => QueryResponse::NoRecords,
-        Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, mut answer, authority, additional: _} => {
-            answer.extend(authority);
-            QueryResponse::Records(answer)
-        },
-        Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode, question: _, answer: _, authority: _, additional: _ } => QueryResponse::Error(rcode),
-        Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ } => QueryResponse::Error(RCode::FormErr),
+        Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer, authority, additional } => QResult::Ok(QOk {
+            answer,
+            name_servers: authority
+                .into_iter()
+                .filter_map(|record| record.try_into().ok())
+                .collect(),
+            additional,
+        }),
+        Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode, question: _, answer: _, authority: _, additional: _ } => QResult::Fail(rcode),
+        Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ } => QResult::Fail(RCode::FormErr),
     }
 }
 
@@ -704,10 +720,10 @@ where
 #[pin_project(project = InnerActiveQueryProj)]
 enum InnerActiveQuery<'i, 'j> {
     Fresh,
-    ReadActiveQueries(BoxFuture<'i, RwLockReadGuard<'j, HashMap<Question, once_watch::Sender<QueryResponse<ResourceRecord>>>>>),
-    WriteActiveQueries(BoxFuture<'i, RwLockWriteGuard<'j, HashMap<Question, once_watch::Sender<QueryResponse<ResourceRecord>>>>>),
-    Following(#[pin] once_watch::Receiver<QueryResponse<ResourceRecord>>),
-    Cleanup(BoxFuture<'i, RwLockWriteGuard<'j, HashMap<Question, once_watch::Sender<QueryResponse<ResourceRecord>>>>>, Option<QueryResponse<ResourceRecord>>),
+    ReadActiveQueries(BoxFuture<'i, RwLockReadGuard<'j, HashMap<Question, once_watch::Sender<QResult>>>>),
+    WriteActiveQueries(BoxFuture<'i, RwLockWriteGuard<'j, HashMap<Question, once_watch::Sender<QResult>>>>),
+    Following(#[pin] once_watch::Receiver<QResult>),
+    Cleanup(BoxFuture<'i, RwLockWriteGuard<'j, HashMap<Question, once_watch::Sender<QResult>>>>, Option<QResult>),
     Complete,
 }
 
@@ -724,11 +740,11 @@ impl<'a, 'i, 'j> InnerActiveQuery<'i, 'j> where 'a: 'j, 'j: 'i {
         self.set(Self::WriteActiveQueries(w_active_queries));
     }
 
-    fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<QueryResponse<ResourceRecord>>) {
+    fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<QResult>) {
         self.set(Self::Following(receiver));
     }
 
-    fn set_cleanup(mut self: std::pin::Pin<&mut Self>, result: QueryResponse<ResourceRecord>, client: &'a Arc<DNSAsyncClient>) {
+    fn set_cleanup(mut self: std::pin::Pin<&mut Self>, result: QResult, client: &'a Arc<DNSAsyncClient>) {
         let w_active_queries = client.active_queries.write().boxed();
 
         self.set(Self::Cleanup(w_active_queries, Some(result)));
@@ -745,7 +761,7 @@ where
     'a: 'j,
     'j: 'i,
 {
-    type Output = QueryResponse<ResourceRecord>;
+    type Output = QResult;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         // Before polling round robin, poll the active query to see if we've already gotten a
@@ -874,7 +890,7 @@ where
                             this.inner.set_complete();
 
                             // TODO
-                            return Poll::Ready(QueryResponse::Error(RCode::ServFail));
+                            return Poll::Ready(QResult::Fail(RCode::ServFail));
                         },
                         Poll::Pending => (),
                     }
@@ -903,7 +919,7 @@ where
                                 Some(result) => {
                                     this.inner.set_complete();
 
-                                    return Poll::Ready(result)
+                                    return Poll::Ready(result);
                                 },
                                 None => {
                                     this.inner.set_complete();
@@ -918,7 +934,9 @@ where
                         },
                     }
                 },
-                InnerActiveQueryProj::Complete => panic!("ActiveQuery cannot be polled after completion"),
+                InnerActiveQueryProj::Complete => {
+                    panic!("ActiveQuery cannot be polled after completion");
+                },
             }
         }
 
@@ -929,7 +947,7 @@ where
                     InnerActiveQueryProj::Fresh
                   | InnerActiveQueryProj::ReadActiveQueries(_)
                   | InnerActiveQueryProj::WriteActiveQueries(_) => {
-
+                        // TODO: add comment
                     },
                     InnerActiveQueryProj::Following(result_receiver) => {
                         let _ = result_receiver.get_sender().send(result.clone());
@@ -943,22 +961,32 @@ where
                         match (&old_result, result) {
                             // If the old result has been set to None, we've got serious issues. But
                             // we can use this new result instead to smooth over those issues.
-                            (None, result) => { old_result.replace(result); },
+                            (None, result) => {
+                                old_result.replace(result);
+                            },
                             // If the old result is some error, we prefer a result that clearly
                             // states that there are no records at that name.
-                            (Some(QueryResponse::Error(_)), result @ QueryResponse::NoRecords) => { old_result.replace(result); },
+                            (Some(QResult::Fail(_) | QResult::Err(_)), QResult::Ok(QOk { answer, name_servers, additional })) if answer.is_empty() => {
+                                old_result.replace(QResult::Ok(QOk { answer, name_servers, additional }));
+                            },
                             // If the old result is some error or found no records, we prefer a
                             // result that found records.
                             // FIXME: If NoRecords was returned by one but Records by another, this
                             //        is probably a serious issue.
-                            (Some(QueryResponse::NoRecords | QueryResponse::Error(_)), result @ QueryResponse::Records(_)) => { old_result.replace(result); },
+                            (Some(QResult::Ok(QOk { answer: old_answer, name_servers: _, additional: _ })), result @ QResult::Ok(QOk { answer: _, name_servers: _, additional: _ })) if old_answer.is_empty() => {
+                                old_result.replace(result);
+                            },
                             // If a more specific error than the general "ServFail" is returned,
                             // prefer that error.
-                            (Some(QueryResponse::Error(RCode::ServFail)), result @ QueryResponse::Error(_)) => { old_result.replace(result); },
+                            (Some(QResult::Fail(RCode::ServFail)), result @ QResult::Fail(_)) => {
+                                old_result.replace(result);
+                            },
                             _ => (),
                         };
                     },
-                    InnerActiveQueryProj::Complete => panic!("ActiveQuery cannot be polled after completion"),
+                    InnerActiveQueryProj::Complete => {
+                        panic!("ActiveQuery cannot be polled after completion");
+                    },
                 }
             },
             Poll::Pending => {
@@ -988,12 +1016,12 @@ where
                             Some(result) => {
                                 this.inner.set_complete();
 
-                                return Poll::Ready(result)
+                                return Poll::Ready(result);
                             },
                             None => {
                                 this.inner.set_complete();
 
-                                panic!("The Option result is supposed to always be Some but was None")
+                                panic!("The Option result is supposed to always be Some but was None");
                             },
                         }
                     },
@@ -1003,7 +1031,9 @@ where
                     },
                 }
             },
-            InnerActiveQueryProj::Complete => panic!("ActiveQuery cannot be polled after completion"),
+            InnerActiveQueryProj::Complete => {
+                panic!("ActiveQuery cannot be polled after completion");
+            },
         }
     }
 }
@@ -1048,7 +1078,7 @@ where
 }
 
 #[inline]
-pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, context: Arc<Context>, name_servers: &[CDomainName]) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
+pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, context: Arc<Context>, name_servers: &[CDomainName]) -> QResult where CCache: AsyncCache + Send + Sync + 'static {
     info!(context:?; "Querying Name Servers for '{}'", context.query());
     NSRoundRobin::new(client, joined_cache, &context, name_servers).await
 }

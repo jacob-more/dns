@@ -18,6 +18,11 @@ impl AAAA {
     pub fn ipv6_addr(&self) -> &Ipv6Addr {
         &self.ipv6_address
     }
+    
+    #[inline]
+    pub fn into_ipv6_addr(self) -> Ipv6Addr {
+        self.ipv6_address
+    }
 }
 
 #[cfg(test)]

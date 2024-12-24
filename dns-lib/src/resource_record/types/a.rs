@@ -18,6 +18,11 @@ impl A {
     pub fn ipv4_addr(&self) -> &Ipv4Addr {
         &self.ipv4_address
     }
+    
+    #[inline]
+    pub fn into_ipv4_addr(self) -> Ipv4Addr {
+        self.ipv4_address
+    }
 }
 
 #[cfg(test)]

@@ -18,6 +18,11 @@ impl NS {
     pub fn name_server_domain_name(&self) -> &CDomainName {
         &self.ns_domain
     }
+
+    #[inline]
+    pub fn into_name_server_domain_name(self) -> CDomainName {
+        self.ns_domain
+    }
 }
 
 #[cfg(test)]

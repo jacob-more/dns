@@ -24,6 +24,11 @@ impl AFSDB {
     pub fn hostname(&self) -> &DomainName {
         &self.hostname
     }
+
+    #[inline]
+    pub fn into_hostname(self) -> DomainName {
+        self.hostname
+    }
 }
 
 #[cfg(test)]
