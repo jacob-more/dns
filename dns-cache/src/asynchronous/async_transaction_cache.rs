@@ -16,7 +16,7 @@ impl AsyncTransactionTreeCache {
     }
 
     #[inline]
-    async fn get_records(&self, query: &CacheQuery) -> Result<Vec<CacheRecord>, AsyncTreeCacheError> {
+    async fn get_records(&self, query: &CacheQuery<'_>) -> Result<Vec<CacheRecord>, AsyncTreeCacheError> {
         match query.qtype() {
             RType::ANY => {
                 if let Some(node) = self.cache.get_node(&query.question).await? {
@@ -67,9 +67,9 @@ impl AsyncTransactionTreeCache {
     #[inline]
     async fn insert_record(&self, record: CacheRecord) -> Result<(), AsyncTreeCacheError> {
         let question = Question::new(
-            record.record.get_name().clone(),
-            record.record.get_rtype(),
-            record.record.get_rclass()
+            record.get_name().clone(),
+            record.get_rtype(),
+            record.get_rclass()
         );
         let node = self.cache.get_or_create_node(&question).await?;
         let mut write_records = node.records.write().await;

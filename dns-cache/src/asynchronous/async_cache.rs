@@ -23,7 +23,7 @@ impl AsyncTreeCache {
 
 #[async_trait]
 impl AsyncCache for AsyncTreeCache {
-    async fn get(&self, query: &CacheQuery) -> CacheResponse {
+    async fn get(&self, query: &CacheQuery<'_>) -> CacheResponse {
         let transaction_response = self.transaction_cache.get(query);
         let main_response = self.main_cache.get(query);
         match join!(transaction_response, main_response) {

@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{ops::{Deref, DerefMut}, time::Instant};
 
 use crate::{query::question::Question, resource_record::{rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
 
@@ -10,12 +10,12 @@ pub mod transaction_cache;
 pub mod meta_cache;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub struct CacheQuery {
+pub struct CacheQuery<'a> {
     pub authoritative: bool,
-    pub question: Question,
+    pub question: &'a Question,
 }
 
-impl CacheQuery {
+impl<'a> CacheQuery<'a> {
     #[inline]
     pub const fn qname(&self) -> &CDomainName { &self.question.qname() }
 
@@ -73,5 +73,21 @@ impl CacheRecord {
             MetaAuth::NotAuthoritative => false,
             MetaAuth::NotAuthoritativeBootstrap => true,
         }
+    }
+}
+
+impl Deref for CacheRecord {
+    type Target = ResourceRecord;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.record
+    }
+}
+
+impl DerefMut for CacheRecord {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.record
     }
 }

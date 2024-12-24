@@ -61,9 +61,9 @@ impl MainTreeCache {
     #[inline]
     fn insert_record(&mut self, record: CacheRecord, received_time: Instant) -> Result<(), TreeCacheError> {
         let question = Question::new(
-            record.record.get_name().clone(),
-            record.record.get_rtype(),
-            record.record.get_rclass()
+            record.get_name().clone(),
+            record.get_rtype(),
+            record.get_rclass()
         );
         let node = self.cache.get_or_create_node(&question)?;
         match node.records.entry(question.qtype()) {
@@ -79,14 +79,14 @@ impl MainTreeCache {
                     if record.record == cached_record.record {
                         record_matched = true;
                         if record.is_authoritative() && cached_record.is_authoritative() {
-                            cached_record.record.set_ttl(*record.record.get_ttl());
+                            cached_record.set_ttl(*record.get_ttl());
                             cached_record.meta.insertion_time = received_time;
                         } else if !record.is_authoritative() && !cached_record.is_authoritative() {
-                            cached_record.record.set_ttl(*record.record.get_ttl());
+                            cached_record.set_ttl(*record.get_ttl());
                             cached_record.meta.insertion_time = received_time;
                         }
                     }
-                    if cached_record.meta.insertion_time.elapsed().as_secs() >= cached_record.record.get_ttl().as_secs() as u64 {
+                    if cached_record.meta.insertion_time.elapsed().as_secs() >= cached_record.get_ttl().as_secs() as u64 {
                         indexes_to_remove.push(index);
                     }
                 }
@@ -127,7 +127,7 @@ impl MainCache for MainTreeCache {
 
     fn insert_record(&mut self, record: CacheRecord) {
         // Records with TTL == 0 are not supposed to be cached
-        if record.record.get_ttl().as_secs() != 0 {
+        if record.get_ttl().as_secs() != 0 {
             let received_time = Instant::now();
             let _ = self.insert_record(record, received_time);
         }

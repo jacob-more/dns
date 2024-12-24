@@ -9,7 +9,7 @@ use crate::{query::message::Message, types::c_domain_name::CmpDomainName};
 use super::{CacheMeta, CacheQuery, CacheRecord, CacheResponse, MetaAuth};
 
 pub trait Cache {
-    fn get(&self, query: &CacheQuery) -> CacheResponse;
+    fn get(&self, query: &CacheQuery<'_>) -> CacheResponse;
     fn insert_record(&mut self, record: CacheRecord);
     fn insert_iter(&mut self, records: impl Iterator<Item = CacheRecord> + Send) {
         records.for_each(|record| self.insert_record(record));
@@ -18,7 +18,7 @@ pub trait Cache {
 
 #[async_trait]
 pub trait AsyncCache {
-    async fn get(&self, query: &CacheQuery) -> CacheResponse;
+    async fn get(&self, query: &CacheQuery<'_>) -> CacheResponse;
     async fn insert_record(&self, record: CacheRecord);
     async fn insert_stream(&self, records: impl Stream<Item = CacheRecord> + Send) {
         records.for_each_concurrent(None, |record| self.insert_record(record)).await;

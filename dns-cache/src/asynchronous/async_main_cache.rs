@@ -16,7 +16,7 @@ impl AsyncMainTreeCache {
     }
 
     #[inline]
-    async fn get_records(&self, query: &CacheQuery) -> Result<Vec<CacheRecord>, AsyncTreeCacheError> {
+    async fn get_records(&self, query: &CacheQuery<'_>) -> Result<Vec<CacheRecord>, AsyncTreeCacheError> {
         match query.qtype() {
             RType::ANY => {
                 if let Some(node) = self.cache.get_node(&query.question).await? {
@@ -71,9 +71,9 @@ impl AsyncMainTreeCache {
     #[inline]
     async fn insert_record(&self, record: CacheRecord, received_time: Instant) -> Result<(), AsyncTreeCacheError> {
         let question = Question::new(
-            record.record.get_name().clone(),
-            record.record.get_rtype(),
-            record.record.get_rclass()
+            record.get_name().clone(),
+            record.get_rtype(),
+            record.get_rclass()
         );
         let node = self.cache.get_or_create_node(&question).await?;
         let mut write_records = node.records.write().await;
@@ -91,11 +91,11 @@ impl AsyncMainTreeCache {
                         record_matched = true;
                         match (record.is_authoritative(), cached_record.is_authoritative()) {
                             (true, true) => {
-                                cached_record.record.set_ttl(*record.record.get_ttl());
+                                cached_record.set_ttl(*record.get_ttl());
                                 cached_record.meta.insertion_time = received_time;
                             },
                             (false, false) => {
-                                cached_record.record.set_ttl(*record.record.get_ttl());
+                                cached_record.set_ttl(*record.get_ttl());
                                 cached_record.meta.insertion_time = received_time;
                             },
                             // Non-authoritative records can be replaced with authoritative versions.
@@ -107,7 +107,7 @@ impl AsyncMainTreeCache {
                             (false, true) => (),
                         }
                     }
-                    if cached_record.meta.insertion_time.elapsed().as_secs() >= cached_record.record.get_ttl().as_secs() as u64 {
+                    if cached_record.meta.insertion_time.elapsed().as_secs() >= cached_record.get_ttl().as_secs() as u64 {
                         indexes_to_remove.push(index);
                     }
                 }
@@ -146,7 +146,7 @@ impl AsyncMainCache for AsyncMainTreeCache {
     }
 
     async fn insert_record(&self, record: CacheRecord) {
-        if record.record.get_ttl().as_secs() != 0 {
+        if record.get_ttl().as_secs() != 0 {
             let received_time = Instant::now();
             let _ = self.insert_record(record, received_time).await;
         }

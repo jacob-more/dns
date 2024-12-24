@@ -19,10 +19,7 @@ pub(crate) enum QueryResponse<T> {
 #[async_recursion]
 pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Context) -> QueryResponse<ResourceRecord> where CCache: AsyncCache + Send + Sync + 'static {
     debug!(context:?; "Start recursive search");
-    let cache_response: dns_lib::interface::cache::CacheResponse = client.cache.get(&CacheQuery {
-        authoritative: false,
-        question: context.query().clone(),
-    }).await;
+    let cache_response = joined_cache.get(&CacheQuery { authoritative: false, question: context.query() }).await;
     // Initial Cache Check: Check to see if the records we're looking for are already cached.
     trace!(context:?; "Recursive search initial cache response: '{cache_response:?}'");
     match cache_response {
