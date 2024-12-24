@@ -1,6 +1,6 @@
 use std::{collections::{hash_map::Entry, HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, CaseInsensitiveOwnedLabel, Label, LabelOwned}};
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitiveOwnedLabel, Label, LabelOwned}}};
 use futures::StreamExt;
 use tokio::sync::{Mutex, RwLock};
 

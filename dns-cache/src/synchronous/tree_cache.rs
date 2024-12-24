@@ -1,6 +1,6 @@
 use std::{collections::{hash_map::{Entry, Values}, HashMap}, error::Error, fmt::Display};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::c_domain_name::{CDomainName, CaseInsensitiveOwnedLabel, Label, LabelOwned}};
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitiveOwnedLabel, Label, LabelOwned}}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TreeCacheError {

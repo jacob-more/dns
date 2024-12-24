@@ -2,9 +2,10 @@ use std::{error::Error, fmt::{Debug, Display}, ops::Add};
 
 use dns_macros::ToPresentation;
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, CaseSensitiveRefLabel}}};
+use crate::serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
 
-use super::c_domain_name::{CaseInsensitiveRefLabel, CmpDomainName, LabelOwned, LabelRef};
+use super::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, CmpDomainName}, label::{CaseInsensitiveRefLabel, CaseSensitiveRefLabel, LabelOwned, LabelRef}};
+
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
