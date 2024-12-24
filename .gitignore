@@ -1,4 +1,8 @@
 **/Cargo.lock
-
 /target
+
 /.vscode
+
+/root.hints
+/root.zone
+/port-assignments.xml
