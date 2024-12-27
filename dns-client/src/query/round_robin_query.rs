@@ -25,7 +25,7 @@ async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(ns_domain: CDomainName
     let ns_addresses;
     let cache_response;
     match joined_cache.get(&CacheQuery { authoritative: false, question: &ns_question }).await {
-        CacheResponse::Records(records) => {
+        CacheResponse::Records(records) if !records.is_empty() => {
             ns_addresses = records.into_iter()
                 .filter_map(|record| rr_to_ip(record.record))
                 .collect();
@@ -150,7 +150,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                         .collect::<Vec<_>>();
                     let client = this.client.clone();
                     let context = &self.context;
-                    trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::GettingSocketStats");
+                    trace!(context:?; "NSQuery::Fresh(Hit) -> NSQuery::GettingSocketStats for {:#?}", self.ns_addresses);
 
                     self.state = InnerNSQuery::GettingSocketStats(query_for_sockets::<CCache>(client, sockets_addresses).boxed());
 
@@ -727,6 +727,15 @@ enum InnerActiveQuery<'i, 'j> {
     Complete,
 }
 
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, CCache> ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i, 'j, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+    fn new(client: &'a Arc<DNSAsyncClient>, joined_cache: &'b Arc<CCache>, question: &'c Arc<Context>, name_servers: &'d [CDomainName]) -> Self {
+        Self {
+            round_robin: NSRoundRobin::new(client, joined_cache, question, name_servers),
+            inner: InnerActiveQuery::Fresh,
+        }
+    }
+}
+
 impl<'a, 'i, 'j> InnerActiveQuery<'i, 'j> where 'a: 'j, 'j: 'i {
     fn set_read_active_queries(mut self: std::pin::Pin<&mut Self>, client: &'a Arc<DNSAsyncClient>) {
         let r_active_queries = client.active_queries.read().boxed();
@@ -1080,5 +1089,5 @@ where
 #[inline]
 pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, context: Arc<Context>, name_servers: &[CDomainName]) -> QResult where CCache: AsyncCache + Send + Sync + 'static {
     info!(context:?; "Querying Name Servers for '{}'", context.query());
-    NSRoundRobin::new(client, joined_cache, &context, name_servers).await
+    ActiveQuery::new(client, joined_cache, &context, name_servers).await
 }

@@ -48,7 +48,7 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         // that we're looking for.
         name_servers.shuffle(&mut thread_rng());
 
-        let search_query = Question::new(search_name.clone(), RType::A, context.qclass());
+        let search_query = Question::new(search_name, RType::A, context.qclass());
         let search_context = match context.clone().new_search_name(search_query) {
             Ok(search_context) => Arc::new(search_context),
             Err(error) => {
@@ -60,19 +60,15 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
 
         match query_name_servers(&client, &joined_cache, search_context, &name_servers).await {
             QResult::Err(error) => {
-                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context response: error {error}");
+                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' for '{}' with search context response: error {error}", context.query());
                 return error.into();
             },
             QResult::Fail(rcode) => {
-                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context response: rcode {rcode}");
+                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' for '{}' with search context response: rcode {rcode}", context.query());
                 return rcode.into();
             },
-            QResult::Ok(QOk { answer, name_servers, additional }) if answer.is_empty() => {
-                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context response: no records");
-                return QResult::Ok(QOk { answer, name_servers, additional });
-            },
             QResult::Ok(QOk { answer, name_servers: found_name_servers, additional: _ }) => {
-                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' with search context response: '{answer:?}'");
+                trace!(context:?; "Recursive search querying name servers '{name_servers:?}' for '{}' with search context response: '{answer:?}'", context.query());
 
                 if (index != 0) || (context.qtype() != RType::DNAME) {
                     if answer.iter().any(|record| record.get_rtype() == RType::DNAME) {
