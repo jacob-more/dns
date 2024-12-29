@@ -1,104 +1,105 @@
 use std::{cmp::{max, min}, collections::HashMap, future::Future, net::SocketAddr, num::NonZeroU8, pin::Pin, sync::{atomic::{AtomicBool, Ordering}, Arc}, task::Poll, time::Duration};
 
 use async_lib::{awake_token::{AwakeToken, AwokenToken, SameAwakeToken}, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
+use async_trait::async_trait;
 use atomic::Atomic;
 use dns_lib::{query::{message::Message, question::Question}, serde::wire::{to_wire::ToWire, write_wire::WriteWire}, types::c_domain_name::CompressionMap};
 use futures::{future::BoxFuture, FutureExt};
 use pin_project::{pin_project, pinned_drop};
 use tinyvec::TinyVec;
-use tokio::{io::{self, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
+use tokio::{io::{self, AsyncWriteExt}, join, net::{self, tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream}, pin, select, sync::{Mutex, RwLock, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
 
-use crate::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QueryOpt, QSendType}, errors, receive::{read_stream_message, read_udp_message}, rolling_average::{fetch_update, RollingAverage}};
+use crate::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt}, errors, receive::{read_stream_message, read_udp_message}, rolling_average::{fetch_update, RollingAverage}, socket::{tcp::{QTcpSocket, QTcpSocketProj, TcpSocket, TcpState}, udp::{QUdpSocket, QUdpSocketProj, UdpSocket, UdpState}, udp_tcp::{QUdpTcpSocket, QUdpTcpSocketProj}, FutureSocket, PollSocket}};
 
 const MAX_MESSAGE_SIZE: u16 = 8192;
 
 const MILLISECONDS_IN_1_SECOND: f64 = 1000.0;
 
-const TCP_INIT_TIMEOUT: Duration = Duration::from_secs(5);
-const TCP_LISTEN_TIMEOUT: Duration = Duration::from_secs(120);
-const UDP_LISTEN_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const TCP_INIT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const TCP_LISTEN_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const UDP_LISTEN_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The initial TCP timeout, used when setting up a socket, before anything is known about the
 /// average response time.
-const INIT_TCP_TIMEOUT: Duration = Duration::from_secs(1);
+pub(crate) const INIT_TCP_TIMEOUT: Duration = Duration::from_secs(1);
 /// The percentage of the average TCP response time that the timeout should be set to. Currently,
 /// this represents 200%. If the average response time were 20 ms, then the retransmission timeout
 /// would be 40 ms.
-const TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME: f64 = 2.00;
+pub(crate) const TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME: f64 = 2.00;
 /// The maximum percentage of the average TCP response time that the timeout should be set to.
 /// Currently, this represents 400%. If the average response time were 20 ms, then the
 /// retransmission timeout would be 80 ms.
-const TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME: f64 = 4.00;
+pub(crate) const TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME: f64 = 4.00;
 /// The step size to use if INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is exceeded.
-const TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
+pub(crate) const TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
 /// When 20% or more of packets are being dropped (for TCP, this just means that the queries are
 /// timing out), then it is time to start slowing down the socket.
-const INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+pub(crate) const INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
 /// When 1% or more of packets are being dropped (for TCP, this just means that the queries are
 /// timing out), then we might want to try speeding up the socket again, to reflect the average
 /// response time.
-const DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+pub(crate) const DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
 /// The maximum allowable TCP timeout.
-const MAX_TCP_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const MAX_TCP_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum allowable TCP timeout.
-const MIN_TCP_TIMEOUT: Duration = Duration::from_millis(50);
+pub(crate) const MIN_TCP_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// The initial UDP retransmission timeout, used when setting up a socket, before anything is known
 /// about the average response time.
-const INIT_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_millis(500);
+pub(crate) const INIT_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_millis(500);
 /// The percentage of the average UDP response time that the timeout should be set to. Currently,
 /// this represents 150%. If the average response time were 20 ms, then the retransmission timeout
 /// would be 30 ms.
-const UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 1.50;
+pub(crate) const UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 1.50;
 /// The maximum percentage of the average UDP response time that the timeout should be set to.
 /// Currently, this represents 250%. If the average response time were 20 ms, then the
 /// retransmission timeout would be 60 ms.
-const UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 3.00;
+pub(crate) const UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 3.00;
 /// The step size to use if INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is
 /// exceeded.
-const UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
+pub(crate) const UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
 /// When 20% or more of packets are being dropped, then it is time to start slowing down the socket.
-const INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+pub(crate) const INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
 /// When 1% or more of packets are being dropped, then we might want to try speeding up the socket
 /// again, to reflect the average response time.
-const DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+pub(crate) const DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
 /// The maximum allowable UDP retransmission timeout.
-const MAX_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const MAX_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum allowable UDP retransmission timeout.
-const MIN_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_millis(50);
+pub(crate) const MIN_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// The initial UDP timeout, used when setting up a socket, before anything is known about the
 /// average response time.
-const INIT_UDP_TIMEOUT: Duration = Duration::from_millis(500);
+pub(crate) const INIT_UDP_TIMEOUT: Duration = Duration::from_millis(500);
 /// The number of UDP retransmission that are allowed for a mixed UDP-TCP query.
-const UDP_RETRANSMISSIONS: u8 = 1;
+pub(crate) const UDP_RETRANSMISSIONS: u8 = 1;
 /// The percentage of the average UDP response time that the timeout should be set to. Currently,
 /// this represents 200%. If the average response time were 20 ms, then the timeout would be 40 ms.
-const UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 2.00;
+pub(crate) const UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 2.00;
 /// The maximum percentage of the average UDP response time that the timeout should be set to.
 /// Currently, this represents 400%. If the average response time were 20 ms, then the
 /// retransmission timeout would be 80 ms.
-const UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 4.00;
+pub(crate) const UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 4.00;
 /// The step size to use if INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is
 /// exceeded.
-const UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
+pub(crate) const UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration = Duration::from_millis(50);
 /// When 20% or more of packets are being dropped, then it is time to start slowing down the socket.
-const INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+pub(crate) const INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
 /// When 1% or more of packets are being dropped, then we might want to try speeding up the socket
 /// again, to reflect the average response time.
-const DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+pub(crate) const DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
 /// The maximum allowable UDP timeout.
-const MAX_UDP_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const MAX_UDP_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum allowable UDP timeout.
-const MIN_UDP_TIMEOUT: Duration = Duration::from_millis(50);
+pub(crate) const MIN_UDP_TIMEOUT: Duration = Duration::from_millis(50);
 
 // Using the safe checked version of new is not stable. As long as we always use non-zero constants,
 // there should not be any problems with this.
-const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(11) };
-const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(13) };
-const ROLLING_AVERAGE_UDP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(11) };
-const ROLLING_AVERAGE_UDP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(13) };
-const ROLLING_AVERAGE_UDP_MAX_TRUNCATED: NonZeroU8      = unsafe { NonZeroU8::new_unchecked(50) };
+pub(crate) const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(11) };
+pub(crate) const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(13) };
+pub(crate) const ROLLING_AVERAGE_UDP_MAX_DROPPED: NonZeroU8        = unsafe { NonZeroU8::new_unchecked(11) };
+pub(crate) const ROLLING_AVERAGE_UDP_MAX_RESPONSE_TIMES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(13) };
+pub(crate) const ROLLING_AVERAGE_UDP_MAX_TRUNCATED: NonZeroU8      = unsafe { NonZeroU8::new_unchecked(50) };
 
 fn bound<T>(value: T, lower_bound: T, upper_bound: T) -> T where T: Ord {
     debug_assert!(lower_bound <= upper_bound);
@@ -142,989 +143,10 @@ enum UdpResponseTime {
     None,
 }
 
-enum PollSocket<E> {
-    Error(E),
-    Continue,
-    Pending,
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 enum LoopPoll {
     Continue,
     Pending,
-}
-
-trait FutureSocket<'d, E> {
-    /// Polls the socket to try to get the active the socket if possible. Initializes the socket if
-    /// needed. If the connection fails, is not allowed, or is killed, PollSocket::Error will be
-    /// returned with the error and the socket should not be polled again. Even after the connection
-    /// is Acquired, calling this function to poll the kill token to be notified when the connection
-    /// is killed.
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket<E> where 'a: 'd;
-}
-
-#[pin_project(project = TQSocketProj)]
-enum TQSocket<'c, 'd>
-where
-    'd: 'c,
-{
-    Fresh,
-    GetTcpState(BoxFuture<'c, RwLockReadGuard<'d, TcpState>>),
-    GetTcpEstablishing {
-        #[pin]
-        receive_tcp_socket: once_watch::Receiver<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
-    },
-    InitTcp {
-        #[pin]
-        join_handle: JoinHandle<Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError>>,
-    },
-    Acquired {
-        tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
-        #[pin]
-        kill_tcp: AwokenToken,
-    },
-    Closed(errors::TcpSocketError),
-}
-
-impl<'a, 'c, 'd, 'e> TQSocket<'c, 'd>
-where
-    'a: 'd,
-    'd: 'c,
-{
-    fn set_get_tcp_state(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
-        let r_tcp_state = socket.tcp.read().boxed();
-
-        self.set(TQSocket::GetTcpState(r_tcp_state));
-    }
-
-    fn set_get_tcp_establishing(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>) {
-        self.set(TQSocket::GetTcpEstablishing { receive_tcp_socket: receiver });
-    }
-
-    fn set_init_tcp(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
-        let init_tcp = tokio::spawn(socket.clone().init_tcp());
-
-        self.set(TQSocket::InitTcp { join_handle: init_tcp });
-    }
-
-    fn set_acquired(mut self: std::pin::Pin<&mut Self>, tcp_socket: Arc<Mutex<OwnedWriteHalf>>, kill_tcp_token: AwakeToken) {
-        self.set(TQSocket::Acquired { tcp_socket, kill_tcp: kill_tcp_token.awoken() });
-    }
-
-    fn set_closed(mut self: std::pin::Pin<&mut Self>, reason: errors::TcpSocketError) {
-        self.set(TQSocket::Closed(reason));
-    }
-}
-
-impl<'c, 'd> FutureSocket<'d, errors::TcpSocketError> for TQSocket<'c, 'd> {
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::TcpSocketError> where 'a: 'd {
-        match self.as_mut().project() {
-            TQSocketProj::Fresh => {
-                self.as_mut().set_get_tcp_state(socket);
-
-                // Next loop should poll `r_tcp_state`
-                return PollSocket::Continue;
-            },
-            TQSocketProj::GetTcpState(r_tcp_state) => {
-                match r_tcp_state.as_mut().poll(cx) {
-                    Poll::Ready(tcp_state) => {
-                        match &*tcp_state {
-                            TcpState::Managed { socket, kill } => {
-                                self.as_mut().set_acquired(socket.clone(), kill.clone());
-
-                                // Next loop should poll `kill_tcp`
-                                return PollSocket::Continue;
-                            },
-                            TcpState::Establishing { sender, kill: _ } => {
-                                self.as_mut().set_get_tcp_establishing(sender.subscribe());
-
-                                // Next loop should poll `receive_tcp_socket`
-                                return PollSocket::Continue;
-                            },
-                            TcpState::None => {
-                                self.as_mut().set_init_tcp(socket);
-
-                                // Next loop should poll `join_handle`
-                                return PollSocket::Continue;
-                            },
-                            TcpState::Blocked => {
-                                let error = errors::TcpSocketError::Disabled;
-
-                                self.as_mut().set_closed(error.clone());
-
-                                return PollSocket::Error(error);
-                            },
-                        }
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
-                }
-            },
-            TQSocketProj::GetTcpEstablishing { mut receive_tcp_socket } => {
-                match receive_tcp_socket.as_mut().poll(cx) {
-                    Poll::Ready(Ok((tcp_socket, tcp_kill))) => {
-                        self.as_mut().set_acquired(tcp_socket, tcp_kill);
-
-                        // Next loop should poll `kill_tcp`
-                        return PollSocket::Continue;
-                    },
-                    Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                        let error = errors::TcpSocketError::Shutdown;
-
-                        self.as_mut().set_closed(error.clone());
-
-                        return PollSocket::Error(error);
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
-                }
-            },
-            TQSocketProj::InitTcp { mut join_handle } => {
-                match join_handle.as_mut().poll(cx) {
-                    Poll::Ready(Ok(Ok((tcp_socket, kill_tcp_token)))) => {
-                        self.as_mut().set_acquired(tcp_socket, kill_tcp_token);
-
-                        // Next loop should poll `kill_tcp`
-                        return PollSocket::Continue;
-                    },
-                    Poll::Ready(Ok(Err(error))) => {
-                        let error = errors::TcpSocketError::from(error);
-
-                        self.as_mut().set_closed(error.clone());
-
-                        return PollSocket::Error(error);
-                    },
-                    Poll::Ready(Err(join_error)) => {
-                        let error = errors::TcpSocketError::from(
-                            errors::TcpInitError::from(join_error)
-                        );
-
-                        self.as_mut().set_closed(error.clone());
-
-                        return PollSocket::Error(error);
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
-                }
-            },
-            TQSocketProj::Acquired { tcp_socket: _, mut kill_tcp } => {
-                match kill_tcp.as_mut().poll(cx) {
-                    Poll::Ready(()) => {
-                        let error = errors::TcpSocketError::Shutdown;
-
-                        self.as_mut().set_closed(error.clone());
-
-                        return PollSocket::Error(error);
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
-                }
-            },
-            TQSocketProj::Closed(error) => {
-                return PollSocket::Error(error.clone());
-            },
-        }
-    }
-}
-
-#[pin_project(project = UQSocketProj)]
-enum UQSocket<'c, 'd, 'e>
-where
-    'd: 'c,
-{
-    Fresh,
-    GetReadUdpState(BoxFuture<'c, RwLockReadGuard<'d, UdpState>>),
-    InitUdp(BoxFuture<'e, Result<(Arc<UdpSocket>, AwakeToken), errors::UdpInitError>>),
-    GetWriteUdpState(BoxFuture<'c, RwLockWriteGuard<'d, UdpState>>, Arc<UdpSocket>, AwakeToken),
-    Acquired {
-        udp_socket: Arc<UdpSocket>,
-        #[pin]
-        kill_udp: AwokenToken,
-    },
-    Closed(errors::UdpSocketError),
-}
-
-impl<'a, 'c, 'd, 'e> UQSocket<'c, 'd, 'e>
-where
-    'a: 'd,
-    'd: 'c,
-{
-    fn set_get_read_udp_state(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
-        let r_udp_state = socket.udp.read().boxed();
-
-        self.set(UQSocket::GetReadUdpState(r_udp_state));
-    }
-
-    fn set_init_udp(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
-        let upstream_socket = socket.upstream_socket;
-        let init_udp = async move {
-            let udp_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
-            udp_socket.connect(upstream_socket).await?;
-            return Ok((udp_socket, AwakeToken::new()));
-        }.boxed();
-
-        self.set(UQSocket::InitUdp(init_udp));
-    }
-    fn set_get_write_udp_state(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>, udp_socket: Arc<UdpSocket>, kill_udp: AwakeToken) {
-        let w_udp_state = socket.udp.write().boxed();
-
-        self.set(UQSocket::GetWriteUdpState(w_udp_state, udp_socket, kill_udp));
-    }
-
-    fn set_acquired(mut self: std::pin::Pin<&mut Self>, udp_socket: Arc<UdpSocket>, kill_udp_token: AwakeToken) {
-        self.set(UQSocket::Acquired { udp_socket, kill_udp: kill_udp_token.awoken() });
-    }
-
-    fn set_closed(mut self: std::pin::Pin<&mut Self>, reason: errors::UdpSocketError) {
-        self.set(UQSocket::Closed(reason));
-    }
-}
-
-impl<'c, 'd, 'e> FutureSocket<'d, errors::UdpSocketError> for UQSocket<'c, 'd, 'e> {
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::UdpSocketError> where 'a: 'd {
-        match self.as_mut().project() {
-            UQSocketProj::Fresh => {
-                self.as_mut().set_get_read_udp_state(socket);
-
-                // Next loop should poll `r_udp_state`
-                return PollSocket::Continue;
-            },
-            UQSocketProj::GetReadUdpState(r_udp_state) => {
-                match r_udp_state.as_mut().poll(cx) {
-                    Poll::Ready(udp_state) => {
-                        match &*udp_state {
-                            UdpState::Managed(socket, kill) => {
-                                self.as_mut().set_acquired(socket.clone(), kill.clone());
-
-                                // Next loop should poll `kill_udp`
-                                return PollSocket::Continue;
-                            },
-                            UdpState::None => {
-                                self.as_mut().set_init_udp(socket);
-
-                                // Next loop should poll `init_udp`
-                                return PollSocket::Continue;
-                            },
-                            UdpState::Blocked => {
-                                let error = errors::UdpSocketError::Disabled;
-
-                                self.as_mut().set_closed(error.clone());
-
-                                return PollSocket::Error(error);
-                            },
-                        }
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
-                }
-            },
-            UQSocketProj::InitUdp(init_udp) => {
-                match init_udp.as_mut().poll(cx) {
-                    Poll::Ready(Ok((udp_socket, kill_udp_token))) => {
-                        task::spawn(socket.clone().listen_udp(udp_socket.clone(), kill_udp_token.clone()));
-                        self.as_mut().set_get_write_udp_state(socket, udp_socket, kill_udp_token);
-
-                        // Next loop should poll `kill_udp`
-                        return PollSocket::Continue;
-                    },
-                    Poll::Ready(Err(error)) => {
-                        let error = errors::UdpSocketError::from(error);
-
-                        self.as_mut().set_closed(error.clone());
-
-                        return PollSocket::Error(error);
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
-                }
-            },
-            UQSocketProj::GetWriteUdpState(w_udp_state, udp_socket, kill_udp) => {
-                match w_udp_state.as_mut().poll(cx) {
-                    Poll::Ready(mut udp_state) => {
-                        match &*udp_state {
-                            UdpState::Managed(udp_socket, kill) => {
-                                // The socket that we created should be destroyed. We'll just use
-                                // the one that already exists.
-                                kill_udp.awake();
-
-                                self.as_mut().set_acquired(udp_socket.clone(), kill.clone());
-
-                                // Next loop should poll `kill_udp`
-                                return PollSocket::Continue;
-                            },
-                            UdpState::None => {
-                                let udp_socket = udp_socket.clone();
-                                let kill_udp = kill_udp.clone();
-
-                                self.as_mut().set_acquired(udp_socket.clone(), kill_udp.clone());
-
-                                *udp_state = UdpState::Managed(udp_socket, kill_udp);
-
-                                // Next loop should poll `init_udp`
-                                return PollSocket::Continue;
-                            },
-                            UdpState::Blocked => {
-                                kill_udp.awake();
-                                let error = errors::UdpSocketError::Disabled;
-
-                                self.as_mut().set_closed(error.clone());
-
-                                return PollSocket::Error(error);
-                            },
-                        }
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
-                }
-            },
-            UQSocketProj::Acquired { udp_socket: _, mut kill_udp } => {
-                match kill_udp.as_mut().poll(cx) {
-                    Poll::Ready(()) => {
-                        let error = errors::UdpSocketError::Shutdown;
-
-                        self.as_mut().set_closed(error.clone());
-
-                        return PollSocket::Error(error);
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
-                }
-            },
-            UQSocketProj::Closed(error) => {
-                return PollSocket::Error(error.clone());
-            },
-        }
-    }
-}
-
-#[pin_project(project = EitherSocketProj)]
-enum EitherSocket<'c, 'd, 'e> {
-    Udp {
-        #[pin]
-        uq_socket: UQSocket<'c, 'd, 'e>,
-        retransmits: u8,
-    },
-    Tcp {
-        #[pin]
-        tq_socket: TQSocket<'c, 'd>,
-    },
-}
-
-impl<'c, 'd, 'e> FutureSocket<'d, errors::SocketError> for EitherSocket<'c, 'd, 'e> {
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<MixedSocket>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::SocketError> where 'a: 'd {
-        match self.as_mut().project() {
-            EitherSocketProj::Udp { mut uq_socket, retransmits: _ } => {
-                match uq_socket.poll(socket, cx) {
-                    PollSocket::Error(error) => PollSocket::Error(errors::SocketError::from(error)),
-                    PollSocket::Continue => PollSocket::Continue,
-                    PollSocket::Pending => PollSocket::Pending,
-                }
-            },
-            EitherSocketProj::Tcp { mut tq_socket } => {
-                match tq_socket.poll(socket, cx) {
-                    PollSocket::Error(error) => PollSocket::Error(errors::SocketError::from(error)),
-                    PollSocket::Continue => PollSocket::Continue,
-                    PollSocket::Pending => PollSocket::Pending,
-                }
-            },
-        }
-    }
-}
-
-#[derive(Debug)]
-enum CleanupReason<E> {
-    Timeout,
-    Killed,
-    ConnectionError(E),
-}
-
-enum TcpState {
-    Managed {
-        socket: Arc<Mutex<OwnedWriteHalf>>,
-        kill: AwakeToken
-    },
-    Establishing {
-        sender: once_watch::Sender<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
-        kill: AwakeToken
-    },
-    None,
-    Blocked,
-}
-
-#[pin_project(PinnedDrop)]
-struct InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l>
-where
-    'a: 'c + 'f + 'l
-{
-    socket: &'a Arc<MixedSocket>,
-    #[pin]
-    kill_tcp: AwokenToken,
-    tcp_socket_sender: once_watch::Sender<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
-    #[pin]
-    timeout: Sleep,
-    #[pin]
-    inner: InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l>,
-}
-
-#[pin_project(project = InnerInitTcpProj)]
-enum InnerInitTcp<'b, 'c, 'd, 'e, 'f, 'k, 'l>
-where
-    'c: 'b,
-    'f: 'e,
-    'l: 'k,
-{
-    Fresh,
-    WriteEstablishing(BoxFuture<'b, RwLockWriteGuard<'c, TcpState>>),
-    Connecting(BoxFuture<'d, io::Result<TcpStream>>),
-    WriteNone {
-        reason: CleanupReason<errors::TcpInitError>,
-        w_tcp_state: BoxFuture<'e, RwLockWriteGuard<'f, TcpState>>,
-    },
-    WriteManaged {
-        w_tcp_state: BoxFuture<'k, RwLockWriteGuard<'l, TcpState>>,
-        tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
-    },
-    GetEstablishing {
-        #[pin]
-        receive_tcp_socket: once_watch::Receiver<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken)>,
-    },
-    Complete,
-}
-
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
-    pub fn new(socket: &'a Arc<MixedSocket>, timeout: Option<Duration>) -> Self {
-        let kill_tcp_token = AwakeToken::new();
-        let tcp_socket_sender = once_watch::Sender::new();
-        let timeout = timeout.unwrap_or(TCP_INIT_TIMEOUT);
-
-        Self {
-            socket,
-            kill_tcp: kill_tcp_token.awoken(),
-            tcp_socket_sender,
-            timeout: tokio::time::sleep(timeout),
-            inner: InnerInitTcp::Fresh,
-        }
-    }
-}
-
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> Future for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
-    type Output = Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError>;
-
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        let mut this = self.as_mut().project();
-        match this.inner.as_mut().project() {
-            InnerInitTcpProj::Fresh
-          | InnerInitTcpProj::WriteEstablishing(_) => {
-                if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
-                    this.tcp_socket_sender.close();
-                    this.kill_tcp.awake();
-                    let error = errors::TcpInitError::SocketShutdown;
-
-                    *this.inner = InnerInitTcp::Complete;
-
-                    // Exit loop: query killed.
-                    return Poll::Ready(Err(error));
-                }
-
-                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    this.tcp_socket_sender.close();
-                    this.kill_tcp.awake();
-                    let error = errors::TcpInitError::Timeout;
-
-                    *this.inner = InnerInitTcp::Complete;
-
-                    // Exit loop: query timed out.
-                    return Poll::Ready(Err(error));
-                }
-            },
-            InnerInitTcpProj::Connecting(_) => {
-                if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
-                    let w_tcp_state = this.socket.tcp.write().boxed();
-
-                    *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::Timeout, w_tcp_state };
-
-                    // First loop: poll the write lock.
-                } else if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    let w_tcp_state = this.socket.tcp.write().boxed();
-
-                    *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::Killed, w_tcp_state };
-
-                    // First loop: poll the write lock.
-                }
-            },
-            InnerInitTcpProj::GetEstablishing { receive_tcp_socket: _ } => {
-                // Does not poll `kill_tcp` because that gets awoken to kill
-                // the listener (if it is set up).
-                if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    this.tcp_socket_sender.close();
-                    this.kill_tcp.awake();
-                    let error = errors::TcpInitError::Timeout;
-
-                    *this.inner = InnerInitTcp::Complete;
-
-                    // Exit loop: query timed out.
-                    return Poll::Ready(Err(error));
-                }
-            },
-            InnerInitTcpProj::WriteNone { reason: _, w_tcp_state: _ }
-          | InnerInitTcpProj::WriteManaged { w_tcp_state: _, tcp_socket: _ }
-          | InnerInitTcpProj::Complete => {
-                // Not allowed to timeout or be killed. These are cleanup
-                // states.
-            },
-        }
-
-        loop {
-            match this.inner.as_mut().project() {
-                InnerInitTcpProj::Fresh => {
-                    let w_tcp_state = this.socket.tcp.write().boxed();
-
-                    *this.inner = InnerInitTcp::WriteEstablishing(w_tcp_state);
-
-                    // Next loop: poll the write lock to get the TCP state
-                    continue;
-                }
-                InnerInitTcpProj::WriteEstablishing(w_tcp_state) => {
-                    match w_tcp_state.as_mut().poll(cx) {
-                        Poll::Ready(mut tcp_state) => {
-                            match &*tcp_state {
-                                TcpState::Managed { socket, kill } => {
-                                    let tcp_socket = socket.clone();
-                                    let kill_tcp_token = kill.clone();
-
-                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection already setup.
-                                    // Nothing to do.
-                                    return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
-                                },
-                                TcpState::Establishing { sender: active_sender, kill: _ } => {
-                                    let receive_tcp_socket = active_sender.subscribe();
-
-                                    *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
-
-                                    // Next loop: poll the receiver. Another
-                                    // process is setting up the connection.
-                                    continue;
-                                },
-                                TcpState::None => {
-                                    let tcp_socket_sender = this.tcp_socket_sender.clone();
-                                    let kill_init_tcp = this.kill_tcp.get_awake_token();
-                                    let init_connection = TcpStream::connect(this.socket.upstream_socket).boxed();
-
-                                    *tcp_state = TcpState::Establishing {
-                                        sender: tcp_socket_sender,
-                                        kill: kill_init_tcp,
-                                    };
-
-                                    *this.inner = InnerInitTcp::Connecting(init_connection);
-
-                                    // Next loop: poll the TCP stream and start
-                                    // connecting.
-                                    continue;
-                                },
-                                TcpState::Blocked => {
-                                    this.tcp_socket_sender.close();
-                                    this.kill_tcp.awake();
-                                    let error = errors::TcpInitError::SocketDisabled;
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection not allowed.
-                                    return Poll::Ready(Err(error));
-                                },
-                            }
-                        }
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the TcpState
-                            // write lock is available, the timeout condition
-                            // occurs, or the connection is killed.
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                InnerInitTcpProj::Connecting(init_connection) => {
-                    match init_connection.as_mut().poll(cx) {
-                        Poll::Ready(Ok(socket)) => {
-                            let (tcp_reader, tcp_writer) = socket.into_split();
-                            let tcp_socket = Arc::new(Mutex::new(tcp_writer));
-                            let w_tcp_state = this.socket.tcp.write().boxed();
-                            task::spawn(this.socket.clone().listen_tcp(tcp_reader, this.kill_tcp.get_awake_token()));
-
-                            *this.inner = InnerInitTcp::WriteManaged { w_tcp_state, tcp_socket };
-
-                            // Next loop: poll the write lock.
-                            continue;
-                        },
-                        Poll::Ready(Err(error)) => {
-                            let w_tcp_state = this.socket.tcp.write().boxed();
-                            let error = errors::TcpInitError::from(error);
-
-                            *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::ConnectionError(error), w_tcp_state };
-
-                            // Next loop: poll the write lock.
-                            continue;
-                        },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once TCP is
-                            // connected, the timeout condition occurs, or the
-                            // connection is killed.
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                InnerInitTcpProj::WriteNone { reason: CleanupReason::ConnectionError(error), w_tcp_state } => {
-                    match w_tcp_state.as_mut().poll(cx) {
-                        Poll::Ready(mut w_tcp_state) => {
-                            match &*w_tcp_state {
-                                TcpState::Managed { socket, kill } => {
-                                    let tcp_socket = socket.clone();
-                                    let kill_tcp_token = kill.clone();
-
-                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection already setup.
-                                    // Nothing to do.
-                                    return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
-                                },
-                                TcpState::Establishing { sender, kill: active_kill_tcp_token } => {
-                                    // If we are the one who set the state to Establishing...
-                                    if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
-                                        *w_tcp_state = TcpState::None;
-                                        drop(w_tcp_state);
-                                        this.tcp_socket_sender.close();
-                                        this.kill_tcp.awake();
-                                        let error = error.clone();
-
-                                        *this.inner = InnerInitTcp::Complete;
-
-                                        // Exit loop: we received a connection
-                                        // error.
-                                        return Poll::Ready(Err(error));
-                                    // If some other process set the state to Establishing...
-                                    } else {
-                                        let receive_tcp_socket = sender.subscribe();
-
-                                        *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
-
-                                        // Next loop: poll the receiver.
-                                        continue;
-                                    }
-                                },
-                                TcpState::None
-                              | TcpState::Blocked => {
-                                    drop(w_tcp_state);
-                                    this.tcp_socket_sender.close();
-                                    this.kill_tcp.awake();
-                                    let error = error.clone();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: we received a connection
-                                    // error.
-                                    return Poll::Ready(Err(error));
-                                },
-                            }
-                        },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the TcpState
-                            // write lock is available. Cannot time out or be
-                            // killed.
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                InnerInitTcpProj::WriteNone { reason: CleanupReason::Timeout, w_tcp_state } => {
-                    match w_tcp_state.as_mut().poll(cx) {
-                        Poll::Ready(mut w_tcp_state) => {
-                            match &*w_tcp_state {
-                                TcpState::Managed { socket, kill } => {
-                                    let tcp_socket = socket.clone();
-                                    let kill_tcp_token = kill.clone();
-
-                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection already setup.
-                                    // Nothing to do.
-                                    return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
-                                },
-                                TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
-                                    // If we are the one who set the state to Establishing...
-                                    if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
-                                        *w_tcp_state = TcpState::None;
-                                    }
-                                    drop(w_tcp_state);
-                                    this.tcp_socket_sender.close();
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection timed out.
-                                    return Poll::Ready(Err(errors::TcpInitError::Timeout));
-                                },
-                                TcpState::None
-                              | TcpState::Blocked => {
-                                    drop(w_tcp_state);
-                                    this.tcp_socket_sender.close();
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection timed out.
-                                    return Poll::Ready(Err(errors::TcpInitError::Timeout));
-                                },
-                            }
-                        },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the TcpState
-                            // write lock is available. Cannot time out or be
-                            // killed.
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                InnerInitTcpProj::WriteNone { reason: CleanupReason::Killed, w_tcp_state } => {
-                    match w_tcp_state.as_mut().poll(cx) {
-                        Poll::Ready(mut w_tcp_state) => {
-                            match &*w_tcp_state {
-                                TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
-                                    // If we are the one who set the state to Establishing...
-                                    if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
-                                        *w_tcp_state = TcpState::None;
-                                    }
-                                    drop(w_tcp_state);
-                                    this.tcp_socket_sender.close();
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection killed.
-                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
-                                },
-                                TcpState::Managed { socket: _, kill: _ }
-                              | TcpState::None
-                              | TcpState::Blocked => {
-                                    drop(w_tcp_state);
-                                    this.tcp_socket_sender.close();
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection killed.
-                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
-                                },
-                            }
-                        },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the TcpState
-                            // write lock is available. Cannot time out or be
-                            // killed.
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                InnerInitTcpProj::WriteManaged { w_tcp_state, tcp_socket } => {
-                    match w_tcp_state.as_mut().poll(cx) {
-                        Poll::Ready(mut w_tcp_state) => {
-                            match &*w_tcp_state {
-                                TcpState::Establishing { sender: active_sender, kill: active_kill_tcp_token } => {
-                                    // If we are the one who set the state to Establishing...
-                                    if this.kill_tcp.same_awake_token(active_kill_tcp_token) {
-                                        *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: this.kill_tcp.get_awake_token() };
-                                        drop(w_tcp_state);
-
-                                        let _ = this.tcp_socket_sender.send((tcp_socket.clone(), this.kill_tcp.get_awake_token()));
-
-                                        let tcp_socket = tcp_socket.clone();
-                                        let kill_tcp_token = this.kill_tcp.get_awake_token();
-
-                                        *this.inner = InnerInitTcp::Complete;
-
-                                        // Exit loop: connection setup
-                                        // completed and registered.
-                                        return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
-                                    // If some other process set the state to Establishing...
-                                    } else {
-                                        let receive_tcp_socket = active_sender.subscribe();
-                                        drop(w_tcp_state);
-
-                                        // Shutdown the listener we started.
-                                        this.kill_tcp.awake();
-
-                                        *this.inner = InnerInitTcp::GetEstablishing { receive_tcp_socket };
-
-                                        // Next loop: poll the receiver.
-                                        continue;
-                                    }
-                                },
-                                TcpState::Managed { socket, kill } => {
-                                    let tcp_socket = socket.clone();
-                                    let kill_tcp_token = kill.clone();
-                                    drop(w_tcp_state);
-
-                                    let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
-                                    // Shutdown the listener we started.
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: connection already setup.
-                                    // Nothing to do.
-                                    return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
-                                },
-                                TcpState::None
-                              | TcpState::Blocked => {
-                                    drop(w_tcp_state);
-
-                                    this.tcp_socket_sender.close();
-                                    // Shutdown the listener we started.
-                                    this.kill_tcp.awake();
-
-                                    *this.inner = InnerInitTcp::Complete;
-
-                                    // Exit loop: state changed after this task
-                                    // set it to Establishing. Indicates that
-                                    // this task is no longer in charge.
-                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
-                                },
-                            }
-                        },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the TcpState
-                            // write lock is available. Cannot time out or be
-                            // killed.
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                InnerInitTcpProj::GetEstablishing { mut receive_tcp_socket } => {
-                    match receive_tcp_socket.as_mut().poll(cx) {
-                        Poll::Ready(Ok((tcp_socket, kill_tcp_token))) => {
-                            let _ = this.tcp_socket_sender.send((tcp_socket.clone(), kill_tcp_token.clone()));
-                            this.kill_tcp.awake();
-
-                            *this.inner = InnerInitTcp::Complete;
-
-                            // Exit loop: connection setup completed and
-                            // registered by a different init process.
-                            return Poll::Ready(Ok((tcp_socket, kill_tcp_token)));
-                        },
-                        Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                            this.tcp_socket_sender.close();
-                            this.kill_tcp.awake();
-
-                            *this.inner = InnerInitTcp::Complete;
-
-                            // Exit loop: all senders were dropped so it is not
-                            // possible to receive a connection.
-                            return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
-                        },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once a TCP write
-                            // handle is received or the timeout condition
-                            // occurs. Cannot be killed because it may have
-                            // already been killed by self.
-                            return Poll::Pending;
-                        },
-                    }
-                },
-                InnerInitTcpProj::Complete => panic!("InitTcp was polled after completion"),
-            }
-        }
-    }
-}
-
-#[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> PinnedDrop for InitTcp<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l> {
-    fn drop(self: Pin<&mut Self>) {
-        match &self.inner {
-            InnerInitTcp::Fresh
-          | InnerInitTcp::WriteEstablishing(_)
-          | InnerInitTcp::GetEstablishing { receive_tcp_socket: _ }
-          | InnerInitTcp::Complete => {
-                // Nothing to do.
-            },
-            InnerInitTcp::Connecting(_)
-          | InnerInitTcp::WriteNone { reason: _, w_tcp_state: _ } => {
-                let tcp_socket = self.socket.clone();
-                let kill_tcp_token = self.kill_tcp.get_awake_token();
-                tokio::spawn(async move {
-                    let mut w_tcp_state = tcp_socket.tcp.write().await;
-                    match &*w_tcp_state {
-                        TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
-                            // If we are the one who set the state to Establishing...
-                            if &kill_tcp_token == active_kill_tcp_token {
-                                *w_tcp_state = TcpState::None;
-                            }
-                            drop(w_tcp_state);
-                        },
-                        TcpState::Managed { socket: _, kill: _ }
-                      | TcpState::None
-                      | TcpState::Blocked => {
-                            drop(w_tcp_state);
-                        },
-                    }
-                });
-            },
-            // If this struct is dropped while it is trying to write the
-            // connection to the TcpState, we will spawn a task to complete
-            // this operation. This way, those that depend on receiving this
-            // the connection don't unexpectedly receive errors and try to
-            // re-initialize the connection.
-            InnerInitTcp::WriteManaged { w_tcp_state: _, tcp_socket } => {
-                let tcp_socket = tcp_socket.clone();
-                let socket = self.socket.clone();
-                let tcp_socket_sender = self.tcp_socket_sender.clone();
-                let kill_tcp_token = self.kill_tcp.get_awake_token();
-                tokio::spawn(async move {
-                    let mut w_tcp_state = socket.tcp.write().await;
-                    match &*w_tcp_state {
-                        TcpState::Establishing { sender: _, kill: active_kill_tcp_token } => {
-                            // If we are the one who set the state to Establishing...
-                            if &kill_tcp_token == active_kill_tcp_token {
-                                *w_tcp_state = TcpState::Managed { socket: tcp_socket.clone(), kill: kill_tcp_token.clone() };
-                                drop(w_tcp_state);
-
-                                // Ignore send errors. They just indicate that all receivers have been dropped.
-                                let _ = tcp_socket_sender.send((tcp_socket, kill_tcp_token));
-                            // If some other process set the state to Establishing...
-                            } else {
-                                drop(w_tcp_state);
-
-                                // Shutdown the listener we started.
-                                kill_tcp_token.awake();
-                            }
-                        },
-                        TcpState::Managed { socket: _, kill: _ }
-                      | TcpState::None
-                      | TcpState::Blocked => {
-                            drop(w_tcp_state);
-
-                            // Shutdown the listener we started.
-                            kill_tcp_token.awake();
-                        },
-                    }
-                });
-            },
-        }
-    }
 }
 
 #[pin_project(PinnedDrop)]
@@ -1148,6 +170,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 
 where
     'g: 'f
 {
+    #[inline]
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>, tcp_timeout: &'h Duration) -> Self {
         Self {
             socket,
@@ -1169,7 +192,7 @@ where
     Fresh,
     Running {
         #[pin]
-        tq_socket: TQSocket<'c, 'd>,
+        tq_socket: QTcpSocket<'c, 'd>,
         #[pin]
         send_query: QSend<'e, QSendType, errors::TcpSendError>,
     },
@@ -1181,19 +204,22 @@ impl<'a, 'c, 'd, 'e, 'f, 'g> InnerTQ<'c, 'd, 'e, 'f, 'g>
 where
     'a: 'd + 'g
 {
+    #[inline]
     pub fn set_running(mut self: std::pin::Pin<&mut Self>, query_type: QSendType) {
         self.set(Self::Running {
-            tq_socket: TQSocket::Fresh,
+            tq_socket: QTcpSocket::Fresh,
             send_query: QSend::Fresh(query_type),
         });
     }
 
+    #[inline]
     pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: TcpResponseTime, socket: &'a Arc<MixedSocket>) {
         let w_active_queries = socket.active_queries.write().boxed();
 
         self.set(Self::Cleanup(w_active_queries, execution_time));
     }
 
+    #[inline]
     pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
         self.set(Self::Complete);
     }
@@ -1233,11 +259,11 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                 },
                 InnerTQProj::Running { mut tq_socket, mut send_query } => {
                     match (send_query.as_mut().project(), tq_socket.as_mut().project()) {
-                        (QSendProj::Fresh(_), TQSocketProj::Fresh)
-                      | (QSendProj::Fresh(_), TQSocketProj::GetTcpState(_))
-                      | (QSendProj::Fresh(_), TQSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
-                      | (QSendProj::Fresh(_), TQSocketProj::InitTcp { join_handle: _ })
-                      | (QSendProj::Fresh(_), TQSocketProj::Closed(_)) => {
+                        (QSendProj::Fresh(_), QTcpSocketProj::Fresh)
+                      | (QSendProj::Fresh(_), QTcpSocketProj::GetTcpState(_))
+                      | (QSendProj::Fresh(_), QTcpSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
+                      | (QSendProj::Fresh(_), QTcpSocketProj::InitTcp { join_handle: _ })
+                      | (QSendProj::Fresh(_), QTcpSocketProj::Closed(_)) => {
                             // We don't poll the receiver until the QSendQuery state is Complete.
 
                             match tq_socket.poll(this.socket, cx) {
@@ -1254,7 +280,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                     continue;
                                 },
                                 PollSocket::Pending => {
-                                    // The TQSocket is the only future that we are waiting on,
+                                    // The QTcpSocket is the only future that we are waiting on,
                                     // besides the timeout. We are already registered with the
                                     // in-flight map and cannot send or receive a query until a
                                     // socket is established.
@@ -1262,7 +288,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 },
                             }
                         },
-                        (QSendProj::Fresh(_), TQSocketProj::Acquired { tcp_socket, kill_tcp: _ }) => {
+                        (QSendProj::Fresh(_), QTcpSocketProj::Acquired { tcp_socket, kill_tcp: _ }) => {
                             // We don't poll the receiver until the QSendQuery state is Complete.
 
                             let socket = this.socket.clone();
@@ -1350,7 +376,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                     continue;
                                 },
                                 (Poll::Pending, PollSocket::Pending) => {
-                                    // All tokens are pending. Will wake up if the TQSocket wakes
+                                    // All tokens are pending. Will wake up if the QTcpSocket wakes
                                     // us, the in-flight map lock becomes available, or the timeout
                                     // occurs.
                                     return Poll::Pending;
@@ -1393,7 +419,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                     continue;
                                 },
                                 PollSocket::Pending => {
-                                    // All tokens are pending. Will wake up if the TQSocket wakes
+                                    // All tokens are pending. Will wake up if the QTcpSocket wakes
                                     // us, the receiver has a response, or the timeout occurs.
                                     return Poll::Pending;
                                 },
@@ -1507,6 +533,7 @@ where
 }
 
 impl<'a, 'b, 'c, 'd> TcpQuery<'a, 'b, 'c, 'd> {
+    #[inline]
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message) -> Self {
         Self {
             socket,
@@ -1645,119 +672,20 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
 }
 
 // Implement TCP functions on MixedSocket
-impl MixedSocket {
+#[async_trait]
+impl TcpSocket for MixedSocket {
     #[inline]
-    async fn init_tcp(self: Arc<Self>) -> Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError> {
-        InitTcp::new(&self, None).await
+    fn peer(&self) ->  &SocketAddr {
+        &self.upstream_socket
     }
 
     #[inline]
-    pub async fn start_tcp(self: Arc<Self>) -> Result<(), errors::TcpInitError> {
-        match self.init_tcp().await {
-            Ok(_) => Ok(()),
-            Err(error) => Err(error),
-        }
+    fn state(&self) ->  &RwLock<TcpState>  {
+        &self.tcp
     }
 
     #[inline]
-    pub async fn shutdown_tcp(self: Arc<Self>) {
-        println!("Shutting down TCP socket {}", self.upstream_socket);
-
-        let mut w_state = self.tcp.write().await;
-        match &*w_state {
-            TcpState::Managed { socket: _, kill } => {
-                let tcp_kill = kill.clone();
-                *w_state = TcpState::None;
-                drop(w_state);
-
-                tcp_kill.awake();
-
-                // Note: this task is not responsible for actual cleanup. Once the listener closes, it
-                // will kill any active queries and change the TcpState.
-            },
-            TcpState::Establishing { sender, kill } => {
-                let sender = sender.clone();
-                let kill_init_tcp = kill.clone();
-                *w_state = TcpState::None;
-                drop(w_state);
-
-                // Try to prevent the socket from being initialized.
-                kill_init_tcp.awake();
-                sender.close();
-                let receiver = sender.subscribe();
-
-                // If the socket still initialized, shut it down immediately.
-                match receiver.await {
-                    Ok((_, tcp_kill)) => {
-                        tcp_kill.awake();
-                    },
-                    Err(_) => (), //< Successful cancellation
-                }
-            },
-            TcpState::None => drop(w_state),    //< Already shut down
-            TcpState::Blocked => drop(w_state), //< Already shut down
-        }
-    }
-
-    #[inline]
-    pub async fn enable_tcp(self: Arc<Self>) {
-        println!("Enabling TCP socket {}", self.upstream_socket);
-
-        let mut w_state = self.tcp.write().await;
-        match &*w_state {
-            TcpState::Managed { socket: _, kill: _ } => (),      //< Already enabled
-            TcpState::Establishing { sender: _, kill: _ } => (), //< Already enabled
-            TcpState::None => (),                                //< Already enabled
-            TcpState::Blocked => *w_state = TcpState::None,
-        }
-        drop(w_state);
-    }
-
-    #[inline]
-    pub async fn disable_tcp(self: Arc<Self>) {
-        println!("Disabling TCP socket {}", self.upstream_socket);
-
-        let mut w_state = self.tcp.write().await;
-        match &*w_state {
-            TcpState::Managed { socket: _, kill } => {
-                let kill_tcp = kill.clone();
-                *w_state = TcpState::Blocked;
-                drop(w_state);
-
-                kill_tcp.awake();
-
-                // Note: this task is not responsible for actual cleanup. Once the listener closes, it
-                // will kill any active queries and change the TcpState.
-            },
-            TcpState::Establishing { sender, kill }=> {
-                let sender = sender.clone();
-                let kill_init_tcp = kill.clone();
-                *w_state = TcpState::Blocked;
-                drop(w_state);
-
-                // Try to prevent the socket from being initialized.
-                kill_init_tcp.awake();
-                sender.close();
-                let receiver = sender.subscribe();
-
-                // If the socket still initialized, shut it down immediately.
-                match receiver.await {
-                    Ok((_, kill_tcp)) => {
-                        kill_tcp.awake();
-                    },
-                    Err(_) => (), //< Successful cancellation
-                }
-            },
-            TcpState::None => {
-                *w_state = TcpState::Blocked;
-                drop(w_state)
-            },
-            TcpState::Blocked => drop(w_state), //< Already disabled
-        }
-    }
-
-    #[inline]
-    async fn listen_tcp(self: Arc<Self>, mut tcp_reader: OwnedReadHalf, kill_tcp: AwakeToken) {
+    async fn listen(self: Arc<Self>, mut tcp_reader: OwnedReadHalf, kill_tcp: AwakeToken) {
         pin!(let kill_tcp_awoken = kill_tcp.awoken(););
         loop {
             select! {
@@ -1794,7 +722,9 @@ impl MixedSocket {
 
         self.listen_tcp_cleanup(kill_tcp).await;
     }
+}
 
+impl MixedSocket {
     #[inline]
     async fn listen_tcp_cleanup(self: Arc<Self>, kill_tcp: AwakeToken) {
         println!("Cleaning up TCP socket {}", self.upstream_socket);
@@ -1823,14 +753,8 @@ impl MixedSocket {
     }
 }
 
-enum UdpState {
-    Managed(Arc<UdpSocket>, AwakeToken),
-    None,
-    Blocked,
-}
-
 #[pin_project(PinnedDrop)]
-struct UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i>
+struct UdpQueryRunner<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i>
 where
     'a: 'd + 'h
 {
@@ -1845,13 +769,14 @@ where
     #[pin]
     result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>,
     #[pin]
-    inner: InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>,
+    inner: InnerUQ<'c, 'd, 'f, 'g, 'h>,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i>
+impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> UdpQueryRunner<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i>
 where
     'h: 'g
 {
+    #[inline]
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>, udp_retransmission_timeout: &'i Duration, udp_timeout: &'i Duration) -> Self {
         Self {
             socket,
@@ -1866,6 +791,7 @@ where
         }
     }
 
+    #[inline]
     fn reset_timeout(self: std::pin::Pin<&mut Self>, next_timeout: Duration) {
         let now = Instant::now();
         match now.checked_add(next_timeout) {
@@ -1876,14 +802,14 @@ where
 }
 
 #[pin_project(project = InnerUQProj)]
-enum InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>
+enum InnerUQ<'c, 'd, 'f, 'g, 'h>
 where
     'h: 'g
 {
     Fresh { udp_retransmissions: u8 },
     Running {
         #[pin]
-        socket: EitherSocket<'c, 'd, 'e>,
+        socket: QUdpTcpSocket<'c, 'd>,
         #[pin]
         send_query: QSend<'f, QSendType, errors::SocketSendError>,
     },
@@ -1891,36 +817,40 @@ where
     Complete,
 }
 
-impl<'a, 'c, 'd, 'e, 'f, 'g, 'h> InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>
+impl<'a, 'c, 'd, 'f, 'g, 'h> InnerUQ<'c, 'd, 'f, 'g, 'h>
 where
     'a: 'd + 'h
 {
+    #[inline]
     pub fn set_running_udp(mut self: std::pin::Pin<&mut Self>, udp_retransmissions: u8, query_type: QSendType) {
         self.set(Self::Running {
-            socket: EitherSocket::Udp { uq_socket: UQSocket::Fresh, retransmits: udp_retransmissions },
+            socket: QUdpTcpSocket::Udp { uq_socket: QUdpSocket::Fresh, retransmits: udp_retransmissions },
             send_query: QSend::Fresh(query_type),
         });
     }
 
+    #[inline]
     fn set_running_tcp(mut self: std::pin::Pin<&mut Self>, query_type: QSendType) {
         self.set(InnerUQ::Running {
-            socket: EitherSocket::Tcp { tq_socket: TQSocket::Fresh },
+            socket: QUdpTcpSocket::Tcp { tq_socket: QTcpSocket::Fresh },
             send_query: QSend::Fresh(query_type),
         });
     }
 
+    #[inline]
     pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: UdpResponseTime, socket: &'a Arc<MixedSocket>) {
         let w_active_queries = socket.active_queries.write().boxed();
 
         self.set(Self::Cleanup(w_active_queries, execution_time));
     }
 
+    #[inline]
     pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
         self.set(Self::Complete);
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> {
+impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> {
     type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -1931,7 +861,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                     let new_timeout = **this.udp_timeout;
                     // If we run out of UDP retransmissions before the query has even begun,
                     // then it is time to transmit via TCP.
-                    // Setting the socket state to TQSocket::Fresh will cause the socket to be
+                    // Setting the socket state to QTcpSocket::Fresh will cause the socket to be
                     // initialized (if needed) and then a message sent over that socket.
                     this.inner.set_running_tcp(QSendType::Initial);
                     self.as_mut().reset_timeout(new_timeout);
@@ -1951,11 +881,11 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
             },
             InnerUQProj::Running { mut socket, mut send_query } => {
                 match (send_query.as_mut().project(), socket.as_mut().project()) {
-                    (QSendProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 })
-                  | (QSendProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
+                    (QSendProj::Fresh(_), QUdpTcpSocketProj::Udp { uq_socket: _, retransmits: 0 })
+                  | (QSendProj::SendQuery(_, _), QUdpTcpSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let new_timeout = **this.udp_timeout;
-                            // Setting the socket state to TQSocket::Fresh will cause the socket
+                            // Setting the socket state to QTcpSocket::Fresh will cause the socket
                             // to be initialized (if needed) and then a message sent over that
                             // socket.
                             this.inner.set_running_tcp(QSendType::Retransmit);
@@ -1964,10 +894,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             // TODO
                         }
                     },
-                    (QSendProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
+                    (QSendProj::Complete(_), QUdpTcpSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let new_timeout = **this.udp_timeout;
-                            // Setting the socket state to TQSocket::Fresh will cause the socket
+                            // Setting the socket state to QTcpSocket::Fresh will cause the socket
                             // to be initialized (if needed) and then a message sent over that
                             // socket.
                             this.socket.add_dropped_packet_to_udp_average();
@@ -1977,8 +907,8 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             // TODO
                         }
                     },
-                    (QSendProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. })
-                  | (QSendProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
+                    (QSendProj::Fresh(_), QUdpTcpSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. })
+                  | (QSendProj::SendQuery(_, _), QUdpTcpSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let new_timeout = **this.udp_retransmission_timeout;
                             // If we are currently sending a query or have not sent one yet,
@@ -1989,7 +919,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             // TODO
                         }
                     },
-                    (QSendProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
+                    (QSendProj::Complete(_), QUdpTcpSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let new_timeout = **this.udp_retransmission_timeout;
                             // A previous query has succeeded. Setting the state to Fresh will
@@ -2002,7 +932,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             // TODO
                         }
                     },
-                    (_, EitherSocketProj::Tcp { tq_socket: _ }) => {
+                    (_, QUdpTcpSocketProj::Tcp { tq_socket: _ }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::Timeout));
 
@@ -2033,7 +963,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                 },
                 InnerUQProj::Running { socket: mut q_socket, mut send_query } => {
                     match (send_query.as_mut().project(), q_socket.as_mut().project()) {
-                        (QSendProj::Fresh(query_type), EitherSocketProj::Udp { mut uq_socket, retransmits: _ }) => {
+                        (QSendProj::Fresh(query_type), QUdpTcpSocketProj::Udp { mut uq_socket, retransmits: _ }) => {
                             match query_type {
                                 QSendType::Initial => (),
                                 QSendType::Retransmit => match this.result_receiver.as_mut().poll(cx) {
@@ -2072,7 +1002,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                 PollSocket::Pending => LoopPoll::Pending,
                             };
 
-                            if let UQSocketProj::Acquired { udp_socket, kill_udp: _ } = uq_socket.as_mut().project() {
+                            if let QUdpSocketProj::Acquired { udp_socket, kill_udp: _ } = uq_socket.as_mut().project() {
                                 let mut raw_message = [0_u8; MAX_MESSAGE_SIZE as usize];
                                 let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                                 if let Err(wire_error) = this.query.to_wire_format(&mut write_wire, &mut Some(CompressionMap::new())) {
@@ -2124,7 +1054,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                 LoopPoll::Pending => return Poll::Pending,
                             }
                         },
-                        (QSendProj::Fresh(query_type), EitherSocketProj::Tcp { mut tq_socket }) => {
+                        (QSendProj::Fresh(query_type), QUdpTcpSocketProj::Tcp { mut tq_socket }) => {
                             match query_type {
                                 QSendType::Initial => (),
                                 QSendType::Retransmit => match this.result_receiver.as_mut().poll(cx) {
@@ -2163,7 +1093,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                 PollSocket::Pending => LoopPoll::Pending,
                             };
 
-                            if let TQSocketProj::Acquired { tcp_socket, kill_tcp: _ } = tq_socket.as_mut().project() {
+                            if let QTcpSocketProj::Acquired { tcp_socket, kill_tcp: _ } = tq_socket.as_mut().project() {
                                 let mut raw_message = [0_u8; MAX_MESSAGE_SIZE as usize];
                                 let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                                 if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
@@ -2439,7 +1369,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> {
+impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> {
     fn drop(mut self: Pin<&mut Self>) {
         async fn cleanup(socket: Arc<MixedSocket>, query: Message) {
             let mut w_active_queries = socket.active_queries.write().await;
@@ -2475,6 +1405,7 @@ where
 }
 
 impl<'a, 'b, 'c, 'd> UdpQuery<'a, 'b, 'c, 'd> {
+    #[inline]
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message) -> Self {
         Self {
             socket,
@@ -2628,117 +1559,20 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
 }
 
 // Implement UDP functions on MixedSocket
-impl MixedSocket {
+#[async_trait]
+impl super::socket::udp::UdpSocket for MixedSocket {
     #[inline]
-    async fn init_udp(self: Arc<Self>) -> Result<(Arc<UdpSocket>, AwakeToken), errors::UdpInitError> {
-        // Initially, verify if the connection has already been established.
-        let r_state = self.udp.read().await;
-        match &*r_state {
-            UdpState::Managed(udp_socket, kill_udp) => return Ok((udp_socket.clone(), kill_udp.clone())),
-            UdpState::None => (),
-            UdpState::Blocked => {
-                drop(r_state);
-                return Err(errors::UdpInitError::SocketDisabled);
-            },
-        }
-        drop(r_state);
-
-        let udp_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
-        udp_socket.connect(self.upstream_socket).await?;
-        let udp_reader = udp_socket.clone();
-        let udp_writer = udp_socket;
-        let kill_udp = AwakeToken::new();
-
-        // Since there is no intermediate state while the UDP socket is being
-        // set up and the lock is dropped, it is possible that another process
-        // was doing the same task.
-
-        let mut w_state = self.udp.write().await;
-        match &*w_state {
-            UdpState::Managed(existing_udp_socket, _) => {
-                return Ok((existing_udp_socket.clone(), kill_udp));
-            },
-            UdpState::None => {
-                *w_state = UdpState::Managed(udp_writer.clone(), kill_udp.clone());
-                drop(w_state);
-
-                task::spawn(self.listen_udp(udp_reader, kill_udp.clone()));
-
-                return Ok((udp_writer, kill_udp));
-            },
-            UdpState::Blocked => {
-                drop(w_state);
-                return Err(errors::UdpInitError::SocketDisabled);
-            },
-        }
+    fn peer(&self) ->  &SocketAddr {
+        &self.upstream_socket
     }
 
     #[inline]
-    pub async fn start_udp(self: Arc<Self>) -> Result<(), errors::UdpInitError> {
-        match self.init_udp().await {
-            Ok(_) => Ok(()),
-            Err(error) => Err(error),
-        }
+    fn state(&self) ->  &RwLock<UdpState>  {
+        &self.udp
     }
 
     #[inline]
-    pub async fn shutdown_udp(self: Arc<Self>) {
-        println!("Shutting down UDP socket {}", self.upstream_socket);
-
-        let r_state = self.udp.read().await;
-        if let UdpState::Managed(_, kill_udp) = &*r_state {
-            let kill_udp = kill_udp.clone();
-            drop(r_state);
-
-            kill_udp.awake();
-
-            // Note: this task is not responsible for actual cleanup. Once the listener closes, it
-            // will kill any active queries and change the UdpState.
-        } else {
-            drop(r_state);
-        }
-    }
-
-    #[inline]
-    pub async fn enable_udp(self: Arc<Self>) {
-        println!("Enabling UDP socket {}", self.upstream_socket);
-
-        let mut w_state = self.udp.write().await;
-        match &*w_state {
-            UdpState::Managed(_, _) => (),  //< Already enabled
-            UdpState::None => (),           //< Already enabled
-            UdpState::Blocked => *w_state = UdpState::None,
-        }
-        drop(w_state);
-    }
-
-    #[inline]
-    pub async fn disable_udp(self: Arc<Self>) {
-        println!("Disabling UDP socket {}", self.upstream_socket);
-
-        let mut w_state = self.udp.write().await;
-        match &*w_state {
-            UdpState::Managed(_, kill_udp) => {
-                // Since we are removing the reference the kill_udp by setting state to Blocked, we
-                // need to kill them now since the listener won't be able to kill them.
-                let kill_udp = kill_udp.clone();
-                *w_state = UdpState::Blocked;
-                drop(w_state);
-
-                kill_udp.awake();
-            },
-            UdpState::None => {
-                *w_state = UdpState::Blocked;
-                drop(w_state);
-            },
-            UdpState::Blocked => { //< Already disabled
-                drop(w_state);
-            },
-        }
-    }
-
-    #[inline]
-    async fn listen_udp(self: Arc<Self>, udp_reader: Arc<UdpSocket>, kill_udp: AwakeToken) {
+    async fn listen(self: Arc<Self>, udp_reader: Arc<net::UdpSocket>, kill_udp: AwakeToken) {
         pin!(let kill_udp_awoken = kill_udp.awoken(););
         loop {
             select! {
@@ -2776,7 +1610,9 @@ impl MixedSocket {
 
         self.listen_udp_cleanup(kill_udp).await;
     }
+}
 
+impl MixedSocket {
     #[inline]
     async fn listen_udp_cleanup(self: Arc<Self>,  kill_udp: AwakeToken) {
         println!("Cleaning up UDP socket {}", self.upstream_socket);
@@ -2815,6 +1651,7 @@ struct ActiveQueries {
 }
 
 impl ActiveQueries {
+    #[inline]
     pub fn new() -> Self {
         Self {
             udp_retransmit_timeout: INIT_UDP_RETRANSMISSION_TIMEOUT,
@@ -3020,10 +1857,10 @@ impl MixedSocket {
     }
 
     #[inline]
-    pub async fn start_both(self: Arc<Self>) -> Result<(), errors::SocketInitError> {
+    pub async fn start(self: Arc<Self>) -> Result<(), errors::SocketInitError> {
         match join!(
-            self.clone().start_udp(),
-            self.start_tcp()
+            <Self as UdpSocket>::start(self.clone()),
+            <Self as TcpSocket>::start(self),
         ) {
             (Ok(()), Ok(())) => Ok(()),
             (Ok(()), Err(tcp_error)) => Err(errors::SocketInitError::from(tcp_error)),
@@ -3033,26 +1870,26 @@ impl MixedSocket {
     }
 
     #[inline]
-    pub async fn shutdown_both(self: Arc<Self>) {
+    pub async fn shutdown(self: Arc<Self>) {
         join!(
-            self.clone().shutdown_udp(),
-            self.shutdown_tcp()
+            <Self as UdpSocket>::shutdown(self.clone()),
+            <Self as TcpSocket>::shutdown(self),
         );
     }
 
     #[inline]
-    pub async fn enable_both(self: Arc<Self>) {
+    pub async fn enable(self: Arc<Self>) {
         join!(
-            self.clone().enable_udp(),
-            self.enable_tcp()
+            <Self as UdpSocket>::enable(self.clone()),
+            <Self as TcpSocket>::enable(self),
         );
     }
 
     #[inline]
-    pub async fn disable_both(self: Arc<Self>) {
+    pub async fn disable(self: Arc<Self>) {
         join!(
-            self.clone().disable_udp(),
-            self.disable_tcp()
+            <Self as UdpSocket>::disable(self.clone()),
+            <Self as TcpSocket>::disable(self),
         );
     }
 
@@ -3255,6 +2092,6 @@ mod mixed_udp_tcp_tests {
         assert!(query_task_response.is_err());   //< io error
 
         // Cleanup
-        mixed_socket.disable_both().await;
+        mixed_socket.disable().await;
     }
 }

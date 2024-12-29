@@ -93,11 +93,11 @@ impl InternalSocketManager {
             socket.reset_recent_messages_sent_and_received();
 
             if *nothing_received >= 10 {
-                tokio::task::spawn(socket.clone().disable_both());
+                tokio::task::spawn(socket.clone().disable());
                 println!("GC: Removing {address} from socket manager");
                 false
             } else if *nothing_received >= 3 {
-                tokio::task::spawn(socket.clone().shutdown_both());
+                tokio::task::spawn(socket.clone().shutdown());
                 println!("GC: Shutdown {address} from socket manager");
                 false
             } else {
@@ -117,7 +117,7 @@ impl InternalSocketManager {
         futures::stream::iter(w_socket_manager.sockets.drain())
             .for_each_concurrent(None, |(address, (socket, _))| async move {
                 println!("GC: Removing {address} from socket manager");
-                let _ = socket.disable_both().await;
+                let _ = socket.disable().await;
             }).await;
         drop(w_socket_manager);
     }
@@ -255,7 +255,7 @@ impl Drop for SocketManager {
 
             // Shutdown all of the sockets still being managed.
             for (_, (socket, _)) in r_imanager.sockets.iter() {
-                let _ = socket.clone().shutdown_both().await;
+                let _ = socket.clone().shutdown().await;
             }
             drop(r_imanager);
         });
