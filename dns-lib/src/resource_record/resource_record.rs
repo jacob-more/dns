@@ -2,7 +2,7 @@ use std::{error::Error, fmt::Display, hash::Hash, ops::Deref};
 
 use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::{ReadWireError, SliceWireVisibility}, to_wire::ToWire}}, types::c_domain_name::CDomainName};
 
-use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cdnskey::CDNSKEY, cds::CDS, cert::CERT, cname::CNAME, csync::CSYNC, dname::DNAME, dnskey::DNSKEY, ds::DS, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, naptr::NAPTR, ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, srv::SRV, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
+use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cdnskey::CDNSKEY, cds::CDS, cert::CERT, cname::CNAME, csync::CSYNC, dname::DNAME, dnskey::DNSKEY, ds::DS, eui48::EUI48, eui64::EUI64, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, naptr::NAPTR, ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, srv::SRV, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
 
 
 #[derive(Debug)]
@@ -425,8 +425,8 @@ gen_record_data!(
     // DOA(RRHeader, DOA),
     (DS, presentation_allowed),
     // EID(RRHeader, EID),
-    // EUI48(RRHeader, EUI48),
-    // EUI64(RRHeader, EUI64),
+    (EUI48, presentation_allowed),
+    (EUI64, presentation_allowed),
     // GID(RRHeader, GID),
     // GPOS(RRHeader, GPOS),
     (HINFO, presentation_allowed),
