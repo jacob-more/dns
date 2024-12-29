@@ -4,7 +4,7 @@ use async_lib::once_watch::{self, OnceWatchSend, OnceWatchSubscribe};
 use dns_lib::{interface::{cache::{cache::AsyncCache, CacheQuery, CacheResponse}, client::Context}, query::{message::Message, qr::QR, question::Question}, resource_record::{rcode::RCode, resource_record::{RecordData, ResourceRecord}, rtype::RType}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
-use network::mixed_tcp_udp::{errors::QueryError, MixedSocket};
+use network::{errors::QueryError, mixed_tcp_udp::MixedSocket};
 use pin_project::{pin_project, pinned_drop};
 use rand::{seq::IteratorRandom, thread_rng};
 use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};

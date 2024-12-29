@@ -2,7 +2,7 @@ use std::{net::{IpAddr, SocketAddr}, sync::Arc};
 
 use dns_lib::{interface::cache::cache::AsyncCache, query::{message::Message, question::Question}};
 use log::trace;
-use network::mixed_tcp_udp::{MixedSocket, errors::QueryError, QueryOptions};
+use network::{errors::QueryError, mixed_tcp_udp::{MixedSocket, QueryOptions}};
 
 use crate::DNSAsyncClient;
 
