@@ -30,6 +30,16 @@ pub struct DNSKEY {
 
 impl DNSKEY {
     #[inline]
+    pub const fn new(flags: u16, algorithm: DnsSecAlgorithm, key: Base64) -> Self {
+        Self {
+            flags,
+            protocol: 3,
+            algorithm,
+            key,
+        }
+    }
+
+    #[inline]
     pub const fn dns_zone_key(&self) -> bool {
         (self.flags & DNS_ZONE_KEY_FLAG_MASK) == DNS_ZONE_KEY_FLAG_MASK
     }
@@ -38,6 +48,32 @@ impl DNSKEY {
     pub const fn secure_entry_point(&self) -> bool {
         (self.flags & SECURE_ENTRY_POINT_FLAG_MASK) == SECURE_ENTRY_POINT_FLAG_MASK
     }
+
+    #[inline]
+    pub const fn flags(&self) -> u16 {
+        self.flags
+    }
+
+    #[inline]
+    pub const fn protocol(&self) -> u8 {
+        self.protocol
+    }
+
+    #[inline]
+    pub const fn algorithm(&self) -> DnsSecAlgorithm {
+        self.algorithm
+    }
+
+    #[inline]
+    pub const fn key(&self) -> &Base64 {
+        &self.key
+    }
+
+    #[inline]
+    pub fn into_key(self) -> Base64 {
+        self.key
+    }
+
 }
 
 #[cfg(test)]
