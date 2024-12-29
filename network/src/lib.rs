@@ -1,5 +1,6 @@
 pub(crate) mod rolling_average;
 pub(crate) mod receive;
+pub mod async_query;
 
 pub mod errors;
 pub mod socket_manager;

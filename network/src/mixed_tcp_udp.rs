@@ -1,4 +1,4 @@
-use std::{cmp::{max, min}, collections::HashMap, fmt::Display, future::Future, net::SocketAddr, num::NonZeroU8, pin::Pin, sync::{atomic::{AtomicBool, Ordering}, Arc}, task::Poll, time::Duration};
+use std::{cmp::{max, min}, collections::HashMap, future::Future, net::SocketAddr, num::NonZeroU8, pin::Pin, sync::{atomic::{AtomicBool, Ordering}, Arc}, task::Poll, time::Duration};
 
 use async_lib::{awake_token::{AwakeToken, AwokenToken, SameAwakeToken}, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
 use atomic::Atomic;
@@ -8,7 +8,7 @@ use pin_project::{pin_project, pinned_drop};
 use tinyvec::TinyVec;
 use tokio::{io::{self, AsyncWriteExt}, join, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream, UdpSocket}, pin, select, sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
 
-use crate::{errors, receive::{read_stream_message, read_udp_message}, rolling_average::{fetch_update, RollingAverage}};
+use crate::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QueryOpt, QSendType}, errors, receive::{read_stream_message, read_udp_message}, rolling_average::{fetch_update, RollingAverage}};
 
 const MAX_MESSAGE_SIZE: u16 = 8192;
 
@@ -103,91 +103,6 @@ const ROLLING_AVERAGE_UDP_MAX_TRUNCATED: NonZeroU8      = unsafe { NonZeroU8::ne
 fn bound<T>(value: T, lower_bound: T, upper_bound: T) -> T where T: Ord {
     debug_assert!(lower_bound <= upper_bound);
     value.clamp(lower_bound, upper_bound)
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum QueryOptions {
-    TcpOnly,
-    Both,
-}
-
-#[pin_project(project = QInitQueryProj)]
-enum QInitQuery<'w, 'x> where 'x: 'w {
-    Fresh,
-    ReadActiveQuery(BoxFuture<'w, RwLockReadGuard<'x, ActiveQueries>>),
-    WriteActiveQuery(BoxFuture<'w, RwLockWriteGuard<'x, ActiveQueries>>),
-    Following(#[pin] once_watch::Receiver<Result<Message, errors::QueryError>>),
-    Complete,
-}
-
-impl<'a, 'w, 'x> QInitQuery<'w, 'x> where 'a: 'x {
-    fn set_read_active_query(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
-        let r_active_queries = socket.active_queries.read().boxed();
-
-        self.set(QInitQuery::ReadActiveQuery(r_active_queries));
-    }
-
-    fn set_write_active_query(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<MixedSocket>) {
-        let w_active_queries = socket.active_queries.write().boxed();
-
-        self.set(QInitQuery::WriteActiveQuery(w_active_queries));
-    }
-
-    fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<Result<Message, errors::QueryError>>) {
-        self.set(QInitQuery::Following(receiver));
-    }
-
-    fn set_complete(mut self: std::pin::Pin<&mut Self>) {
-        self.set(QInitQuery::Complete);
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-enum Query {
-    Initial,
-    Retransmit,
-}
-
-impl Display for Query {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Initial => write!(f, "Initial"),
-            Self::Retransmit => write!(f, "Retransmit"),
-        }
-    }
-}
-
-#[pin_project(project = QSendQueryProj)]
-enum QSendQuery<'t, E> {
-    Fresh(Query),
-    SendQuery(Query, BoxFuture<'t, Result<(), E>>),
-    Complete(Query),
-}
-
-impl<'t, E> QSendQuery<'t, E> {
-    pub fn query_type(&self) -> &Query {
-        match self {
-            Self::Fresh(query) => query,
-            Self::SendQuery(query, _) => query,
-            Self::Complete(query) => query,
-        }
-    }
-
-    pub fn set_fresh(mut self: std::pin::Pin<&mut Self>, query_type: Query) {
-        self.set(Self::Fresh(query_type));
-    }
-
-    pub fn set_send_query(mut self: std::pin::Pin<&mut Self>, send_query: BoxFuture<'t, Result<(), E>>) {
-        let query_type = self.query_type();
-
-        self.set(Self::SendQuery(*query_type, send_query));
-    }
-
-    pub fn set_complete(mut self: std::pin::Pin<&mut Self>) {
-        let query_type = self.query_type();
-
-        self.set(QSendQuery::Complete(*query_type));
-    }
 }
 
 #[pin_project(project = MixedQueryProj)]
@@ -1256,7 +1171,7 @@ where
         #[pin]
         tq_socket: TQSocket<'c, 'd>,
         #[pin]
-        send_query: QSendQuery<'e, errors::TcpSendError>,
+        send_query: QSend<'e, QSendType, errors::TcpSendError>,
     },
     Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>, TcpResponseTime),
     Complete,
@@ -1266,10 +1181,10 @@ impl<'a, 'c, 'd, 'e, 'f, 'g> InnerTQ<'c, 'd, 'e, 'f, 'g>
 where
     'a: 'd + 'g
 {
-    pub fn set_running(mut self: std::pin::Pin<&mut Self>, query_type: Query) {
+    pub fn set_running(mut self: std::pin::Pin<&mut Self>, query_type: QSendType) {
         self.set(Self::Running {
             tq_socket: TQSocket::Fresh,
-            send_query: QSendQuery::Fresh(query_type),
+            send_query: QSend::Fresh(query_type),
         });
     }
 
@@ -1310,7 +1225,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
                 InnerTQProj::Fresh => {
-                    this.inner.set_running(Query::Initial);
+                    this.inner.set_running(QSendType::Initial);
 
                     // Next loop: poll tq_socket and in_flight to start getting the TCP socket and
                     // inserting the query ID into the in-flight map.
@@ -1318,11 +1233,11 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                 },
                 InnerTQProj::Running { mut tq_socket, mut send_query } => {
                     match (send_query.as_mut().project(), tq_socket.as_mut().project()) {
-                        (QSendQueryProj::Fresh(_), TQSocketProj::Fresh)
-                      | (QSendQueryProj::Fresh(_), TQSocketProj::GetTcpState(_))
-                      | (QSendQueryProj::Fresh(_), TQSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
-                      | (QSendQueryProj::Fresh(_), TQSocketProj::InitTcp { join_handle: _ })
-                      | (QSendQueryProj::Fresh(_), TQSocketProj::Closed(_)) => {
+                        (QSendProj::Fresh(_), TQSocketProj::Fresh)
+                      | (QSendProj::Fresh(_), TQSocketProj::GetTcpState(_))
+                      | (QSendProj::Fresh(_), TQSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
+                      | (QSendProj::Fresh(_), TQSocketProj::InitTcp { join_handle: _ })
+                      | (QSendProj::Fresh(_), TQSocketProj::Closed(_)) => {
                             // We don't poll the receiver until the QSendQuery state is Complete.
 
                             match tq_socket.poll(this.socket, cx) {
@@ -1347,7 +1262,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 },
                             }
                         },
-                        (QSendQueryProj::Fresh(_), TQSocketProj::Acquired { tcp_socket, kill_tcp: _ }) => {
+                        (QSendProj::Fresh(_), TQSocketProj::Acquired { tcp_socket, kill_tcp: _ }) => {
                             // We don't poll the receiver until the QSendQuery state is Complete.
 
                             let socket = this.socket.clone();
@@ -1401,7 +1316,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                             // the TcpStream and write the bytes out.
                             continue;
                         },
-                        (QSendQueryProj::SendQuery(_, send_query_future), _) => {
+                        (QSendProj::SendQuery(_, send_query_future), _) => {
                             // We don't poll the receiver until the QSendQuery state is Complete.
                             match (send_query_future.as_mut().poll(cx), tq_socket.poll(this.socket, cx)) {
                                 (_, PollSocket::Error(error)) => {
@@ -1442,7 +1357,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 },
                             }
                         },
-                        (QSendQueryProj::Complete(_), _) => {
+                        (QSendProj::Complete(_), _) => {
                             match this.result_receiver.as_mut().poll(cx) {
                                 Poll::Ready(Ok(Ok(_))) => {
                                     let execution_time = this.tcp_start_time.elapsed();
@@ -1588,7 +1503,7 @@ where
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
     #[pin]
-    inner: QInitQuery<'c, 'd>,
+    inner: QInitQuery<'c, 'd, ActiveQueries>,
 }
 
 impl<'a, 'b, 'c, 'd> TcpQuery<'a, 'b, 'c, 'd> {
@@ -1609,7 +1524,7 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
                 QInitQueryProj::Fresh => {
-                    this.inner.set_read_active_query(this.socket);
+                    this.inner.set_read_active_query(&this.socket.active_queries);
 
                     // TODO
                     continue;
@@ -1631,7 +1546,7 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
                                 },
                                 None => {
                                     drop(r_active_queries);
-                                    this.inner.set_write_active_query(this.socket);
+                                    this.inner.set_write_active_query(&this.socket.active_queries);
 
                                     // TODO
                                     continue;
@@ -1970,7 +1885,7 @@ where
         #[pin]
         socket: EitherSocket<'c, 'd, 'e>,
         #[pin]
-        send_query: QSendQuery<'f, errors::SocketSendError>,
+        send_query: QSend<'f, QSendType, errors::SocketSendError>,
     },
     Cleanup(BoxFuture<'g, RwLockWriteGuard<'h, ActiveQueries>>, UdpResponseTime),
     Complete,
@@ -1980,17 +1895,17 @@ impl<'a, 'c, 'd, 'e, 'f, 'g, 'h> InnerUQ<'c, 'd, 'e, 'f, 'g, 'h>
 where
     'a: 'd + 'h
 {
-    pub fn set_running_udp(mut self: std::pin::Pin<&mut Self>, udp_retransmissions: u8, query_type: Query) {
+    pub fn set_running_udp(mut self: std::pin::Pin<&mut Self>, udp_retransmissions: u8, query_type: QSendType) {
         self.set(Self::Running {
             socket: EitherSocket::Udp { uq_socket: UQSocket::Fresh, retransmits: udp_retransmissions },
-            send_query: QSendQuery::Fresh(query_type),
+            send_query: QSend::Fresh(query_type),
         });
     }
 
-    fn set_running_tcp(mut self: std::pin::Pin<&mut Self>, query_type: Query) {
+    fn set_running_tcp(mut self: std::pin::Pin<&mut Self>, query_type: QSendType) {
         self.set(InnerUQ::Running {
             socket: EitherSocket::Tcp { tq_socket: TQSocket::Fresh },
-            send_query: QSendQuery::Fresh(query_type),
+            send_query: QSend::Fresh(query_type),
         });
     }
 
@@ -2018,7 +1933,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                     // then it is time to transmit via TCP.
                     // Setting the socket state to TQSocket::Fresh will cause the socket to be
                     // initialized (if needed) and then a message sent over that socket.
-                    this.inner.set_running_tcp(Query::Initial);
+                    this.inner.set_running_tcp(QSendType::Initial);
                     self.as_mut().reset_timeout(new_timeout);
 
                     // TODO
@@ -2036,34 +1951,34 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
             },
             InnerUQProj::Running { mut socket, mut send_query } => {
                 match (send_query.as_mut().project(), socket.as_mut().project()) {
-                    (QSendQueryProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 })
-                  | (QSendQueryProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
+                    (QSendProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 })
+                  | (QSendProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let new_timeout = **this.udp_timeout;
                             // Setting the socket state to TQSocket::Fresh will cause the socket
                             // to be initialized (if needed) and then a message sent over that
                             // socket.
-                            this.inner.set_running_tcp(Query::Retransmit);
+                            this.inner.set_running_tcp(QSendType::Retransmit);
                             self.as_mut().reset_timeout(new_timeout);
 
                             // TODO
                         }
                     },
-                    (QSendQueryProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
+                    (QSendProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: 0 }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let new_timeout = **this.udp_timeout;
                             // Setting the socket state to TQSocket::Fresh will cause the socket
                             // to be initialized (if needed) and then a message sent over that
                             // socket.
                             this.socket.add_dropped_packet_to_udp_average();
-                            this.inner.set_running_tcp(Query::Retransmit);
+                            this.inner.set_running_tcp(QSendType::Retransmit);
                             self.as_mut().reset_timeout(new_timeout);
 
                             // TODO
                         }
                     },
-                    (QSendQueryProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. })
-                  | (QSendQueryProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
+                    (QSendProj::Fresh(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. })
+                  | (QSendProj::SendQuery(_, _), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let new_timeout = **this.udp_retransmission_timeout;
                             // If we are currently sending a query or have not sent one yet,
@@ -2074,14 +1989,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                             // TODO
                         }
                     },
-                    (QSendQueryProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
+                    (QSendProj::Complete(_), EitherSocketProj::Udp { uq_socket: _, retransmits: udp_retransmissions @ 1.. }) => {
                         if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                             let new_timeout = **this.udp_retransmission_timeout;
                             // A previous query has succeeded. Setting the state to Fresh will
                             // cause the state machine to send another query and drive it to
                             // Complete.
                             this.socket.add_dropped_packet_to_udp_average();
-                            send_query.set_fresh(Query::Retransmit);
+                            send_query.set_fresh(QSendType::Retransmit);
                             *udp_retransmissions = udp_retransmissions.saturating_sub(1);
                             self.as_mut().reset_timeout(new_timeout);
                             // TODO
@@ -2110,7 +2025,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                 InnerUQProj::Fresh { udp_retransmissions } => {
                     let retransmissions = *udp_retransmissions;
 
-                    this.inner.set_running_udp(retransmissions, Query::Initial);
+                    this.inner.set_running_udp(retransmissions, QSendType::Initial);
 
                     // Next loop: poll tq_socket and in_flight to start getting the TCP socket and
                     // inserting the query ID into the in-flight map.
@@ -2118,10 +2033,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                 },
                 InnerUQProj::Running { socket: mut q_socket, mut send_query } => {
                     match (send_query.as_mut().project(), q_socket.as_mut().project()) {
-                        (QSendQueryProj::Fresh(query_type), EitherSocketProj::Udp { mut uq_socket, retransmits: _ }) => {
+                        (QSendProj::Fresh(query_type), EitherSocketProj::Udp { mut uq_socket, retransmits: _ }) => {
                             match query_type {
-                                Query::Initial => (),
-                                Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
+                                QSendType::Initial => (),
+                                QSendType::Retransmit => match this.result_receiver.as_mut().poll(cx) {
                                     Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
@@ -2209,10 +2124,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                 LoopPoll::Pending => return Poll::Pending,
                             }
                         },
-                        (QSendQueryProj::Fresh(query_type), EitherSocketProj::Tcp { mut tq_socket }) => {
+                        (QSendProj::Fresh(query_type), EitherSocketProj::Tcp { mut tq_socket }) => {
                             match query_type {
-                                Query::Initial => (),
-                                Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
+                                QSendType::Initial => (),
+                                QSendType::Retransmit => match this.result_receiver.as_mut().poll(cx) {
                                     Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
@@ -2302,10 +2217,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                 LoopPoll::Pending => return Poll::Pending,
                             }
                         },
-                        (QSendQueryProj::SendQuery(query_type, send_query_future), _) => {
+                        (QSendProj::SendQuery(query_type, send_query_future), _) => {
                             match query_type {
-                                Query::Initial => (),
-                                Query::Retransmit => match this.result_receiver.as_mut().poll(cx) {
+                                QSendType::Initial => (),
+                                QSendType::Retransmit => match this.result_receiver.as_mut().poll(cx) {
                                     Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
@@ -2366,7 +2281,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, '
                                 LoopPoll::Pending => return Poll::Pending,
                             }
                         },
-                        (QSendQueryProj::Complete(_), _) => {
+                        (QSendProj::Complete(_), _) => {
                             match this.result_receiver.as_mut().poll(cx) {
                                 Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                     let execution_time = this.udp_start_time.elapsed();
@@ -2556,7 +2471,7 @@ where
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
     #[pin]
-    inner: QInitQuery<'c, 'd>,
+    inner: QInitQuery<'c, 'd, ActiveQueries>,
 }
 
 impl<'a, 'b, 'c, 'd> UdpQuery<'a, 'b, 'c, 'd> {
@@ -2577,7 +2492,7 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
                 QInitQueryProj::Fresh => {
-                    this.inner.set_read_active_query(this.socket);
+                    this.inner.set_read_active_query(&this.socket.active_queries);
 
                     // TODO
                     continue;
@@ -2603,7 +2518,7 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
                                 },
                                 (None, None) => {
                                     drop(r_active_queries);
-                                    this.inner.set_write_active_query(this.socket);
+                                    this.inner.set_write_active_query(&this.socket.active_queries);
 
                                     // TODO
                                     continue;
@@ -3141,12 +3056,12 @@ impl MixedSocket {
         );
     }
 
-    pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOptions) -> MixedQuery<'a, 'b, 'c, 'd> {
+    pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> MixedQuery<'a, 'b, 'c, 'd> {
         // If the UDP socket is unreliable, send most data via TCP. Some queries should still use
         // UDP to determine if the network conditions are improving. However, if the TCP connection
         // is also unstable, then we should not rely on it.
         let query_task = match options {
-            QueryOptions::Both => {
+            QueryOpt::UdpTcp => {
                 let average_dropped_udp_packets = self.average_dropped_udp_packets();
                 let average_truncated_udp_packets = self.average_truncated_udp_packets();
                 let average_dropped_tcp_packets = self.average_dropped_tcp_packets();
@@ -3160,9 +3075,13 @@ impl MixedSocket {
                     MixedQuery::Udp(UdpQuery::new(&self, query))
                 }
             },
-            QueryOptions::TcpOnly => {
+            QueryOpt::Tcp => {
                 MixedQuery::Tcp(TcpQuery::new(&self, query))
             },
+            QueryOpt::Quic => todo!(),
+            QueryOpt::Tls => todo!(),
+            QueryOpt::QuicTls => todo!(),
+            QueryOpt::Https => todo!(),
         };
 
         return query_task;
@@ -3178,7 +3097,7 @@ mod mixed_udp_tcp_tests {
     use tokio::{io::AsyncReadExt, select};
     use ux::u3;
 
-    use crate::mixed_tcp_udp::{MixedSocket, QueryOptions};
+    use crate::mixed_tcp_udp::{MixedSocket, QueryOpt};
 
     const LISTEN_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 65000);
     const SEND_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 65000);
@@ -3240,7 +3159,7 @@ mod mixed_udp_tcp_tests {
         let query_task = tokio::spawn({
             let mixed_socket = mixed_socket.clone();
             let mut query = query.clone();
-            async move { mixed_socket.query(&mut query, QueryOptions::Both).await }
+            async move { mixed_socket.query(&mut query, QueryOpt::UdpTcp).await }
         });
 
         // Test: Receiver first query (no response + no TCP)
