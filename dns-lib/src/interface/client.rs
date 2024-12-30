@@ -93,9 +93,29 @@ impl Display for ContextErr {
     }
 }
 
+#[derive(Debug, Copy, Eq, PartialEq, Hash, Clone)]
+pub enum QNameMinimization {
+    All {
+        primary_minimization_limit: usize,
+        ns_minimization_limit: usize,
+        sub_ns_minimization_limit: usize,
+    },
+    PrimaryQueryAndNS {
+        primary_minimization_limit: usize,
+        ns_minimization_limit: usize,
+    },
+    PrimaryQuery {
+        primary_minimization_limit: usize,
+    },
+    None,
+}
+
 #[derive(Debug)]
 pub enum Context {
-    Root { query: Question },
+    Root {
+        query: Question,
+        minimization: QNameMinimization,
+    },
     RootSearch {
         query: Question,
         parent: Arc<Context>,
@@ -136,14 +156,17 @@ pub enum Context {
 
 impl Context {
     #[inline]
-    pub const fn new(query: Question) -> Self {
-        Self::Root { query }
+    pub const fn new(query: Question, minimization: QNameMinimization) -> Self {
+        Self::Root {
+            query,
+            minimization
+        }
     }
 
     #[inline]
     pub fn new_search_name(self: Arc<Self>, query: Question) -> Result<Context, ContextErr> {
         match self.as_ref() {
-            Context::Root { query: _ } => Ok(Self::RootSearch { query, parent: self }),
+            Context::Root { query: _, minimization: _ } => Ok(Self::RootSearch { query, parent: self }),
             Context::CName { query: _, parent: _ } => Ok(Self::CNameSearch { query, parent: self }),
             Context::DName { query: _, parent: _ } => Ok(Self::DNameSearch { query, parent: self }),
             Context::NSAddress { query: _, parent: _ } => Ok(Self::NSAddressSearch { query, parent: self }),
@@ -163,10 +186,10 @@ impl Context {
         let query = Question::new(qname, self.qtype(), self.qclass());
         match (self.is_cname_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
-            (Ok(()), Context::Root { query: _ })
+            (Ok(()), Context::Root { query: _, minimization: _ })
           | (Ok(()), Context::CName { query: _, parent: _ })
           | (Ok(()), Context::DName { query: _, parent: _ }) => {
-                Ok(Self::CName { query, parent: self})
+                Ok(Self::CName { query, parent: self })
             },
             (Ok(()), Context::RootSearch { query: _, parent: _ })
           | (Ok(()), Context::CNameSearch { query: _, parent: _ })
@@ -185,7 +208,7 @@ impl Context {
         let query = Question::new(qname, self.qtype(), self.qclass());
         match (self.is_dname_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
-            (Ok(()), Context::Root { query: _ })
+            (Ok(()), Context::Root { query: _, minimization: _ })
           | (Ok(()), Context::CName { query: _, parent: _ })
           | (Ok(()), Context::DName { query: _, parent: _ }) => {
                 Ok(Self::DName { query, parent: self })
@@ -206,7 +229,7 @@ impl Context {
     pub fn new_ns_address(self: Arc<Self>, query: Question) -> Result<Context, ContextErr> {
         match (self.is_ns_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
-            (Ok(()), Context::Root { query: _ })
+            (Ok(()), Context::Root { query: _, minimization: _ })
           | (Ok(()), Context::RootSearch { query: _, parent: _ })
           | (Ok(()), Context::CName { query: _, parent: _ })
           | (Ok(()), Context::CNameSearch { query: _, parent: _ })
@@ -226,7 +249,7 @@ impl Context {
     #[inline]
     pub const fn query(&self) -> &Question {
         match self {
-            Context::Root { query } => query,
+            Context::Root { query, minimization: _ } => query,
             Context::RootSearch { query, parent: _ } => query,
             Context::CName { query, parent: _ } => query,
             Context::CNameSearch { query, parent: _ } => query,
@@ -255,9 +278,72 @@ impl Context {
     }
 
     #[inline]
+    pub fn qname_minimization(&self) -> &QNameMinimization {
+        match self {
+            Context::Root { query: _, minimization } => minimization,
+            Context::RootSearch { query: _, parent } => parent.qname_minimization(),
+            Context::CName { query: _, parent } => parent.qname_minimization(),
+            Context::CNameSearch { query: _, parent } => parent.qname_minimization(),
+            Context::DName { query: _, parent } => parent.qname_minimization(),
+            Context::DNameSearch { query: _, parent } => parent.qname_minimization(),
+            Context::NSAddress { query: _, parent } => parent.qname_minimization(),
+            Context::NSAddressSearch { query: _, parent } => parent.qname_minimization(),
+            Context::SubNSAddress { query: _, parent } => parent.qname_minimization(),
+            Context::SubNSAddressSearch { query: _, parent } => parent.qname_minimization(),
+        }
+    }
+
+    #[inline]
+    pub fn qname_minimization_limit(&self) -> Option<usize> {
+        let minimization = self.qname_minimization();
+        match (self, minimization) {
+            (Context::Root { query: _, minimization: _ }, QNameMinimization::All { primary_minimization_limit, ns_minimization_limit: _, sub_ns_minimization_limit: _ })
+          | (Context::Root { query: _, minimization: _ }, QNameMinimization::PrimaryQueryAndNS { primary_minimization_limit, ns_minimization_limit: _ })
+          | (Context::Root { query: _, minimization: _ }, QNameMinimization::PrimaryQuery { primary_minimization_limit })
+          | (Context::CName { query: _, parent: _ }, QNameMinimization::All { primary_minimization_limit, ns_minimization_limit: _, sub_ns_minimization_limit: _ })
+          | (Context::CName { query: _, parent: _ }, QNameMinimization::PrimaryQueryAndNS { primary_minimization_limit, ns_minimization_limit: _ })
+          | (Context::CName { query: _, parent: _ }, QNameMinimization::PrimaryQuery { primary_minimization_limit })
+          | (Context::DName { query: _, parent: _ }, QNameMinimization::All { primary_minimization_limit, ns_minimization_limit: _, sub_ns_minimization_limit: _ })
+          | (Context::DName { query: _, parent: _ }, QNameMinimization::PrimaryQueryAndNS { primary_minimization_limit, ns_minimization_limit: _ })
+          | (Context::DName { query: _, parent: _ }, QNameMinimization::PrimaryQuery { primary_minimization_limit }) => {
+                Some(*primary_minimization_limit)
+            },
+            (Context::Root { query: _, minimization: _ }, QNameMinimization::None)
+          | (Context::CName { query: _, parent: _ }, QNameMinimization::None)
+          | (Context::DName { query: _, parent: _ }, QNameMinimization::None) => {
+                None
+            },
+            (Context::NSAddress { query: _, parent: _ }, QNameMinimization::All { primary_minimization_limit: _, ns_minimization_limit, sub_ns_minimization_limit: _ })
+          | (Context::NSAddress { query: _, parent: _ }, QNameMinimization::PrimaryQueryAndNS { primary_minimization_limit: _, ns_minimization_limit }) => {
+                Some(*ns_minimization_limit)
+            },
+            (Context::NSAddress { query: _, parent: _ }, QNameMinimization::PrimaryQuery { primary_minimization_limit: _ })
+          | (Context::NSAddress { query: _, parent: _ }, QNameMinimization::None) => {
+                None
+            },
+            (Context::SubNSAddress { query: _, parent: _ }, QNameMinimization::All { primary_minimization_limit: _, ns_minimization_limit: _, sub_ns_minimization_limit }) => {
+                Some(*sub_ns_minimization_limit)
+            },
+            (Context::SubNSAddress { query: _, parent: _ }, QNameMinimization::PrimaryQueryAndNS { primary_minimization_limit: _, ns_minimization_limit: _ })
+          | (Context::SubNSAddress { query: _, parent: _ }, QNameMinimization::PrimaryQuery { primary_minimization_limit: _ })
+          | (Context::SubNSAddress { query: _, parent: _ }, QNameMinimization::None) => {
+                None
+            },
+            // Minimization will have already been applied when creating the search name. It should not be applied twice.
+            (Context::RootSearch { query: _, parent: _ }, _)
+          | (Context::CNameSearch { query: _, parent: _ }, _)
+          | (Context::DNameSearch { query: _, parent: _ }, _)
+          | (Context::NSAddressSearch { query: _, parent: _ }, _)
+          | (Context::SubNSAddressSearch { query: _, parent: _ }, _) => {
+                None
+            }
+        }
+    }
+
+    #[inline]
     pub const fn parent(&self) -> Option<&Arc<Context>> {
         match self {
-            Context::Root { query: _ } => None,
+            Context::Root { query: _, minimization: _ } => None,
             Context::RootSearch { query: _, parent } => Some(parent),
             Context::CName { query: _, parent } => Some(parent),
             Context::CNameSearch { query: _, parent } => Some(parent),
@@ -273,7 +359,7 @@ impl Context {
     #[inline]
     pub fn root(self: &Arc<Self>) -> &Arc<Context> {
         match self.as_ref() {
-            Context::Root { query: _ } => self,
+            Context::Root { query: _, minimization: _ } => self,
             Context::RootSearch { query: _, parent } => parent.root(),
             Context::CName { query: _, parent } => parent.root(),
             Context::CNameSearch { query: _, parent } => parent.root(),
@@ -289,7 +375,7 @@ impl Context {
     #[inline]
     pub fn is_cname_allowed(&self, child: &Question) -> Result<(), ContextErr> {
         match &self {
-            Context::Root { query } => {
+            Context::Root { query, minimization: _ } => {
                 if query.qname().is_parent_domain_of(child.qname()) {
                     Err(ContextErr::CNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
@@ -319,7 +405,7 @@ impl Context {
     #[inline]
     pub fn is_dname_allowed(&self, child: &Question) -> Result<(), ContextErr> {
         match &self {
-            Context::Root { query } => {
+            Context::Root { query, minimization: _ } => {
                 if query.qname().is_parent_domain_of(child.qname()) {
                     Err(ContextErr::DNameWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
@@ -349,7 +435,7 @@ impl Context {
     #[inline]
     pub fn is_ns_allowed(&self, child: &Question) -> Result<(), ContextErr> {
         match &self {
-            Context::Root { query } => {
+            Context::Root { query, minimization: _ } => {
                 if query.eq(child) {
                     Err(ContextErr::NSWillLoop { parent: self.short_name(), child: child.clone() })
                 } else {
@@ -379,7 +465,7 @@ impl Context {
     #[inline]
     fn short_name(&self) -> String {
         match &self {
-            Context::Root { query } =>                          format!("Context::Root {{ qname: {}, qtype: {}, qclass: {} }}",                query.qname(), query.qtype(), query.qclass()),
+            Context::Root { query, minimization: _ } =>         format!("Context::Root {{ qname: {}, qtype: {}, qclass: {} }}",                query.qname(), query.qtype(), query.qclass()),
             Context::RootSearch { query, parent: _ } =>         format!("Context::RootSearch {{ qname: {}, qtype: {}, qclass: {} }}",          query.qname(), query.qtype(), query.qclass()),
             Context::CName { query, parent: _ } =>              format!("Context::CName {{ qname: {}, qtype: {}, qclass: {} }}",               query.qname(), query.qtype(), query.qclass()),
             Context::CNameSearch { query, parent: _ } =>        format!("Context::CNameSearch {{ qname: {}, qtype: {}, qclass: {} }}",         query.qname(), query.qtype(), query.qclass()),

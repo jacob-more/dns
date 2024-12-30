@@ -10,12 +10,10 @@ use query::recursive_query::recursive_query;
 use result::{QOk, QResult};
 use tokio::sync::RwLock;
 
+mod qname_minimizer;
 mod query;
 mod result;
 
-// Note: These should eventually be config options.
-const IPV6_ENABLED: bool = false;
-const IPV4_ENABLED: bool = true;
 
 pub struct DNSAsyncClient {
     cache: Arc<AsyncMainTreeCache>,

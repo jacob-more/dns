@@ -5,7 +5,7 @@ use dns_lib::{interface::{cache::{cache::AsyncCache, CacheQuery, CacheResponse},
 use log::{debug, trace};
 use rand::{thread_rng, seq::SliceRandom};
 
-use crate::{query::round_robin_query::query_name_servers, result::{QError, QOk, QResult}, DNSAsyncClient};
+use crate::{qname_minimizer::QNameMinimizer, query::round_robin_query::query_name_servers, result::{QError, QOk, QResult}, DNSAsyncClient};
 
 
 #[async_recursion]
@@ -39,10 +39,13 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
     // down the tree from there.
     let context = Arc::new(context);
     let search_names_context = context.clone();
-    let search_names = search_names_context.qname().search_domains().take(search_names_max_index);
+    let search_names = match search_names_context.qname_minimization_limit() {
+        Some(limit) => QNameMinimizer::new_limited_minimizer(search_names_context.qname(), search_names_context.qname().search_domains().take(search_names_max_index), limit),
+        None => QNameMinimizer::new_repeater(search_names_context.qname(), search_names_max_index),
+    };
 
     // Query Stage: Query name servers for the next subdomain, following the tree to our answer.
-    for (index, search_name) in search_names.enumerate().rev() {
+    for (index, search_name) in search_names.enumerate().skip(1).rev() {
         // Query the name servers for the child domain (aka. search_name).
         // We set the qtype to be RData::A to hide the actual qtype
         // that we're looking for.
