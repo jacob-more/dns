@@ -497,9 +497,11 @@ where
     client: &'a Arc<DNSAsyncClient>,
     joined_cache: &'b Arc<CCache>,
     context: &'c Arc<Context>,
+    #[pin]
     inner: InnerNSRoundRobin<'d, 'e, 'f, 'g, 'h, CCache>,
 }
 
+#[pin_project(project = InnerNSRoundRobinProj)]
 enum InnerNSRoundRobin<'a, 'b, 'c, 'd, 'e, CCache>
 where
     CCache: AsyncCache + Send + Sync + 'static,
@@ -515,7 +517,8 @@ where
         name_server_cached_queries: Vec<Pin<Box<NSQuery<'c, 'd, 'e, CCache>>>>,
     },
     QueryNameServers {
-        ns_query_select: Pin<Box<NSSelectQuery<'c, 'd, 'e, CCache>>>,
+        #[pin]
+        ns_query_select: NSSelectQuery<'c, 'd, 'e, CCache>,
     },
     Complete,
 }
@@ -531,9 +534,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         loop {
-            let this = self.as_mut().project();
-            match this.inner.borrow_mut() {
-                InnerNSRoundRobin::Fresh { name_servers } => {
+            let mut this = self.as_mut().project();
+            match this.inner.as_mut().project() {
+                InnerNSRoundRobinProj::Fresh { name_servers } => {
                     let name_server_address_queries = name_servers.iter()
                         .flat_map(|ns_domain| [
                             query_cache_for_ns_addresses(ns_domain.clone(), RType::A, this.context.clone(), this.client.clone(), this.joined_cache.clone()).boxed(),
@@ -542,7 +545,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         .collect::<Vec<_>>();
                     let capacity = name_server_address_queries.len();
 
-                    *this.inner = InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries, name_server_cached_queries: Vec::with_capacity(capacity), name_server_non_cached_queries: Vec::with_capacity(capacity) };
+                    this.inner.set(InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries, name_server_cached_queries: Vec::with_capacity(capacity), name_server_non_cached_queries: Vec::with_capacity(capacity) });
 
                     let context = self.context.as_ref();
                     trace!(context:?; "NSRoundRobin::Fresh -> NSRoundRobin::GetCachedNSAddresses: Getting cached ns addresses");
@@ -550,7 +553,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                     // Next loop will poll all the NS address queries
                     continue;
                 },
-                InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries, name_server_non_cached_queries, name_server_cached_queries } => {
+                InnerNSRoundRobinProj::GetCachedNSAddresses { name_server_address_queries, name_server_non_cached_queries, name_server_cached_queries } => {
                     name_server_address_queries.retain_mut(|ns_address_query| {
                         match ns_address_query.as_mut().poll(cx) {
                             Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, context: _, client: _, joined_cache: _, ns_addresses: _, sockets: _, state: InnerNSQuery::Fresh(NSQueryCacheResponse::Hit) }) => {
@@ -574,9 +577,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         let mut ns_queries = Vec::with_capacity(name_server_non_cached_queries.len() + name_server_cached_queries.len());
                         ns_queries.extend(name_server_non_cached_queries.drain(..));
                         ns_queries.extend(name_server_cached_queries.drain(..));
-                        let ns_query_select = Box::pin(NSSelectQuery::new(ns_queries, 3, Duration::from_millis(200)));
+                        let ns_query_select = NSSelectQuery::new(ns_queries, 3, Duration::from_millis(200));
 
-                        *this.inner = InnerNSRoundRobin::QueryNameServers { ns_query_select };
+                        this.inner.set(InnerNSRoundRobin::QueryNameServers { ns_query_select });
 
                         // Next loop will select the first query from the list and start it
                         continue;
@@ -588,7 +591,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         return Poll::Pending;
                     }
                 },
-                InnerNSRoundRobin::QueryNameServers { ns_query_select } => {
+                InnerNSRoundRobinProj::QueryNameServers { mut ns_query_select } => {
                     match ns_query_select.as_mut().poll(cx) {
                         // No error. Valid response.
                         Poll::Ready(Some(NSQueryResult::Result(QResult::Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))))
@@ -600,7 +603,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                             let context = this.context.as_ref();
                             trace!(context:?; "NSRoundRobin::QueryNameServers -> NSRoundRobin::Complete: Received result {result:?}");
 
-                            *this.inner = InnerNSRoundRobin::Complete;
+                            this.inner.set(InnerNSRoundRobin::Complete);
 
                             // Exit forever. Query complete.
                             return Poll::Ready(result);
@@ -612,7 +615,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                             let context = this.context.as_ref();
                             trace!(context:?; "NSRoundRobin::QueryNameServers -> NSRoundRobin::Cleanup: Received error NXDomain in message '{response:?}'");
 
-                            *this.inner = InnerNSRoundRobin::Complete;
+                            this.inner.set(InnerNSRoundRobin::Complete);
 
                             // Exit forever. Query complete.
                             return Poll::Ready(result);
@@ -649,7 +652,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                       | Poll::Ready(response @ None) => {
                             let result = QResult::Fail(RCode::ServFail);
 
-                            *this.inner = InnerNSRoundRobin::Complete;
+                            this.inner.set(InnerNSRoundRobin::Complete);
 
                             let context = this.context.as_ref();
                             trace!(context:?; "NSRoundRobin::QueryNameServers -> NSRoundRobin::Complete: Result is ServFail. Received response '{response:?}'");
@@ -661,7 +664,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         Poll::Pending => return Poll::Pending,
                     }
                 },
-                InnerNSRoundRobin::Complete => {
+                InnerNSRoundRobinProj::Complete => {
                     panic!("InnerNSRoundRobin::Complete: query for '{}' was polled again after it already returned Poll::Ready", this.context.query());
                 },
             }
@@ -673,17 +676,17 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
 impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> PinnedDrop for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
     fn drop(mut self: Pin<&mut Self>) {
         let this = self.project();
-        match this.inner {
-            InnerNSRoundRobin::Fresh { name_servers: _ } => (),
-            InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries: _, name_server_non_cached_queries: _, name_server_cached_queries: _ } => {
+        match this.inner.project() {
+            InnerNSRoundRobinProj::Fresh { name_servers: _ } => (),
+            InnerNSRoundRobinProj::GetCachedNSAddresses { name_server_address_queries: _, name_server_non_cached_queries: _, name_server_cached_queries: _ } => {
                 let context = this.context.as_ref();
                 trace!(context:?; "InnerNSRoundRobin::GetCachedNSAddresses -> NSRoundRobin::(drop): Cleaning up query {}", this.context.query());
             },
-            InnerNSRoundRobin::QueryNameServers { ns_query_select: _ } => {
+            InnerNSRoundRobinProj::QueryNameServers { ns_query_select: _ } => {
                 let context = this.context.as_ref();
                 trace!(context:?; "InnerNSRoundRobin::QueryNameServers -> NSRoundRobin::(drop): Cleaning up query {}", this.context.query());
             },
-            InnerNSRoundRobin::Complete => (),
+            InnerNSRoundRobinProj::Complete => (),
         }
     }
 }
