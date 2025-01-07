@@ -7,4 +7,5 @@ pub mod errors;
 pub mod socket_manager;
 
 pub mod mixed_tcp_udp;
+pub mod tls;
 pub mod quic;

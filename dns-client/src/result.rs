@@ -21,7 +21,7 @@ impl Display for QOk {
     }
 }
 
-#[derive(Clone, PartialEq, Hash, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub(crate) enum QError {
     ContextErr(ContextErr),
     CDomainNameErr(CDomainNameError),
@@ -70,7 +70,7 @@ impl From<QueryError> for QError {
 #[derive(Clone, PartialEq, Hash, Debug)]
 pub(crate) enum QResult<
     TOk: Clone + PartialEq + Hash + Debug + Display = QOk,
-    TErr: Clone + PartialEq + Hash + Debug + Display = QError>
+    TErr: Clone + PartialEq + Debug + Display = QError>
 {
     Err(TErr),
     Fail(RCode),
@@ -80,7 +80,7 @@ pub(crate) enum QResult<
 impl<TOk, TErr> Display for QResult<TOk, TErr>
 where
     TOk: Clone + PartialEq + Hash + Debug + Display,
-    TErr: Clone + PartialEq + Hash + Debug + Display
+    TErr: Clone + PartialEq + Debug + Display
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -103,7 +103,7 @@ where
 impl<TOk, TErr> From<RCode> for QResult<TOk, TErr>
 where
     TOk: Clone + PartialEq + Hash + Debug + Display,
-    TErr: Clone + PartialEq + Hash + Debug + Display
+    TErr: Clone + PartialEq + Debug + Display
 {
     fn from(value: RCode) -> Self {
         QResult::Fail(value)
@@ -112,7 +112,7 @@ where
 
 impl<TErr> From<QOk> for QResult<QOk, TErr>
 where
-    TErr: Clone + PartialEq + Hash + Debug + Display
+    TErr: Clone + PartialEq + Debug + Display
 {
     fn from(value: QOk) -> Self {
         QResult::Ok(value)
@@ -122,7 +122,7 @@ where
 impl<TOk, TErr> From<Result<TOk, TErr>> for QResult<TOk, TErr>
 where
     TOk: Clone + PartialEq + Hash + Debug + Display,
-    TErr: Clone + PartialEq + Hash + Debug + Display
+    TErr: Clone + PartialEq + Debug + Display
 {
     fn from(value: Result<TOk, TErr>) -> Self {
         match value {

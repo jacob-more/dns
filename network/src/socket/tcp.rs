@@ -26,12 +26,12 @@ pub(crate) enum TcpState {
 
 #[async_trait]
 pub(crate) trait TcpSocket where Self: 'static + Sized + Send + Sync {
-    fn peer(&self) -> &SocketAddr;
+    fn peer_addr(&self) -> SocketAddr;
     fn state(&self) -> &RwLock<TcpState>;
 
     /// Start the TCP listener and drive the TCP state to Managed.
     #[inline]
-    async fn start(self: Arc<Self>) -> Result<(), errors::TcpInitError> {
+    async fn start(self: Arc<Self>) -> Result<(), errors::SocketError> {
         match self.init().await {
             Ok(_) => Ok(()),
             Err(error) => Err(error),
@@ -41,7 +41,7 @@ pub(crate) trait TcpSocket where Self: 'static + Sized + Send + Sync {
     /// Start the TCP listener and drive the TCP state to Managed.
     /// Returns a reference to the created TCP stream.
     #[inline]
-    async fn init(self: Arc<Self>) -> Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError> {
+    async fn init(self: Arc<Self>) -> Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::SocketError> {
         InitTcp::new(&self, None).await
     }
 
@@ -161,14 +161,14 @@ where
     },
     InitTcp {
         #[pin]
-        join_handle: JoinHandle<Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError>>,
+        join_handle: JoinHandle<Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::SocketError>>,
     },
     Acquired {
         tcp_socket: Arc<Mutex<OwnedWriteHalf>>,
         #[pin]
         kill_tcp: AwokenToken,
     },
-    Closed(errors::TcpSocketError),
+    Closed(errors::SocketError),
 }
 
 impl<'a, 'c, 'd, 'e> QTcpSocket<'c, 'd>
@@ -201,13 +201,13 @@ where
     }
 
     #[inline]
-    pub fn set_closed(mut self: std::pin::Pin<&mut Self>, reason: errors::TcpSocketError) {
+    pub fn set_closed(mut self: std::pin::Pin<&mut Self>, reason: errors::SocketError) {
         self.set(Self::Closed(reason));
     }
 }
 
-impl<'c, 'd, S: TcpSocket> FutureSocket<'d, S, errors::TcpSocketError> for QTcpSocket<'c, 'd> {
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<S>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::TcpSocketError> where 'a: 'd {
+impl<'c, 'd, S: TcpSocket> FutureSocket<'d, S, errors::SocketError> for QTcpSocket<'c, 'd> {
+    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<S>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::SocketError> where 'a: 'd {
         match self.as_mut().project() {
             QTcpSocketProj::Fresh => {
                 self.as_mut().set_get_tcp_state(socket);
@@ -238,7 +238,10 @@ impl<'c, 'd, S: TcpSocket> FutureSocket<'d, S, errors::TcpSocketError> for QTcpS
                                 return PollSocket::Continue;
                             },
                             TcpState::Blocked => {
-                                let error = errors::TcpSocketError::Disabled;
+                                let error = errors::SocketError::Disabled(
+                                    errors::SocketType::Tcp,
+                                    errors::SocketStage::Initialization,
+                                );
 
                                 self.as_mut().set_closed(error.clone());
 
@@ -260,7 +263,10 @@ impl<'c, 'd, S: TcpSocket> FutureSocket<'d, S, errors::TcpSocketError> for QTcpS
                         return PollSocket::Continue;
                     },
                     Poll::Ready(Err(once_watch::RecvError::Closed)) => {
-                        let error = errors::TcpSocketError::Shutdown;
+                        let error = errors::SocketError::Shutdown(
+                            errors::SocketType::Tcp,
+                            errors::SocketStage::Initialization,
+                        );
 
                         self.as_mut().set_closed(error.clone());
 
@@ -280,16 +286,18 @@ impl<'c, 'd, S: TcpSocket> FutureSocket<'d, S, errors::TcpSocketError> for QTcpS
                         return PollSocket::Continue;
                     },
                     Poll::Ready(Ok(Err(error))) => {
-                        let error = errors::TcpSocketError::from(error);
+                        let error = errors::SocketError::from(error);
 
                         self.as_mut().set_closed(error.clone());
 
                         return PollSocket::Error(error);
                     },
                     Poll::Ready(Err(join_error)) => {
-                        let error = errors::TcpSocketError::from(
-                            errors::TcpInitError::from(join_error)
-                        );
+                        let error = errors::SocketError::from((
+                            errors::SocketType::Tcp,
+                            errors::SocketStage::Initialization,
+                            join_error,
+                        ));
 
                         self.as_mut().set_closed(error.clone());
 
@@ -303,7 +311,10 @@ impl<'c, 'd, S: TcpSocket> FutureSocket<'d, S, errors::TcpSocketError> for QTcpS
             QTcpSocketProj::Acquired { tcp_socket: _, mut kill_tcp } => {
                 match kill_tcp.as_mut().poll(cx) {
                     Poll::Ready(()) => {
-                        let error = errors::TcpSocketError::Shutdown;
+                        let error = errors::SocketError::Shutdown(
+                            errors::SocketType::Tcp,
+                            errors::SocketStage::Connected,
+                        );
 
                         self.as_mut().set_closed(error.clone());
 
@@ -355,7 +366,7 @@ where
     WriteEstablishing(BoxFuture<'b, RwLockWriteGuard<'c, TcpState>>),
     Connecting(BoxFuture<'d, io::Result<TcpStream>>),
     WriteNone {
-        reason: CleanupReason<errors::TcpInitError>,
+        reason: CleanupReason<errors::SocketError>,
         w_tcp_state: BoxFuture<'e, RwLockWriteGuard<'f, TcpState>>,
     },
     WriteManaged {
@@ -393,7 +404,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'k, 'l, S> Future for InitTcp<'a, 'b, 'c, 'd, 'e, '
 where
     S: TcpSocket,
 {
-    type Output = Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::TcpInitError>;
+    type Output = Result<(Arc<Mutex<OwnedWriteHalf>>, AwakeToken), errors::SocketError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         let mut this = self.as_mut().project();
@@ -403,7 +414,10 @@ where
                 if let Poll::Ready(()) = this.kill_tcp.as_mut().poll(cx) {
                     this.tcp_socket_sender.close();
                     this.kill_tcp.awake();
-                    let error = errors::TcpInitError::SocketShutdown;
+                    let error = errors::SocketError::Shutdown(
+                        errors::SocketType::Tcp,
+                        errors::SocketStage::Initialization,
+                    );
 
                     *this.inner = InnerInitTcp::Complete;
 
@@ -414,7 +428,10 @@ where
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                     this.tcp_socket_sender.close();
                     this.kill_tcp.awake();
-                    let error = errors::TcpInitError::Timeout;
+                    let error = errors::SocketError::Timeout(
+                        errors::SocketType::Tcp,
+                        errors::SocketStage::Initialization,
+                    );
 
                     *this.inner = InnerInitTcp::Complete;
 
@@ -443,7 +460,10 @@ where
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                     this.tcp_socket_sender.close();
                     this.kill_tcp.awake();
-                    let error = errors::TcpInitError::Timeout;
+                    let error = errors::SocketError::Timeout(
+                        errors::SocketType::Tcp,
+                        errors::SocketStage::Initialization,
+                    );
 
                     *this.inner = InnerInitTcp::Complete;
 
@@ -498,7 +518,7 @@ where
                                 TcpState::None => {
                                     let tcp_socket_sender = this.tcp_socket_sender.clone();
                                     let kill_init_tcp = this.kill_tcp.get_awake_token();
-                                    let init_connection = TcpStream::connect(this.socket.peer()).boxed();
+                                    let init_connection = TcpStream::connect(this.socket.peer_addr()).boxed();
 
                                     *tcp_state = TcpState::Establishing {
                                         sender: tcp_socket_sender,
@@ -514,7 +534,10 @@ where
                                 TcpState::Blocked => {
                                     this.tcp_socket_sender.close();
                                     this.kill_tcp.awake();
-                                    let error = errors::TcpInitError::SocketDisabled;
+                                    let error = errors::SocketError::Disabled(
+                                        errors::SocketType::Tcp,
+                                        errors::SocketStage::Initialization,
+                                    );
 
                                     *this.inner = InnerInitTcp::Complete;
 
@@ -546,9 +569,14 @@ where
                         },
                         Poll::Ready(Err(error)) => {
                             let w_tcp_state = this.socket.state().write().boxed();
-                            let error = errors::TcpInitError::from(error);
+                            let io_error = errors::IoError::from(error);
+                            let socket_error = errors::SocketError::Io {
+                                socket_type: errors::SocketType::Tcp,
+                                socket_stage: errors::SocketStage::Initialization,
+                                error: io_error,
+                            };
 
-                            *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::ConnectionError(error), w_tcp_state };
+                            *this.inner = InnerInitTcp::WriteNone { reason: CleanupReason::ConnectionError(socket_error), w_tcp_state };
 
                             // Next loop: poll the write lock.
                             continue;
@@ -654,7 +682,10 @@ where
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection timed out.
-                                    return Poll::Ready(Err(errors::TcpInitError::Timeout));
+                                    return Poll::Ready(Err(errors::SocketError::Timeout(
+                                        errors::SocketType::Tcp,
+                                        errors::SocketStage::Initialization,
+                                    )));
                                 },
                                 TcpState::None
                               | TcpState::Blocked => {
@@ -665,7 +696,10 @@ where
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection timed out.
-                                    return Poll::Ready(Err(errors::TcpInitError::Timeout));
+                                    return Poll::Ready(Err(errors::SocketError::Timeout(
+                                        errors::SocketType::Tcp,
+                                        errors::SocketStage::Initialization,
+                                    )));
                                 },
                             }
                         },
@@ -693,7 +727,10 @@ where
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection killed.
-                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
+                                    return Poll::Ready(Err(errors::SocketError::Shutdown(
+                                        errors::SocketType::Tcp,
+                                        errors::SocketStage::Initialization,
+                                    )));
                                 },
                                 TcpState::Managed { socket: _, kill: _ }
                               | TcpState::None
@@ -705,7 +742,10 @@ where
                                     *this.inner = InnerInitTcp::Complete;
 
                                     // Exit loop: connection killed.
-                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
+                                    return Poll::Ready(Err(errors::SocketError::Shutdown(
+                                        errors::SocketType::Tcp,
+                                        errors::SocketStage::Initialization,
+                                    )));
                                 },
                             }
                         },
@@ -779,7 +819,10 @@ where
                                     // Exit loop: state changed after this task
                                     // set it to Establishing. Indicates that
                                     // this task is no longer in charge.
-                                    return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
+                                    return Poll::Ready(Err(errors::SocketError::Shutdown(
+                                        errors::SocketType::Tcp,
+                                        errors::SocketStage::Initialization,
+                                    )));
                                 },
                             }
                         },
@@ -811,7 +854,10 @@ where
 
                             // Exit loop: all senders were dropped so it is not
                             // possible to receive a connection.
-                            return Poll::Ready(Err(errors::TcpInitError::SocketShutdown));
+                            return Poll::Ready(Err(errors::SocketError::Shutdown(
+                                errors::SocketType::Tcp,
+                                errors::SocketStage::Initialization,
+                            )));
                         },
                         Poll::Pending => {
                             // Exit loop. Will be woken up once a TCP write

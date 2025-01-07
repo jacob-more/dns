@@ -1,16 +1,20 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::{hash_map::Entry, HashMap}, net::IpAddr, sync::Arc, time::Duration};
 
+use dns_lib::types::c_domain_name::CDomainName;
 use futures::StreamExt;
+use rustls::RootCertStore;
 use tokio::{select, sync::{watch, RwLock}, task::JoinHandle};
 
-use crate::mixed_tcp_udp::MixedSocket;
+use crate::{mixed_tcp_udp::MixedSocket, quic::QuicSocket, tls::TlsSocket};
 
 
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(30);
 
 
 struct InternalSocketManager {
-    sockets: HashMap<SocketAddr, (Arc<MixedSocket>, u8)>,
+    udp_tcp_sockets: HashMap<IpAddr, (Arc<MixedSocket>, u8)>,
+    tls_sockets: HashMap<(IpAddr, CDomainName), (Arc<TlsSocket>, u8)>,
+    quic_sockets: HashMap<(IpAddr, CDomainName), (Arc<QuicSocket>, u8)>,
     garbage_collection: Option<JoinHandle<()>>,
     keep_alive: watch::Sender<Duration>,
 }
@@ -20,7 +24,9 @@ impl InternalSocketManager {
     pub fn with_keep_alive(keep_alive: Duration) -> (Self, watch::Receiver<Duration>) {
         let (keep_alive_sender, keep_alive_receiver) = watch::channel(keep_alive);
         let manager = Self {
-            sockets: HashMap::new(),
+            udp_tcp_sockets: HashMap::new(),
+            tls_sockets: HashMap::new(),
+            quic_sockets: HashMap::new(),
             garbage_collection: None,
             keep_alive: keep_alive_sender,
         };
@@ -83,7 +89,7 @@ impl InternalSocketManager {
     #[inline]
     async fn drop_unused_sockets(internal_socket_manager: &Arc<RwLock<Self>>) {
         let mut w_socket_manager = internal_socket_manager.write().await;
-        w_socket_manager.sockets.retain(|address, (socket, nothing_received)| {
+        w_socket_manager.udp_tcp_sockets.retain(|address, (socket, nothing_received)| {
             // If we are actively sending messages on a socket, we should never close it.
             if socket.recent_messages_sent() {
                 *nothing_received += 1;
@@ -114,7 +120,7 @@ impl InternalSocketManager {
     #[inline]
     async fn drop_all_sockets(internal_socket_manager: &Arc<RwLock<Self>>) {
         let mut w_socket_manager = internal_socket_manager.write().await;
-        futures::stream::iter(w_socket_manager.sockets.drain())
+        futures::stream::iter(w_socket_manager.udp_tcp_sockets.drain())
             .for_each_concurrent(None, |(address, (socket, _))| async move {
                 println!("GC: Removing {address} from socket manager");
                 let _ = socket.disable().await;
@@ -125,6 +131,8 @@ impl InternalSocketManager {
 
 #[derive(Clone)]
 pub struct SocketManager {
+    tls_client_config: Arc<rustls::ClientConfig>,
+    quic_client_config: Arc<quinn::ClientConfig>,
     internal: Arc<RwLock<InternalSocketManager>>
 }
 
@@ -135,7 +143,28 @@ impl SocketManager {
     #[inline]
     pub async fn with_keep_alive(keep_alive: Duration) -> Self {
         let (socket_manager, keep_alive_receiver) = InternalSocketManager::with_keep_alive(keep_alive);
-        let socket_manager = Self { internal: Arc::new(RwLock::new(socket_manager)) };
+
+        // FIXME: the root cert store / client config should be provided by global config
+        let root_cert_store = Arc::new(RootCertStore::from_iter(
+            webpki_roots::TLS_SERVER_ROOTS.iter().cloned()
+        ));
+
+        let tls_client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(root_cert_store.clone())
+            .with_no_client_auth();
+        let tls_client_config = Arc::new(tls_client_config);
+
+        let quic_client_config = match quinn::ClientConfig::with_root_certificates(root_cert_store) {
+            Ok(config) => Arc::new(config),
+            Err(_) => todo!("handle config error"),
+        };
+        
+
+        let socket_manager = Self {
+            tls_client_config,
+            quic_client_config,
+            internal: Arc::new(RwLock::new(socket_manager))
+        };
 
         let join_handle = InternalSocketManager::start_garbage_collection(socket_manager.internal.clone(), keep_alive_receiver);
         let mut w_isocket_manager = socket_manager.internal.write().await;
@@ -163,20 +192,22 @@ impl SocketManager {
     ///
     /// This function is cancel safe.
     #[inline]
-    pub async fn get(&self, address: &SocketAddr) -> Arc<MixedSocket> {
+    pub async fn get_udp_tcp(&self, address: IpAddr) -> Arc<MixedSocket> {
         let r_socket_manager = self.internal.read().await;
-        match r_socket_manager.sockets.get(address) {
+        match r_socket_manager.udp_tcp_sockets.get(&address) {
             Some((socket, _)) => return socket.clone(),
             None => (),
         }
         drop(r_socket_manager);
 
         let mut w_socket_manager = self.internal.write().await;
-        match w_socket_manager.sockets.get(address) {
-            Some((socket, _)) => return socket.clone(),
-            None => {
+        match w_socket_manager.udp_tcp_sockets.entry(address) {
+            Entry::Occupied(occupied_entry) => {
+                return occupied_entry.get().0.clone();
+            },
+            Entry::Vacant(vacant_entry) => {
                 let socket = MixedSocket::new(address.clone());
-                w_socket_manager.sockets.insert(address.clone(), (socket.clone(), 0));
+                vacant_entry.insert((socket.clone(), 0));
                 return socket;
             },
         }
@@ -186,9 +217,9 @@ impl SocketManager {
     ///
     /// This function is cancel safe.
     #[inline]
-    pub async fn try_get(&self, address: &SocketAddr) -> Option<Arc<MixedSocket>> {
+    pub async fn try_get_udp_tcp(&self, address: &IpAddr) -> Option<Arc<MixedSocket>> {
         let r_socket_manager = self.internal.read().await;
-        let socket = r_socket_manager.sockets.get(address).cloned();
+        let socket = r_socket_manager.udp_tcp_sockets.get(address).cloned();
         drop(r_socket_manager);
         return socket.map(|(socket, _)| socket);
     }
@@ -197,15 +228,17 @@ impl SocketManager {
     ///
     /// This function is cancel safe.
     #[inline]
-    pub async fn get_all(&self, addresses: impl Iterator<Item = &SocketAddr>) -> Vec<Arc<MixedSocket>> {
+    pub async fn get_all_udp_tcp(&self, addresses: impl Iterator<Item = IpAddr>) -> Vec<Arc<MixedSocket>> {
         let mut w_socket_manager = self.internal.write().await;
         let sockets = addresses
-            .map(|address| match w_socket_manager.sockets.get(address) {
-                Some((socket, _)) => socket.clone(),
-                None => {
+            .map(|address| match w_socket_manager.udp_tcp_sockets.entry(address) {
+                Entry::Occupied(occupied_entry) => {
+                    return occupied_entry.get().0.clone();
+                },
+                Entry::Vacant(vacant_entry) => {
                     let socket = MixedSocket::new(address.clone());
-                    w_socket_manager.sockets.insert(address.clone(), (socket.clone(), 0));
-                    socket
+                    vacant_entry.insert((socket.clone(), 0));
+                    return socket;
                 },
             })
             .collect::<Vec<_>>();
@@ -217,23 +250,195 @@ impl SocketManager {
     ///
     /// This function is cancel safe.
     #[inline]
-    pub async fn try_get_all(&self, addresses: impl Iterator<Item = &SocketAddr>) -> Vec<Arc<MixedSocket>> {
+    pub async fn try_get_all_udp_tcp(&self, addresses: impl Iterator<Item = &IpAddr>) -> Vec<Arc<MixedSocket>> {
         let r_socket_manager = self.internal.read().await;
         let sockets = addresses
-            .filter_map(|address| r_socket_manager.sockets.get(address).map(|(socket, _)| socket.clone()))
+            .filter_map(|address| r_socket_manager.udp_tcp_sockets.get(address).map(|(socket, _)| socket.clone()))
             .collect::<Vec<_>>();
         drop(r_socket_manager);
         return sockets;
     }
 
     #[inline]
-    pub async fn for_each<F>(&self, f: F)
+    pub async fn for_each_udp_tcp<F>(&self, f: F)
     where
         Self: Sized,
-        F: FnMut((&SocketAddr, &Arc<MixedSocket>)),
+        F: FnMut((&IpAddr, &Arc<MixedSocket>)),
     {
         let r_socket_manager = self.internal.read().await;
-        r_socket_manager.sockets.iter().map(|(address, (socket, _))| (address, socket)).for_each(f);
+        r_socket_manager.udp_tcp_sockets.iter().map(|(address, (socket, _))| (address, socket)).for_each(f);
+        drop(r_socket_manager);
+    }
+
+    /// # Cancel Safety
+    ///
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn get_tls(&self, address: (IpAddr, CDomainName)) -> Arc<TlsSocket> {
+        let r_socket_manager = self.internal.read().await;
+        match r_socket_manager.tls_sockets.get(&address) {
+            Some((socket, _)) => return socket.clone(),
+            None => (),
+        }
+        drop(r_socket_manager);
+
+        let mut w_socket_manager = self.internal.write().await;
+        match w_socket_manager.tls_sockets.entry(address) {
+            Entry::Occupied(occupied_entry) => {
+                return occupied_entry.get().0.clone();
+            },
+            Entry::Vacant(vacant_entry) => {
+                let address = vacant_entry.key().0.clone();
+                let name = vacant_entry.key().1.clone();
+                let socket = TlsSocket::new(address, name, self.tls_client_config.clone());
+                vacant_entry.insert((socket.clone(), 0));
+                return socket;
+            },
+        }
+    }
+
+    /// # Cancel Safety
+    ///
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn try_get_tls(&self, address: &(IpAddr, CDomainName)) -> Option<Arc<TlsSocket>> {
+        let r_socket_manager = self.internal.read().await;
+        let socket = r_socket_manager.tls_sockets.get(address).cloned();
+        drop(r_socket_manager);
+        return socket.map(|(socket, _)| socket);
+    }
+
+    /// # Cancel Safety
+    ///
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn get_all_tls(&self, addresses: impl Iterator<Item = (IpAddr, CDomainName)>) -> Vec<Arc<TlsSocket>> {
+        let mut w_socket_manager = self.internal.write().await;
+        let sockets = addresses
+            .map(|address| match w_socket_manager.tls_sockets.entry(address) {
+                Entry::Occupied(occupied_entry) => {
+                    return occupied_entry.get().0.clone();
+                },
+                Entry::Vacant(vacant_entry) => {
+                    let address = vacant_entry.key().0.clone();
+                    let name = vacant_entry.key().1.clone();
+                    let socket = TlsSocket::new(address, name, self.tls_client_config.clone());
+                    vacant_entry.insert((socket.clone(), 0));
+                    return socket;
+                },
+            })
+            .collect::<Vec<_>>();
+        drop(w_socket_manager);
+        return sockets;
+    }
+
+    /// # Cancel Safety
+    ///
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn try_get_all_tls(&self, addresses: impl Iterator<Item = &(IpAddr, CDomainName)>) -> Vec<Arc<TlsSocket>> {
+        let r_socket_manager = self.internal.read().await;
+        let sockets = addresses
+            .filter_map(|address| r_socket_manager.tls_sockets.get(address).map(|(socket, _)| socket.clone()))
+            .collect::<Vec<_>>();
+        drop(r_socket_manager);
+        return sockets;
+    }
+
+    #[inline]
+    pub async fn for_each_tls<F>(&self, f: F)
+    where
+        Self: Sized,
+        F: FnMut((&(IpAddr, CDomainName), &Arc<TlsSocket>)),
+    {
+        let r_socket_manager = self.internal.read().await;
+        r_socket_manager.tls_sockets.iter().map(|(address, (socket, _))| (address, socket)).for_each(f);
+        drop(r_socket_manager);
+    }
+
+    /// # Cancel Safety
+    ///
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn get_quic(&self, address: (IpAddr, CDomainName)) -> Arc<QuicSocket> {
+        let r_socket_manager = self.internal.read().await;
+        match r_socket_manager.quic_sockets.get(&address) {
+            Some((socket, _)) => return socket.clone(),
+            None => (),
+        }
+        drop(r_socket_manager);
+
+        let mut w_socket_manager = self.internal.write().await;
+        match w_socket_manager.quic_sockets.entry(address) {
+            Entry::Occupied(occupied_entry) => {
+                return occupied_entry.get().0.clone();
+            },
+            Entry::Vacant(vacant_entry) => {
+                let address = vacant_entry.key().0.clone();
+                let name = vacant_entry.key().1.clone();
+                let socket = QuicSocket::new(address, name, self.quic_client_config.clone());
+                vacant_entry.insert((socket.clone(), 0));
+                return socket;
+            },
+        }
+    }
+
+    /// # Cancel Safety
+    ///
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn try_get_quic(&self, address: &(IpAddr, CDomainName)) -> Option<Arc<QuicSocket>> {
+        let r_socket_manager = self.internal.read().await;
+        let socket = r_socket_manager.quic_sockets.get(address).cloned();
+        drop(r_socket_manager);
+        return socket.map(|(socket, _)| socket);
+    }
+
+    /// # Cancel Safety
+    ///
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn get_all_quic(&self, addresses: impl Iterator<Item = (IpAddr, CDomainName)>) -> Vec<Arc<QuicSocket>> {
+        let mut w_socket_manager = self.internal.write().await;
+        let sockets = addresses
+            .map(|address| match w_socket_manager.quic_sockets.entry(address) {
+                Entry::Occupied(occupied_entry) => {
+                    return occupied_entry.get().0.clone();
+                },
+                Entry::Vacant(vacant_entry) => {
+                    let address = vacant_entry.key().0.clone();
+                    let name = vacant_entry.key().1.clone();
+                    let socket = QuicSocket::new(address, name, self.quic_client_config.clone());
+                    vacant_entry.insert((socket.clone(), 0));
+                    return socket;
+                },
+            })
+            .collect::<Vec<_>>();
+        drop(w_socket_manager);
+        return sockets;
+    }
+
+    /// # Cancel Safety
+    ///
+    /// This function is cancel safe.
+    #[inline]
+    pub async fn try_get_all_quic(&self, addresses: impl Iterator<Item = &(IpAddr, CDomainName)>) -> Vec<Arc<QuicSocket>> {
+        let r_socket_manager = self.internal.read().await;
+        let sockets = addresses
+            .filter_map(|address| r_socket_manager.quic_sockets.get(address).map(|(socket, _)| socket.clone()))
+            .collect::<Vec<_>>();
+        drop(r_socket_manager);
+        return sockets;
+    }
+
+    #[inline]
+    pub async fn for_each_quic<F>(&self, f: F)
+    where
+        Self: Sized,
+        F: FnMut((&(IpAddr, CDomainName), &Arc<QuicSocket>)),
+    {
+        let r_socket_manager = self.internal.read().await;
+        r_socket_manager.quic_sockets.iter().map(|(address, (socket, _))| (address, socket)).for_each(f);
         drop(r_socket_manager);
     }
 
@@ -248,16 +453,23 @@ impl Drop for SocketManager {
         let imanager = self.internal.clone();
         tokio::task::spawn(async move {
             // Stop garbage collection.
-            let r_imanager = imanager.read().await;
-            if let Some(garbage_collection) = &r_imanager.garbage_collection {
+            let mut w_imanager = imanager.write().await;
+            if let Some(garbage_collection) = &w_imanager.garbage_collection {
                 garbage_collection.abort();
             }
 
             // Shutdown all of the sockets still being managed.
-            for (_, (socket, _)) in r_imanager.sockets.iter() {
-                let _ = socket.clone().shutdown().await;
-            }
-            drop(r_imanager);
+            futures::stream::iter(w_imanager.udp_tcp_sockets.drain())
+                .for_each_concurrent(None, |(_, (socket, _))| async move {
+                    let _ = socket.disable().await;
+                })
+                .await;
+            futures::stream::iter(w_imanager.tls_sockets.drain())
+                .for_each_concurrent(None, |(_, (socket, _))| async move {
+                    let _ = socket.disable().await;
+                })
+                .await;
+            drop(w_imanager);
         });
     }
 }

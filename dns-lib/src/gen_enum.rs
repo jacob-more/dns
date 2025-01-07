@@ -103,6 +103,13 @@ macro_rules! impl_enum_from_code {
                 }
             }
         }
+
+        impl std::convert::From<$int_ty> for $enum_name {
+            #[inline]
+            fn from(value: $int_ty) -> Self {
+                Self::from_code(value)
+            }
+        }
     };
 }
 

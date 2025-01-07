@@ -150,7 +150,7 @@ pub(crate) async fn recursive_query<CCache>(client: Arc<DNSAsyncClient>, joined_
         });
 }
 
-#[derive(Clone, PartialEq, Hash, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum NSResponse {
     Records(usize, Vec<ResourceRecord<NS>>),
     Error(QError),

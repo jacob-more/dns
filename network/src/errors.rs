@@ -1,402 +1,256 @@
 use std::{error::Error, fmt::Display, io};
 
 use dns_lib::serde::wire::{read_wire::ReadWireError, write_wire::WriteWireError};
+use rustls::pki_types::InvalidDnsNameError;
 use tokio::task::JoinError;
 
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SocketType {
+    Udp,
+    Tcp,
+    Tls,
+    Quic,
+}
+impl Display for SocketType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Udp  => write!(f, "UDP"),
+            Self::Tcp  => write!(f, "TCP"),
+            Self::Tls  => write!(f, "TLS"),
+            Self::Quic => write!(f, "QUIC"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SocketStage {
+    Initialization,
+    Connected,
+}
+impl Display for SocketStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Initialization => write!(f, "Initialization"),
+            Self::Connected => write!(f, "Connected"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueryError {
-    TcpSocket(TcpSocketError),
-    TcpSend(TcpSendError),
-    UdpSocket(UdpSocketError),
-    UdpSend(UdpSendError),
+    Socket(SocketError),
+    Send(SendError),
+    Receive(ReceiveError),
     Timeout,
 }
 impl Display for QueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Self::TcpSocket(tcp_error) => write!(f, "{tcp_error}"),
-            Self::TcpSend(tcp_error) => write!(f, "{tcp_error}"),
-            Self::UdpSocket(udp_error) => write!(f, "{udp_error}"),
-            Self::UdpSend(udp_error) => write!(f, "{udp_error}"),
+            Self::Socket(error) => write!(f, "{error}"),
+            Self::Send(error) => write!(f, "{error}"),
+            Self::Receive(error) => write!(f, "{error}"),
             Self::Timeout => write!(f, "timeout during query"),
         }
     }
 }
 impl Error for QueryError {}
-impl From<TcpSocketError> for QueryError {
-    fn from(error: TcpSocketError) -> Self {
-        Self::TcpSocket(error)
-    }
-}
-impl From<TcpSendError> for QueryError {
-    fn from(error: TcpSendError) -> Self {
-        Self::TcpSend(error)
-    }
-}
-impl From<UdpSocketError> for QueryError {
-    fn from(error: UdpSocketError) -> Self {
-        Self::UdpSocket(error)
-    }
-}
-impl From<UdpSendError> for QueryError {
-    fn from(error: UdpSendError) -> Self {
-        Self::UdpSend(error)
-    }
-}
-impl From<SocketSendError> for QueryError {
-    fn from(error: SocketSendError) -> Self {
-        match error {
-            SocketSendError::Tcp(tcp_send_error) => Self::from(tcp_send_error),
-            SocketSendError::Udp(udp_send_error) => Self::from(udp_send_error),
-        }
-    }
-}
 impl From<SocketError> for QueryError {
     fn from(error: SocketError) -> Self {
-        match error {
-            SocketError::Tcp(tcp_error) => Self::from(tcp_error),
-            SocketError::Udp(udp_error) => Self::from(udp_error),
-        }
+        Self::Socket(error)
+    }
+}
+impl From<SendError> for QueryError {
+    fn from(error: SendError) -> Self {
+        Self::Send(error)
+    }
+}
+impl From<ReceiveError> for QueryError {
+    fn from(error: ReceiveError) -> Self {
+        Self::Receive(error)
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum SocketSendError {
-    Tcp(TcpSendError),
-    Udp(UdpSendError),
-}
-impl Display for SocketSendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::Tcp(send_error) => write!(f, "{send_error}"),
-            Self::Udp(send_error) => write!(f, "{send_error}"),
-        }
-    }
-}
-impl Error for SocketSendError {}
-impl From<TcpSendError> for SocketSendError {
-    fn from(error: TcpSendError) -> Self {
-        Self::Tcp(error)
-    }
-}
-impl From<UdpSendError> for SocketSendError {
-    fn from(error: UdpSendError) -> Self {
-        Self::Udp(error)
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum TcpSendError {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendError {
     Serialization(WriteWireError),
     IncorrectNumberBytes {
+        socket_type: SocketType,
         expected: u16,
         sent: usize,
     },
-    Io(IoError),
+    Io {
+        socket_type: SocketType,
+        error: IoError
+    },
+    QuicWriteError(quinn::WriteError),
 }
-impl Display for TcpSendError {
+impl Display for SendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Self::Serialization(write_wire_error) => write!(f, "{write_wire_error} before sending on TCP socket"),
-            Self::IncorrectNumberBytes { expected, sent } => write!(f, "expected to send {expected} bytes but sent {sent} on TCP socket"),
-            Self::Io(error) => write!(f, "{error} when sending on TCP socket"),
+            Self::Serialization(write_wire_error) => write!(f, "{write_wire_error}"),
+            Self::IncorrectNumberBytes { socket_type, expected, sent } => write!(f, "expected to send {expected} bytes but sent {sent} on {socket_type} socket"),
+            Self::Io { socket_type, error } => write!(f, "{error} when sending on {socket_type} socket"),
+            Self::QuicWriteError(error) => write!(f, "{error} when sending on QUIC socket"),
         }
     }
 }
-impl Error for TcpSendError {}
-impl From<WriteWireError> for TcpSendError {
+impl Error for SendError {}
+impl From<WriteWireError> for SendError {
     fn from(error: WriteWireError) -> Self {
         Self::Serialization(error)
     }
 }
-impl From<IoError> for TcpSendError {
-    fn from(error: IoError) -> Self {
-        Self::Io(error)
-    }
-}
-impl From<io::Error> for TcpSendError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(IoError::from(error))
-    }
-}
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum UdpSendError {
-    Serialization(WriteWireError),
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiveError {
     IncorrectNumberBytes {
-        expected: u16,
-        sent: usize,
-    },
-    Io(IoError),
-}
-impl Display for UdpSendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::Serialization(write_wire_error) => write!(f, "{write_wire_error} before sending on UDP socket"),
-            Self::IncorrectNumberBytes { expected, sent } => write!(f, "expected to send {expected} bytes but sent {sent} on UDP socket"),
-            Self::Io(error) => write!(f, "{error} when sending on UDP socket"),
-        }
-    }
-}
-impl Error for UdpSendError {}
-impl From<WriteWireError> for UdpSendError {
-    fn from(error: WriteWireError) -> Self {
-        Self::Serialization(error)
-    }
-}
-impl From<IoError> for UdpSendError {
-    fn from(error: IoError) -> Self {
-        Self::Io(error)
-    }
-}
-impl From<io::Error> for UdpSendError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(IoError::from(error))
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum StreamReceiveError {
-    IncorrectNumberBytes {
-        stream_protocol: &'static str,
+        protocol: SocketType,
         expected: u16,
         received: usize,
     },
     IncorrectLengthByte {
-        stream_protocol: &'static str,
+        protocol: SocketType,
         limit: u16,
         received: u16,
     },
     Deserialization {
-        stream_protocol: &'static str,
+        protocol: SocketType,
         error: ReadWireError
     },
     Io {
-        stream_protocol: &'static str,
+        protocol: SocketType,
         error: IoError
     },
 }
-impl Display for StreamReceiveError {
+impl Display for ReceiveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Self::IncorrectNumberBytes { stream_protocol, expected, received } => write!(f, "expected to receive {expected} bytes but received {received} on {stream_protocol} socket"),
-            Self::IncorrectLengthByte { stream_protocol, limit, received } => write!(f, "expected to receive at most {limit} bytes but the length byte is {received} on {stream_protocol} socket"),
-            Self::Deserialization{ stream_protocol, error } => write!(f, "{error} when receiving on {stream_protocol} socket"),
-            Self::Io{ stream_protocol, error } => write!(f, "{error} when receiving on {stream_protocol} socket"),
+            Self::IncorrectNumberBytes { protocol, expected, received } => write!(f, "expected to receive {expected} bytes but received {received} on {protocol} socket"),
+            Self::IncorrectLengthByte { protocol, limit, received } => write!(f, "expected to receive at most {limit} bytes but the length byte is {received} on {protocol} socket"),
+            Self::Deserialization{ protocol, error } => write!(f, "{error} when receiving on {protocol} socket"),
+            Self::Io{ protocol, error } => write!(f, "{error} when receiving on {protocol} socket"),
         }
     }
 }
-impl Error for StreamReceiveError {}
+impl Error for ReceiveError {}
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum UdpReceiveError {
-    IncorrectNumberBytes {
-        expected: u16,
-        received: usize,
-    },
-    Deserialization(ReadWireError),
-    Io(IoError),
-}
-impl Display for UdpReceiveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::IncorrectNumberBytes { expected, received } => write!(f, "expected to receive {expected} bytes but received {received} on TCP socket"),
-            Self::Deserialization(error) => write!(f, "{error} when receiving on UDP socket"),
-            Self::Io(error) => write!(f, "{error} when receiving on UDP socket"),
-        }
-    }
-}
-impl Error for UdpReceiveError {}
-impl From<ReadWireError> for UdpReceiveError {
-    fn from(error: ReadWireError) -> Self {
-        Self::Deserialization(error)
-    }
-}
-impl From<IoError> for UdpReceiveError {
-    fn from(error: IoError) -> Self {
-        Self::Io(error)
-    }
-}
-impl From<io::Error> for UdpReceiveError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(IoError::from(error))
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum SocketError {
-    Udp(UdpSocketError),
-    Tcp(TcpSocketError),
+    Disabled(SocketType, SocketStage),
+    Shutdown(SocketType, SocketStage),
+    Timeout(SocketType, SocketStage),
+    JoinErrorPanic(SocketType, SocketStage),
+    JoinErrorCancelled(SocketType, SocketStage),
+    InvalidName {
+        socket_type: SocketType,
+        socket_stage: SocketStage,
+        error: InvalidDnsNameError,
+    },
+    Io {
+        socket_type: SocketType,
+        socket_stage: SocketStage,
+        error: IoError,
+    },
+    QuicConnection {
+        socket_stage: SocketStage,
+        error: quinn::ConnectionError,
+    },
+    QuicConnect {
+        socket_stage: SocketStage,
+        error: quinn::ConnectError,
+    },
+    Multiple(Vec<SocketError>)
 }
+impl Clone for SocketError {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Disabled(socket_type, socket_stage) => Self::Disabled(socket_type.clone(), socket_stage.clone()),
+            Self::Shutdown(socket_type, socket_stage) => Self::Shutdown(socket_type.clone(), socket_stage.clone()),
+            Self::Timeout(socket_type, socket_stage) => Self::Timeout(socket_type.clone(), socket_stage.clone()),
+            Self::JoinErrorPanic(socket_type, socket_stage) => Self::JoinErrorPanic(socket_type.clone(), socket_stage.clone()),
+            Self::JoinErrorCancelled(socket_type, socket_stage) => Self::JoinErrorCancelled(socket_type.clone(), socket_stage.clone()),
+            Self::InvalidName { socket_type, socket_stage, error: _ } => Self::InvalidName { socket_type: socket_type.clone(), socket_stage: socket_stage.clone(), error: InvalidDnsNameError },
+            Self::Io { socket_type, socket_stage, error } => Self::Io { socket_type: socket_type.clone(), socket_stage: socket_stage.clone(), error: error.clone() },
+            Self::QuicConnection { socket_stage, error } => Self::QuicConnection { socket_stage: socket_stage.clone(), error: error.clone() },
+            Self::QuicConnect { socket_stage, error } => Self::QuicConnect { socket_stage: socket_stage.clone(), error: error.clone() },
+            Self::Multiple(errors) => Self::Multiple(errors.clone()),
+
+        }
+    }
+}
+impl PartialEq for SocketError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Disabled(self_socket_type, self_socket_stage), Self::Disabled(other_socket_type, other_socket_stage))
+          | (Self::Shutdown(self_socket_type, self_socket_stage), Self::Shutdown(other_socket_type, other_socket_stage))
+          | (Self::Timeout(self_socket_type, self_socket_stage), Self::Timeout(other_socket_type, other_socket_stage))
+          | (Self::JoinErrorPanic(self_socket_type, self_socket_stage), Self::JoinErrorPanic(other_socket_type, other_socket_stage))
+          | (Self::JoinErrorCancelled(self_socket_type, self_socket_stage), Self::JoinErrorCancelled(other_socket_type, other_socket_stage))
+          | (Self::InvalidName { socket_type: self_socket_type, socket_stage: self_socket_stage, error: _ }, Self::InvalidName { socket_type: other_socket_type, socket_stage: other_socket_stage, error: _ }) => {
+                (self_socket_type == other_socket_type)
+                && (self_socket_stage == other_socket_stage)
+            },
+            (Self::Io { socket_type: self_socket_type, socket_stage: self_socket_stage, error: self_error }, Self::Io { socket_type: other_socket_type, socket_stage: other_socket_stage, error: other_error }) => {
+                (self_socket_type == other_socket_type)
+                && (self_socket_stage == other_socket_stage)
+                && (self_error == other_error)
+            },
+            (Self::QuicConnection { socket_stage: self_socket_stage, error: self_error }, Self::QuicConnection { socket_stage: other_socket_stage, error: other_error }) => {
+                (self_socket_stage == other_socket_stage)
+                && (self_error == other_error)
+            }
+            (Self::QuicConnect { socket_stage: self_socket_stage, error: self_error }, Self::QuicConnect { socket_stage: other_socket_stage, error: other_error }) => {
+                (self_socket_stage == other_socket_stage)
+                && (self_error == other_error)
+            }
+            (Self::Multiple(self_errors), Self::Multiple(other_errors)) => {
+                self_errors == other_errors
+            },
+            _ => {
+                core::mem::discriminant(self) == core::mem::discriminant(other)
+            },
+        }
+    }
+}
+impl Eq for SocketError {}
 impl Display for SocketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Self::Udp(udp_error) => write!(f, "{udp_error}"),
-            Self::Tcp(tcp_error) => write!(f, "{tcp_error}"),
+            Self::Disabled(socket_type, socket_stage) => write!(f, "{socket_type} socket is disabled during {socket_stage}"),
+            Self::Shutdown(socket_type, socket_stage) => write!(f, "{socket_type} socket is disabled during {socket_stage}"),
+            Self::Timeout(socket_type, socket_stage) => write!(f, "{socket_type} socket timed out during {socket_stage}"),
+            Self::JoinErrorPanic(socket_type, socket_stage) => write!(f, "{socket_type} socket task panicked during {socket_stage}"),
+            Self::JoinErrorCancelled(socket_type, socket_stage) => write!(f, "{socket_type} socket task cancelled during {socket_stage}"),
+            Self::InvalidName { socket_type, socket_stage, error } => write!(f, "{error} during {socket_type} {socket_stage}"),
+            Self::Io { socket_type, socket_stage, error } => write!(f, "{error} during {socket_type} {socket_stage}"),
+            Self::QuicConnection { socket_stage, error } => write!(f, "{error} during QUIC {socket_stage}"),
+            Self::QuicConnect { socket_stage, error } => write!(f, "{error} during QUIC {socket_stage}"),
+            Self::Multiple(errors) => {
+                let mut errors_iter = errors.iter();
+                if let Some(error) = errors_iter.next() {
+                    write!(f, "{error}")?;
+                }
+                for error in errors_iter {
+                    write!(f, "and {error}")?;
+                }
+                Ok(())
+            },
         }
     }
 }
 impl Error for SocketError {}
-impl From<UdpSocketError> for SocketError {
-    fn from(error: UdpSocketError) -> Self {
-        Self::Udp(error)
-    }
-}
-impl From<TcpSocketError> for SocketError {
-    fn from(error: TcpSocketError) -> Self {
-        Self::Tcp(error)
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum TcpSocketError {
-    Disabled,
-    Shutdown,
-    Init(TcpInitError),
-}
-impl Display for TcpSocketError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::Disabled => write!(f, "TCP socket is disabled"),
-            Self::Shutdown => write!(f, "TCP socket was shutdown"),
-            Self::Init(init_error) => write!(f, "{init_error}"),
-        }
-    }
-}
-impl Error for TcpSocketError {}
-impl From<TcpInitError> for TcpSocketError {
-    fn from(error: TcpInitError) -> Self {
-        Self::Init(error)
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum UdpSocketError {
-    Disabled,
-    Shutdown,
-    Init(UdpInitError),
-}
-impl Display for UdpSocketError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::Disabled => write!(f, "UDP socket is disabled"),
-            Self::Shutdown => write!(f, "UDP socket was shutdown"),
-            Self::Init(init_error) => write!(f, "{init_error}"),
-        }
-    }
-}
-impl Error for UdpSocketError {}
-impl From<UdpInitError> for UdpSocketError {
-    fn from(error: UdpInitError) -> Self {
-        Self::Init(error)
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum SocketInitError {
-    Udp(UdpInitError),
-    Tcp(TcpInitError),
-    Both(UdpInitError, TcpInitError),
-}
-impl Display for SocketInitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::Udp(udp_init_error) => write!(f, "{udp_init_error}"),
-            Self::Tcp(tcp_init_error) => write!(f, "{tcp_init_error}"),
-            Self::Both(udp_init_error, tcp_init_error) => write!(f, "{udp_init_error} and {tcp_init_error}"),
-        }
-    }
-}
-impl Error for SocketInitError {}
-impl From<UdpInitError> for SocketInitError {
-    fn from(error: UdpInitError) -> Self {
-        Self::Udp(error)
-    }
-}
-impl From<TcpInitError> for SocketInitError {
-    fn from(error: TcpInitError) -> Self {
-        Self::Tcp(error)
-    }
-}
-impl From<(UdpInitError, TcpInitError)> for SocketInitError {
-    fn from(error: (UdpInitError, TcpInitError)) -> Self {
-        Self::Both(error.0, error.1)
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum TcpInitError {
-    SocketDisabled,
-    SocketShutdown,
-    Timeout,
-    JoinErrorPanic,
-    JoinErrorCancelled,
-    Io(IoError),
-}
-impl Display for TcpInitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::SocketDisabled => write!(f, "socket disabled during TCP initialization"),
-            Self::SocketShutdown => write!(f, "socket shutdown during TCP initialization"),
-            Self::Timeout => write!(f, "timeout during TCP initialization"),
-            Self::JoinErrorPanic => write!(f, "panic in TCP initialization task"),
-            Self::JoinErrorCancelled => write!(f, "TCP initialization task cancelled"),
-            Self::Io(io_error) => write!(f, "{io_error} during TCP initialization"),
-        }
-    }
-}
-impl Error for TcpInitError {}
-impl From<JoinError> for TcpInitError {
-    fn from(error: JoinError) -> Self {
-        if error.is_cancelled() {
-            Self::JoinErrorCancelled
+impl From<(SocketType, SocketStage, JoinError)> for SocketError {
+    fn from(error: (SocketType, SocketStage, JoinError)) -> Self {
+        if error.2.is_cancelled() {
+            Self::JoinErrorCancelled(error.0, error.1)
         } else {
-            Self::JoinErrorPanic
+            Self::JoinErrorPanic(error.0, error.1)
         }
     }
 }
-impl From<IoError> for TcpInitError {
-    fn from(error: IoError) -> Self {
-        Self::Io(error)
-    }
-}
-impl From<io::Error> for TcpInitError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(IoError::from(error))
-    }
-}
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub enum UdpInitError {
-    SocketDisabled,
-    SocketShutdown,
-    Timeout,
-    Io(IoError),
-}
-impl Display for UdpInitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            Self::SocketDisabled => write!(f, "socket disabled during UDP initialization"),
-            Self::SocketShutdown => write!(f, "socket shutdown during UDP initialization"),
-            Self::Timeout => write!(f, "timeout during UDP initialization"),
-            Self::Io(io_error) => write!(f, "{io_error} during UDP initialization"),
-        }
-    }
-}
-impl Error for UdpInitError {}
-impl From<IoError> for UdpInitError {
-    fn from(error: IoError) -> Self {
-        Self::Io(error)
-    }
-}
-impl From<io::Error> for UdpInitError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(IoError::from(error))
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IoError {
     OsError(io::ErrorKind),
     Message(io::ErrorKind),

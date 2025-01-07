@@ -137,8 +137,8 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
             query_network(&client, joined_cache, context.query(), &name_server_address).await
         }
 
-        async fn query_for_sockets<CCache>(client: Arc<DNSAsyncClient>, sockets: Vec<SocketAddr>) -> Vec<Arc<MixedSocket>> where CCache: AsyncCache + Send {
-            client.socket_manager.try_get_all(sockets.iter()).await
+        async fn query_for_sockets<CCache>(client: Arc<DNSAsyncClient>, sockets: Vec<IpAddr>) -> Vec<Arc<MixedSocket>> where CCache: AsyncCache + Send {
+            client.socket_manager.try_get_all_udp_tcp(sockets.iter()).await
         }
 
         loop {
@@ -146,7 +146,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
             match this.state {
                 InnerNSQuery::Fresh(NSQueryCacheResponse::Hit) => {
                     let sockets_addresses = this.ns_addresses.iter()
-                        .map(|address| SocketAddr::new(*address, 53))
+                        .map(|address| *address)
                         .collect::<Vec<_>>();
                     let client = this.client.clone();
                     let context = &self.context;
@@ -205,7 +205,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                                 return Poll::Ready(NSQueryResult::OutOfAddresses);
                             } else {
                                 let sockets_addresses = this.ns_addresses.iter()
-                                    .map(|address| SocketAddr::new(*address, 53))
+                                    .map(|address| *address)
                                     .collect::<Vec<_>>();
                                 let client = this.client.clone();
                                 let context = &self.context;
@@ -250,7 +250,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                             self.sockets.extend(
                                 sockets
                                     .into_iter()
-                                    .map(|socket| (socket.socket_address().ip(), socket)),
+                                    .map(|socket| (socket.peer_addr(), socket)),
                             );
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::GettingSocketStats -> InnerNSQuery::NetworkQueryStart: getting sockets to determine the fastest addresses");

@@ -3,20 +3,21 @@ use std::{cmp::{max, min}, collections::HashMap, future::Future, net::{IpAddr, S
 use async_lib::{awake_token::AwakeToken, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
 use async_trait::async_trait;
 use atomic::Atomic;
-use dns_lib::{interface::ports::DOQ_UDP_PORT, query::{message::Message, question::Question}, serde::wire::write_wire::WriteWire, types::c_domain_name::{CDomainName, CompressionMap}};
+use dns_lib::{interface::ports::DOT_TCP_PORT, query::{message::Message, question::Question}, serde::wire::write_wire::WriteWire, types::c_domain_name::{CDomainName, CompressionMap}};
 use futures::{future::BoxFuture, FutureExt};
-use log::debug;
 use pin_project::{pin_project, pinned_drop};
+use rustls::ClientConfig;
 use tinyvec::TinyVec;
-use tokio::{pin, select, sync::{RwLock, RwLockWriteGuard}, task::JoinHandle, time::{Instant, Sleep}};
+use tokio::{io::AsyncWriteExt, pin, select, sync::{RwLock, RwLockWriteGuard}, task::JoinHandle, time::{Instant, Sleep}};
 
-use crate::{async_query::{QInitQuery, QInitQueryProj, QueryOpt}, errors::{self, QueryError}, receive::read_stream_message, rolling_average::{fetch_update, RollingAverage}, socket::{quic::{QQuicSocket, QQuicSocketProj, QuicState}, FutureSocket, PollSocket}};
+use crate::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt}, errors, receive::read_stream_message, rolling_average::{fetch_update, RollingAverage}, socket::{tls::{QTlsSocket, QTlsSocketProj, TlsReadHalf, TlsState}, FutureSocket, PollSocket}};
 
 const MAX_MESSAGE_SIZE: u16 = 4092;
 
 const MILLISECONDS_IN_1_SECOND: f64 = 1000.0;
 
-pub(crate) const QUIC_INIT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const TCP_INIT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const TCP_LISTEN_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The initial TCP timeout, used when setting up a socket, before anything is known about the
 /// average response time.
@@ -53,7 +54,7 @@ fn bound<T>(value: T, lower_bound: T, upper_bound: T) -> T where T: Ord {
     value.clamp(lower_bound, upper_bound)
 }
 
-enum QuicResponseTime {
+enum TlsResponseTime {
     Dropped,
     Responded(Duration),
     /// `None` is used for cases where the message was never sent (e.g. serialization errors) or the
@@ -62,76 +63,70 @@ enum QuicResponseTime {
 }
 
 #[pin_project(PinnedDrop)]
-struct QuicQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
+struct TlsQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
 where
     'a: 'd + 'g
 {
-    socket: &'a Arc<QuicSocket>,
+    socket: &'a Arc<TlsSocket>,
     query: &'b mut Message,
-    quic_timeout: &'h Duration,
-    quic_start_time: Instant,
+    tls_timeout: &'h Duration,
+    tls_start_time: Instant,
     #[pin]
     timeout: Sleep,
     #[pin]
-    result_sender: once_watch::Sender<Result<Message, errors::QueryError>>,
+    result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>,
     #[pin]
-    inner: InnerQQ<'c, 'd, 'e, 'f, 'g>,
+    inner: InnerTQ<'c, 'd, 'e, 'f, 'g>,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> QuicQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> TlsQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
 where
     'g: 'f
 {
     #[inline]
-    pub fn new(socket: &'a Arc<QuicSocket>, query: &'b mut Message, result_sender: once_watch::Sender<Result<Message, errors::QueryError>>, quic_timeout: &'h Duration) -> Self {
+    pub fn new(socket: &'a Arc<TlsSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>, tls_timeout: &'h Duration) -> Self {
         Self {
             socket,
             query,
-            quic_timeout,
-            quic_start_time: Instant::now(),
-            timeout: tokio::time::sleep(*quic_timeout),
-            result_sender,
-            inner: InnerQQ::Fresh,
+            tls_timeout,
+            tls_start_time: Instant::now(),
+            timeout: tokio::time::sleep(*tls_timeout),
+            result_receiver,
+            inner: InnerTQ::Fresh,
         }
     }
 }
 
 #[pin_project(project = InnerTQProj)]
-enum InnerQQ<'c, 'd, 'e, 'f, 'g>
+enum InnerTQ<'c, 'd, 'e, 'f, 'g>
 where
-    'g: 'f,
+    'g: 'f
 {
     Fresh,
     Running {
         #[pin]
-        qq_socket: QQuicSocket<'c, 'd>,
+        tq_socket: QTlsSocket<'c, 'd>,
         #[pin]
-        send_query: QuicSend<'e>,
+        send_query: QSend<'e, QSendType, errors::SendError>,
     },
-    Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>, QuicResponseTime),
+    Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>, TlsResponseTime),
     Complete,
 }
 
-#[pin_project(project = QuicSendProj)]
-pub(crate) enum QuicSend<'e> {
-    Fresh,
-    SendAndRecv(BoxFuture<'e, Result<Message, errors::QueryError>>),
-}
-
-impl<'a, 'c, 'd, 'e, 'f, 'g> InnerQQ<'c, 'd, 'e, 'f, 'g>
+impl<'a, 'c, 'd, 'e, 'f, 'g> InnerTQ<'c, 'd, 'e, 'f, 'g>
 where
     'a: 'd + 'g
 {
     #[inline]
-    pub fn set_running(mut self: std::pin::Pin<&mut Self>) {
+    pub fn set_running(mut self: std::pin::Pin<&mut Self>, query_type: QSendType) {
         self.set(Self::Running {
-            qq_socket: QQuicSocket::Fresh,
-            send_query: QuicSend::Fresh,
+            tq_socket: QTlsSocket::Fresh,
+            send_query: QSend::Fresh(query_type),
         });
     }
 
     #[inline]
-    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: QuicResponseTime, socket: &'a Arc<QuicSocket>) {
+    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: TlsResponseTime, socket: &'a Arc<TlsSocket>) {
         let w_active_queries = socket.active_queries.write().boxed();
 
         self.set(Self::Cleanup(w_active_queries, execution_time));
@@ -143,18 +138,18 @@ where
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TlsQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
     type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
         let mut this = self.as_mut().project();
         match this.inner.as_mut().project() {
             InnerTQProj::Fresh
-          | InnerTQProj::Running { qq_socket: _, send_query: _ } => {
+          | InnerTQProj::Running { tq_socket: _, send_query: _ } => {
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    let _ = this.result_sender.send(Err(errors::QueryError::Timeout));
+                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::Timeout));
 
-                    this.inner.set_cleanup(QuicResponseTime::Dropped, this.socket);
+                    this.inner.set_cleanup(TlsResponseTime::Dropped, this.socket);
 
                     // Exit loop forever: query timed out.
                     // Because the in-flight map was set up before this future was created, we are
@@ -171,24 +166,30 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
                 InnerTQProj::Fresh => {
-                    this.inner.set_running();
+                    this.inner.set_running(QSendType::Initial);
 
-                    // Next loop: poll qq_socket and in_flight to start getting the QUIC socket and
+                    // Next loop: poll tq_socket and in_flight to start getting the TLS socket and
                     // inserting the query ID into the in-flight map.
                     continue;
                 },
-                InnerTQProj::Running { mut qq_socket, mut send_query } => {
-                    match (send_query.as_mut().project(), qq_socket.as_mut().project()) {
-                        (_, QQuicSocketProj::Fresh)
-                      | (_, QQuicSocketProj::GetQuicState(_))
-                      | (_, QQuicSocketProj::GetQuicEstablishing { receive_quic_socket: _ })
-                      | (_, QQuicSocketProj::InitQuic { join_handle: _ })
-                      | (_, QQuicSocketProj::Closed(_)) => {
-                            match qq_socket.poll(this.socket, cx) {
-                                PollSocket::Error(error) => {
-                                    let _ = this.result_sender.send(Err(errors::QueryError::from(error)));
+                InnerTQProj::Running { mut tq_socket, mut send_query } => {
+                    match (send_query.as_mut().project(), tq_socket.as_mut().project()) {
+                        (QSendProj::Fresh(_), QTlsSocketProj::Fresh)
+                      | (QSendProj::Fresh(_), QTlsSocketProj::GetTlsState(_))
+                      | (QSendProj::Fresh(_), QTlsSocketProj::GetTlsEstablishing { receive_tls_socket: _ })
+                      | (QSendProj::Fresh(_), QTlsSocketProj::InitTls { join_handle: _ })
+                      | (QSendProj::Fresh(_), QTlsSocketProj::Closed(_)) => {
+                            // We don't poll the result_receiver until the QSend state is Complete
+                            // since you can't receive a message until a query has been sent. If
+                            // there is an error while trying to send the query, we should send a
+                            // QError over that channel to make sure any tasks waiting on it can
+                            // handle the error appropriately.
 
-                                    this.inner.set_cleanup(QuicResponseTime::None, this.socket);
+                            match tq_socket.poll(this.socket, cx) {
+                                PollSocket::Error(error) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
+                                    this.inner.set_cleanup(TlsResponseTime::None, this.socket);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -200,122 +201,180 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                                     continue;
                                 },
                                 PollSocket::Pending => {
-                                    // We are waiting on the QQuicSocket and the timeout.
+                                    // We are waiting on the QTlsSocket and the timeout.
                                     // We are already registered with the in-flight map and cannot
                                     // send or receive a query until a socket is established.
                                     return Poll::Pending;
                                 },
                             }
                         },
-                        (QuicSendProj::Fresh, QQuicSocketProj::Acquired { quic_socket, kill_quic: _ }) => {
-                            // The QQ socket will be polled in a future loop.
+                        (QSendProj::Fresh(_), QTlsSocketProj::Acquired { tls_socket, kill_tls: _ }) => {
+                            // We don't poll the result_receiver until the QSend state is Complete
+                            // since you can't receive a message until a query has been sent. If
+                            // there is an error while trying to send the query, we should send a
+                            // QError over that channel to make sure any tasks waiting on it can
+                            // handle the error appropriately.
+
+                            let socket = this.socket.clone();
+                            let tls_socket = tls_socket.clone();
+
+                            if let PollSocket::Error(error) = tq_socket.poll(this.socket, cx) {
+                                let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
+                                this.inner.set_cleanup(TlsResponseTime::None, this.socket);
+
+                                // Next loop will poll for the in-flight map lock to remove the
+                                // query ID and record socket statistics.
+                                continue;
+                            }
+
                             let mut raw_message = [0_u8; MAX_MESSAGE_SIZE as usize];
                             let mut write_wire = WriteWire::from_bytes(&mut raw_message);
                             if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
-                                let _ = this.result_sender.send(Err(errors::QueryError::from(errors::SendError::from(wire_error))));
+                                let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(errors::SendError::from(wire_error))));
 
-                                this.inner.set_cleanup(QuicResponseTime::None, this.socket);
+                                this.inner.set_cleanup(TlsResponseTime::None, this.socket);
 
                                 // Next loop will poll for the in-flight map lock to remove the
                                 // query ID and record socket statistics.
                                 continue;
                             };
                             let wire_length = write_wire.current_len();
-                            let quic_socket = quic_socket.clone();
-                            let socket = this.socket.clone();
 
-                            println!("Sending on QUIC socket {} {{ drop rate {:.2}%, response time {:.2} ms, timeout {} ms }} :: {:?}", this.socket.upstream_address, this.socket.average_dropped_quic_packets() * 100.0, this.socket.average_quic_response_time(), this.quic_timeout.as_millis(), this.query);
+                            println!("Sending on TLS socket {} {{ drop rate {:.2}%, response time {:.2} ms, timeout {} ms }} :: {:?}", this.socket.upstream_address, this.socket.average_dropped_tls_packets() * 100.0, this.socket.average_tls_response_time(), this.tls_timeout.as_millis(), this.query);
 
-                            let send_and_recv = async move {
-                                let (mut send_stream, mut recv_stream) = match quic_socket.open_bi().await {
-                                    Ok((send_stream, recv_stream)) => (send_stream, recv_stream),
-                                    Err(error) => {
-                                        let socket_error = errors::SocketError::QuicConnection {
-                                            socket_stage: errors::SocketStage::Connected,
-                                            error,
-                                        };
-                                        return Err(errors::QueryError::from(socket_error));
-                                    },
-                                };
+                            let send_query_future = async move {
+                                let socket = socket;
+                                let tls_socket = tls_socket;
+                                let wire_length = wire_length;
 
                                 socket.recent_messages_sent.store(true, Ordering::Release);
-                                // Note: `write_all()` is not cancel safe
-                                match send_stream.write_all(&raw_message[..wire_length]).await {
-                                    Ok(()) => (),
+                                let mut w_tls_stream = tls_socket.lock().await;
+                                let bytes_written = match w_tls_stream.write(&raw_message[..wire_length]).await {
+                                    Ok(bytes) => bytes,
                                     Err(error) => {
-                                        let send_error = errors::SendError::QuicWriteError(error);
-                                        return Err(QueryError::from(send_error));
+                                        let io_error = errors::IoError::from(error);
+                                        let send_error = errors::SendError::Io {
+                                            socket_type: errors::SocketType::Tls,
+                                            error: io_error,
+                                        };
+                                        return Err(send_error);
                                     },
                                 };
-
-                                if let Err(error) = send_stream.finish() {
-                                    debug!("{error} after sending on QUIC socket");
+                                drop(w_tls_stream);
+                                // Verify that the correct number of bytes were written.
+                                if bytes_written != wire_length {
+                                    return Err(errors::SendError::IncorrectNumberBytes {
+                                        socket_type: errors::SocketType::Tls,
+                                        expected: wire_length as u16,
+                                        sent: bytes_written
+                                    });
                                 }
 
-                                let result = read_stream_message::<{ MAX_MESSAGE_SIZE as usize }>(
-                                    &mut recv_stream,
-                                    errors::SocketType::Quic
-                                ).await;
-
-                                if let Err(error) = recv_stream.stop(quinn::VarInt::from_u32(0)) {
-                                    debug!("{error} after receiving on QUIC socket");
-                                }
-
-                                match result {
-                                    Ok(message) => return Ok(message),
-                                    Err(error) => return Err(QueryError::from(error)),
-                                }
+                                return Ok(());
                             }.boxed();
 
-                            send_query.set(QuicSend::SendAndRecv(send_and_recv));
+                            send_query.set_send_query(send_query_future);
 
+                            // Next loop will begin to poll QSend. This will get the lock and the
+                            // TlsStream and write the bytes out.
                             continue;
                         },
-                        (QuicSendProj::SendAndRecv(send_and_recv), _) => {
-                            match send_and_recv.as_mut().poll(cx) {
-                                Poll::Ready(Ok(message)) => {
-                                    let _ = this.result_sender.send(Ok(message));
-        
-                                    this.inner.set_cleanup(QuicResponseTime::Responded(this.quic_start_time.elapsed()), this.socket);
-        
+                        (QSendProj::SendQuery(_, send_query_future), _) => {
+                            // We don't poll the result_receiver until the QSend state is Complete
+                            // since you can't receive a message until a query has been sent. If
+                            // there is an error while trying to send the query, we should send a
+                            // QError over that channel to make sure any tasks waiting on it can
+                            // handle the error appropriately.
+
+                            match (send_query_future.as_mut().poll(cx), tq_socket.poll(this.socket, cx)) {
+                                (_, PollSocket::Error(error)) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
+                                    this.inner.set_cleanup(TlsResponseTime::None, this.socket);
+
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
                                     continue;
                                 },
-                                Poll::Ready(Err(recv_error)) => {
-                                    let _ = this.result_sender.send(Err(errors::QueryError::from(recv_error)));
-        
-                                    this.inner.set_cleanup(QuicResponseTime::None, this.socket);
-        
+                                (Poll::Ready(Err(error)), _) => {
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
+
+                                    this.inner.set_cleanup(TlsResponseTime::None, this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to remove the
+                                    // query ID and record socket statistics.
+                                    continue;
+                                },
+                                (Poll::Ready(Ok(())), PollSocket::Continue | PollSocket::Pending) => {
+                                    send_query.set_complete();
+
+                                    // Now that a message has been sent, we will start polling the
+                                    // receiver.
+                                    continue;
+                                },
+                                (Poll::Pending, PollSocket::Continue) => {
+                                    // If at least one of our futures needs to loop again, we should
+                                    // loop again unless an exit condition is reached.
+                                    continue;
+                                },
+                                (Poll::Pending, PollSocket::Pending) => {
+                                    // Will wake up if the QTlsSocket wakes us (most likely because
+                                    // the socket was killed), the QSend completes, or the timeout
+                                    // occurs.
+                                    return Poll::Pending;
+                                },
+                            }
+                        },
+                        (QSendProj::Complete(_), _) => {
+                            // The QSend state is Complete so the query has been sent successfully.
+                            // Polling the receiver will get the result from the listener once it
+                            // is received. If it returns a message or an error, we don't need to
+                            // send anything over that channel since it can only hold one message.
+
+                            match this.result_receiver.as_mut().poll(cx) {
+                                Poll::Ready(Ok(Ok(_))) => {
+                                    let execution_time = this.tls_start_time.elapsed();
+
+                                    this.inner.set_cleanup(TlsResponseTime::Responded(execution_time), this.socket);
+
+                                    // Next loop will poll for the in-flight map lock to remove the
+                                    // query ID and record socket statistics.
+                                    continue;
+                                },
+                                Poll::Ready(Ok(Err(_)))
+                              | Poll::Ready(Err(_)) => {
+                                    this.inner.set_cleanup(TlsResponseTime::None, this.socket);
+
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
                                     continue;
                                 },
                                 Poll::Pending => {
-                                    // Before exiting, poll the socket so that it can awake
-                                    // this task if the socket is closed.
+                                    // Nothing has been received yet. Whether we return Pending or
+                                    // Continue will be determined when the TLS socket is polled.
                                 },
                             }
 
-                            match qq_socket.poll(this.socket, cx) {
+                            match tq_socket.poll(this.socket, cx) {
                                 PollSocket::Error(error) => {
-                                    let _ = this.result_sender.send(Err(errors::QueryError::from(error)));
+                                    let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(QuicResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(TlsResponseTime::None, this.socket);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
                                     continue;
                                 },
                                 PollSocket::Continue => {
-                                    // No state change. The socket will be polled again on the next
-                                    // loop.
+                                    // If at least one of our futures needs to loop again, we should
+                                    // loop again unless an exit condition is reached.
                                     continue;
                                 },
                                 PollSocket::Pending => {
-                                    // We are waiting on the QQuicSocket and the timeout.
-                                    // We are already registered with the in-flight map and cannot
-                                    // send or receive a query until a socket is established.
+                                    // Will wake up if the QTlsSocket wakes us (most likely because
+                                    // the socket was killed), the receiver has a response, the
+                                    // receiver is closed, or the timeout occurs.
                                     return Poll::Pending;
                                 },
                             }
@@ -331,49 +390,49 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                     // We are removing the socket. If a message has not been received, it needs to
                     // be closed so that any processes waiting on this channel wake up and are
                     // cleaned up too.
-                    this.result_sender.close();
+                    this.result_receiver.close();
 
                     match w_active_queries.as_mut().poll(cx) {
                         Poll::Ready(mut w_active_queries) => {
                             match execution_time {
-                                QuicResponseTime::Dropped => {
-                                    let average_quic_dropped_packets = this.socket.add_dropped_packet_to_quic_average();
-                                    let average_quic_response_time = this.socket.average_quic_response_time();
-                                    if average_quic_response_time.is_finite() {
-                                        if average_quic_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.quic_timeout = bound(
+                                TlsResponseTime::Dropped => {
+                                    let average_tls_dropped_packets = this.socket.add_dropped_packet_to_tls_average();
+                                    let average_tls_response_time = this.socket.average_tls_response_time();
+                                    if average_tls_response_time.is_finite() {
+                                        if average_tls_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                            w_active_queries.tls_timeout = bound(
                                                 min(
-                                                    w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                    Duration::from_secs_f64(average_quic_response_time * TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                                    w_active_queries.tls_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                    Duration::from_secs_f64(average_tls_response_time * TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                                 ),
                                                 MIN_TCP_TIMEOUT,
                                                 MAX_TCP_TIMEOUT,
                                             );
                                         }
                                     } else {
-                                        if average_quic_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.quic_timeout = bound(
-                                                w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        if average_tls_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                            w_active_queries.tls_timeout = bound(
+                                                w_active_queries.tls_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
                                                 MIN_TCP_TIMEOUT,
                                                 MAX_TCP_TIMEOUT,
                                             );
                                         }
                                     }
                                 },
-                                QuicResponseTime::Responded(response_time) => {
-                                    let (average_quic_response_time, average_quic_dropped_packets) = this.socket.add_response_time_to_quic_average(*response_time);
-                                    if average_quic_dropped_packets.current_average() <= DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.quic_timeout = bound(
+                                TlsResponseTime::Responded(response_time) => {
+                                    let (average_tls_response_time, average_tls_dropped_packets) = this.socket.add_response_time_to_tls_average(*response_time);
+                                    if average_tls_dropped_packets.current_average() <= DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                        w_active_queries.tls_timeout = bound(
                                             max(
-                                                w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                Duration::from_secs_f64(average_quic_response_time.current_average() * TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                                w_active_queries.tls_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                                Duration::from_secs_f64(average_tls_response_time.current_average() * TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
                                             ),
                                             MIN_TCP_TIMEOUT,
                                             MAX_TCP_TIMEOUT,
                                         );
                                     }
                                 },
-                                QuicResponseTime::None => (),
+                                TlsResponseTime::None => (),
                             }
 
                             // We are responsible for clearing these maps. Otherwise, the memory
@@ -395,7 +454,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                     }
                 },
                 InnerTQProj::Complete => {
-                    panic!("QUIC only query polled after completion");
+                    panic!("TLS only query polled after completion");
                 },
             }
         }
@@ -403,9 +462,9 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for QuicQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for TlsQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
     fn drop(mut self: Pin<&mut Self>) {
-        async fn cleanup(socket: Arc<QuicSocket>, query: Message) {
+        async fn cleanup(socket: Arc<TlsSocket>, query: Message) {
             let mut w_active_queries = socket.active_queries.write().await;
             let _ = w_active_queries.in_flight.remove(&query.id);
             let _ = w_active_queries.active.remove(&query.question);
@@ -414,7 +473,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for QuicQueryRunner<'a, 'b, 'c, 
 
         match self.as_mut().project().inner.as_mut().project() {
             InnerTQProj::Fresh
-          | InnerTQProj::Running { qq_socket: _, send_query: _ }
+          | InnerTQProj::Running { tq_socket: _, send_query: _ }
           | InnerTQProj::Cleanup(_, _) => {
                 // Unfortunately, cannot re-use the existing futures because this struct is pinned.
                 // Spawning the cleanup in a separate task will ensure eventual cleanup.
@@ -430,19 +489,19 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for QuicQueryRunner<'a, 'b, 'c, 
 }
 
 #[pin_project]
-pub struct QuicQuery<'a, 'b, 'c, 'd>
+pub struct TlsQuery<'a, 'b, 'c, 'd>
 where
     'a: 'd
 {
-    socket: &'a Arc<QuicSocket>,
+    socket: &'a Arc<TlsSocket>,
     query: &'b mut Message,
     #[pin]
     inner: QInitQuery<'c, 'd, ActiveQueries>,
 }
 
-impl<'a, 'b, 'c, 'd> QuicQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b, 'c, 'd> TlsQuery<'a, 'b, 'c, 'd> {
     #[inline]
-    pub fn new(socket: &'a Arc<QuicSocket>, query: &'b mut Message) -> Self {
+    pub fn new(socket: &'a Arc<TlsSocket>, query: &'b mut Message) -> Self {
         Self {
             socket,
             query,
@@ -451,7 +510,7 @@ impl<'a, 'b, 'c, 'd> QuicQuery<'a, 'b, 'c, 'd> {
     }
 }
 
-impl<'a, 'b, 'c, 'd> Future for QuicQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b, 'c, 'd> Future for TlsQuery<'a, 'b, 'c, 'd> {
     type Output = Result<Message, errors::QueryError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -542,12 +601,12 @@ impl<'a, 'b, 'c, 'd> Future for QuicQuery<'a, 'b, 'c, 'd> {
                                     // task is cancelled because there may be others that are
                                     // listening for the response too.
                                     let join_handle = tokio::spawn({
-                                        let quic_timeout = w_active_queries.quic_timeout;
-                                        let result_sender = result_sender.clone();
+                                        let tls_timeout = w_active_queries.tls_timeout;
+                                        let result_receiver = result_sender.subscribe();
                                         let socket = this.socket.clone();
                                         let mut query = this.query.clone();
                                         async move {
-                                            QuicQueryRunner::new(&socket, &mut query, result_sender, &quic_timeout).await;
+                                            TlsQueryRunner::new(&socket, &mut query, result_receiver, &tls_timeout).await;
                                         }
                                     });
 
@@ -580,7 +639,7 @@ impl<'a, 'b, 'c, 'd> Future for QuicQuery<'a, 'b, 'c, 'd> {
                         },
                         Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                             let error = errors::QueryError::from(errors::SocketError::Shutdown(
-                                errors::SocketType::Quic,
+                                errors::SocketType::Tls,
                                 errors::SocketStage::Connected,
                             ));
 
@@ -598,19 +657,19 @@ impl<'a, 'b, 'c, 'd> Future for QuicQuery<'a, 'b, 'c, 'd> {
                     }
                 },
                 QInitQueryProj::Complete => {
-                panic!("QuicQuery cannot be polled after completion")
+                    panic!("TlsQuery cannot be polled after completion")
                 },
             }
         }
     }
 }
 
-// Implement QUIC functions on QuicSocket
+// Implement TLS functions on TlsSocket
 #[async_trait]
-impl crate::socket::quic::QuicSocket for QuicSocket {
+impl crate::socket::tls::TlsSocket for TlsSocket {
     #[inline]
     fn peer_addr(&self) ->  SocketAddr {
-        SocketAddr::new(self.upstream_address, DOQ_UDP_PORT)
+        SocketAddr::new(self.upstream_address, DOT_TCP_PORT)
     }
 
     #[inline]
@@ -619,47 +678,71 @@ impl crate::socket::quic::QuicSocket for QuicSocket {
     }
 
     #[inline]
-    fn state(&self) ->  &RwLock<QuicState>  {
-        &self.quic
+    fn state(&self) ->  &RwLock<TlsState>  {
+        &self.tls
     }
 
     #[inline]
-    fn client_config(&self) -> &Arc<quinn::ClientConfig> {
+    fn client_config(&self) -> &Arc<ClientConfig> {
         &self.client_config
     }
 
     #[inline]
-    async fn listen(self: Arc<Self>, quic_socket: Arc<quinn::Connection>, kill_quic: AwakeToken) {
-        pin!(let kill_quic_awoken = kill_quic.awoken(););
-        select! {
-            biased;
-            () = &mut kill_quic_awoken => {
-                println!("QUIC Socket {} Canceled. Shutting down QUIC Listener.", self.upstream_address);
-            },
-            reason = quic_socket.closed() => {
-                println!("{reason}");
-            },
+    async fn listen(self: Arc<Self>, mut tls_reader: TlsReadHalf, kill_tls: AwakeToken) {
+        pin!(let kill_tls_awoken = kill_tls.awoken(););
+        loop {
+            select! {
+                biased;
+                () = &mut kill_tls_awoken => {
+                    println!("TLS Socket {} Canceled. Shutting down TLS Listener.", self.upstream_address);
+                    break;
+                },
+                () = tokio::time::sleep(TCP_LISTEN_TIMEOUT) => {
+                    println!("TLS Socket {} Timed Out. Shutting down TLS Listener.", self.upstream_address);
+                    break;
+                },
+                response = read_stream_message::<{ MAX_MESSAGE_SIZE as usize }>(&mut tls_reader, errors::SocketType::Tls) => {
+                    match response {
+                        Ok(response) => {
+                            self.recent_messages_received.store(true, Ordering::Release);
+                            let response_id = response.id;
+                            println!("Received TLS Response: {response:?}");
+                            let r_active_queries = self.active_queries.read().await;
+                            if let Some((sender, _)) = r_active_queries.in_flight.get(&response_id) {
+                                let _ = sender.send(Ok(response));
+                            };
+                            drop(r_active_queries);
+                            // Cleanup is handled by the management processes. This
+                            // process is free to move on.
+                        },
+                        Err(error) => {
+                            println!("{error}");
+                            break;
+                        },
+                    }
+                },
+            }
         }
 
-        self.listen_quic_cleanup(kill_quic).await;
+        self.listen_tls_cleanup(kill_tls).await;
     }
 }
 
-impl QuicSocket {
+impl TlsSocket {
     #[inline]
-    async fn listen_quic_cleanup(self: Arc<Self>, kill_quic: AwakeToken) {
-        println!("Cleaning up QUIC socket {}", self.upstream_address);
+    async fn listen_tls_cleanup(self: Arc<Self>, kill_tls: AwakeToken) {
+        println!("Cleaning up TLS socket {}", self.upstream_address);
 
-        let mut w_state = self.quic.write().await;
+        let mut w_state = self.tls.write().await;
         match &*w_state {
-            QuicState::Managed { socket: _, kill: managed_kill_quic } => {
+            TlsState::Managed { socket: _, kill: managed_kill_tls } => {
                 // If the managed socket is the one that we are cleaning up...
-                if &kill_quic == managed_kill_quic {
+                if &kill_tls == managed_kill_tls {
                     // We are responsible for cleanup.
-                    *w_state = QuicState::None;
+                    *w_state = TlsState::None;
                     drop(w_state);
 
-                    kill_quic.awake();
+                    kill_tls.awake();
 
                 // If the managed socket isn't the one that we are cleaning up...
                 } else {
@@ -667,9 +750,9 @@ impl QuicSocket {
                     drop(w_state);
                 }
             },
-            QuicState::Establishing { sender: _, kill: _ }
-          | QuicState::None
-          | QuicState::Blocked => {
+            TlsState::Establishing { sender: _, kill: _ }
+          | TlsState::None
+          | TlsState::Blocked => {
                 // This is not our socket to clean up.
                 drop(w_state);
             }
@@ -678,7 +761,7 @@ impl QuicSocket {
 }
 
 struct ActiveQueries {
-    quic_timeout: Duration,
+    tls_timeout: Duration,
 
     in_flight: HashMap<u16, (once_watch::Sender<Result<Message, errors::QueryError>>, JoinHandle<()>)>,
     active: HashMap<TinyVec<[Question; 1]>, (u16, once_watch::Sender<Result<Message, errors::QueryError>>)>,
@@ -688,7 +771,7 @@ impl ActiveQueries {
     #[inline]
     pub fn new() -> Self {
         Self {
-            quic_timeout: INIT_TCP_TIMEOUT,
+            tls_timeout: INIT_TCP_TIMEOUT,
 
             in_flight: HashMap::new(),
             active: HashMap::new(),
@@ -696,34 +779,34 @@ impl ActiveQueries {
     }
 }
 
-pub struct QuicSocket {
+pub struct TlsSocket {
     ns_name: CDomainName,
     upstream_address: IpAddr,
-    quic: RwLock<QuicState>,
+    tls: RwLock<TlsState>,
     active_queries: RwLock<ActiveQueries>,
-    client_config: Arc<quinn::ClientConfig>,
+    client_config: Arc<ClientConfig>,
 
     // Rolling averages
-    average_quic_response_time: Atomic<RollingAverage>,
-    average_quic_dropped_packets: Atomic<RollingAverage>,
+    average_tls_response_time: Atomic<RollingAverage>,
+    average_tls_dropped_packets: Atomic<RollingAverage>,
 
     // Counters used to determine when the socket should be closed.
     recent_messages_sent: AtomicBool,
     recent_messages_received: AtomicBool,
 }
 
-impl QuicSocket {
+impl TlsSocket {
     #[inline]
-    pub fn new(upstream_address: IpAddr, ns_name: CDomainName, client_config: Arc<quinn::ClientConfig>) -> Arc<Self> {
-        Arc::new(QuicSocket {
+    pub fn new(upstream_address: IpAddr, ns_name: CDomainName, client_config: Arc<ClientConfig>) -> Arc<Self> {
+        Arc::new(TlsSocket {
             ns_name,
             upstream_address,
-            quic: RwLock::new(QuicState::None),
+            tls: RwLock::new(TlsState::None),
             active_queries: RwLock::new(ActiveQueries::new()),
             client_config,
 
-            average_quic_response_time: Atomic::new(RollingAverage::new()),
-            average_quic_dropped_packets: Atomic::new(RollingAverage::new()),
+            average_tls_response_time: Atomic::new(RollingAverage::new()),
+            average_tls_dropped_packets: Atomic::new(RollingAverage::new()),
 
             recent_messages_sent: AtomicBool::new(false),
             recent_messages_received: AtomicBool::new(false),
@@ -731,22 +814,22 @@ impl QuicSocket {
     }
 
     #[inline]
-    pub fn average_quic_response_time(&self) -> f64 {
-        self.average_quic_response_time.load(Ordering::Acquire).current_average()
+    pub fn average_tls_response_time(&self) -> f64 {
+        self.average_tls_response_time.load(Ordering::Acquire).current_average()
     }
 
     #[inline]
-    pub fn average_dropped_quic_packets(&self) -> f64 {
-        self.average_quic_dropped_packets.load(Ordering::Acquire).current_average()
+    pub fn average_dropped_tls_packets(&self) -> f64 {
+        self.average_tls_dropped_packets.load(Ordering::Acquire).current_average()
     }
 
     #[inline]
-    fn add_dropped_packet_to_quic_average(&self) -> RollingAverage {
+    fn add_dropped_packet_to_tls_average(&self) -> RollingAverage {
         // We can use relaxed memory orderings with the rolling average because it is not being used
         // for synchronization nor do we care about the order of atomic operations. We only care
         // that the operation is atomic.
         fetch_update(
-            &self.average_quic_dropped_packets,
+            &self.average_tls_dropped_packets,
             Ordering::Relaxed,
             Ordering::Relaxed,
             |average| average.put_next(1, ROLLING_AVERAGE_TCP_MAX_DROPPED)
@@ -754,19 +837,19 @@ impl QuicSocket {
     }
 
     #[inline]
-    fn add_response_time_to_quic_average(&self, response_time: Duration) -> (RollingAverage, RollingAverage) {
+    fn add_response_time_to_tls_average(&self, response_time: Duration) -> (RollingAverage, RollingAverage) {
         // We can use relaxed memory orderings with the rolling average because it is not being used
         // for synchronization nor do we care about the order of atomic operations. We only care
         // that the operation is atomic.
         (
             fetch_update(
-                &self.average_quic_response_time,
+                &self.average_tls_response_time,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
                 |average| average.put_next(u32::try_from(response_time.as_millis()).unwrap_or(u32::MAX), ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES)
             ),
             fetch_update(
-                &self.average_quic_dropped_packets,
+                &self.average_tls_dropped_packets,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
                 |average| average.put_next(0, ROLLING_AVERAGE_TCP_MAX_DROPPED)
@@ -818,33 +901,33 @@ impl QuicSocket {
 
     #[inline]
     pub async fn start(self: Arc<Self>) -> Result<(), errors::SocketError> {
-        <Self as crate::socket::quic::QuicSocket>::start(self).await
+        <Self as crate::socket::tls::TlsSocket>::start(self).await
     }
 
     #[inline]
     pub async fn shutdown(self: Arc<Self>) {
-        <Self as crate::socket::quic::QuicSocket>::shutdown(self).await;
+        <Self as crate::socket::tls::TlsSocket>::shutdown(self).await;
     }
 
     #[inline]
     pub async fn enable(self: Arc<Self>) {
-        <Self as crate::socket::quic::QuicSocket>::enable(self).await;
+        <Self as crate::socket::tls::TlsSocket>::enable(self).await;
     }
 
     #[inline]
     pub async fn disable(self: Arc<Self>) {
-        <Self as crate::socket::quic::QuicSocket>::disable(self).await;
+        <Self as crate::socket::tls::TlsSocket>::disable(self).await;
     }
 
-    pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> QuicQuery<'a, 'b, 'c, 'd> {
-        // If the UDP socket is unreliable, send most data via QUIC. Some queries should still use
-        // UDP to determine if the network conditions are improving. However, if the QUIC connection
+    pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> TlsQuery<'a, 'b, 'c, 'd> {
+        // If the UDP socket is unreliable, send most data via TLS. Some queries should still use
+        // UDP to determine if the network conditions are improving. However, if the TLS connection
         // is also unstable, then we should not rely on it.
         let query_task = match options {
             QueryOpt::UdpTcp => todo!(),
             QueryOpt::Tcp => todo!(),
-            QueryOpt::Quic => QuicQuery::new(&self, query),
-            QueryOpt::Tls => todo!(),
+            QueryOpt::Quic => todo!(),
+            QueryOpt::Tls => TlsQuery::new(&self, query),
             QueryOpt::QuicTls => todo!(),
             QueryOpt::Https => todo!(),
         };

@@ -310,6 +310,17 @@ macro_rules! gen_record_data {
                     }
                 }
             }
+
+            impl From<&ResourceRecord<$record>> for ResourceRecord<RecordData> {
+                fn from(rr: &ResourceRecord<$record>) -> Self {
+                    Self {
+                        name: rr.name.clone(),
+                        rclass: rr.rclass,
+                        ttl: rr.ttl,
+                        rdata: RecordData::$record(rr.rdata.clone()),
+                    }
+                }
+            }
         )+
 
         $(
@@ -324,6 +335,29 @@ macro_rules! gen_record_data {
                                 rclass: rr.rclass,
                                 ttl: rr.ttl,
                                 rdata,
+                            })
+                        },
+                        rdata @ _ => {
+                            Err(TryFromResourceRecordError::UnexpectedRType {
+                                expected: RType::$record,
+                                actual: rdata.get_rtype(),
+                            })
+                        }
+                    }
+                }
+            }
+
+            impl TryFrom<&ResourceRecord<RecordData>> for ResourceRecord<$record> {
+                type Error = TryFromResourceRecordError;
+
+                fn try_from(rr: &ResourceRecord<RecordData>) -> Result<Self, Self::Error> {
+                    match &rr.rdata {
+                        RecordData::$record(rdata) => {
+                            Ok(Self {
+                                name: rr.name.clone(),
+                                rclass: rr.rclass,
+                                ttl: rr.ttl,
+                                rdata: rdata.clone(),
                             })
                         },
                         rdata @ _ => {

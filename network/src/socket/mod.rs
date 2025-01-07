@@ -4,6 +4,11 @@ pub mod tcp;
 pub mod udp;
 pub mod udp_tcp;
 
+pub mod tls;
+pub mod quic;
+pub mod quic_tls;
+
+
 pub(crate) enum PollSocket<E> {
     Error(E),
     Continue,
