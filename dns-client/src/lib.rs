@@ -8,7 +8,6 @@ use log::info;
 use network::socket_manager::SocketManager;
 use query::recursive_query::recursive_query;
 use result::{QOk, QResult};
-use tokio::sync::RwLock;
 
 mod qname_minimizer;
 mod query;
@@ -18,7 +17,7 @@ mod result;
 pub struct DNSAsyncClient {
     cache: Arc<AsyncMainTreeCache>,
     socket_manager: SocketManager,
-    active_queries: RwLock<HashMap<Question, once_watch::Sender<QResult>>>,
+    active_queries: std::sync::RwLock<HashMap<Question, once_watch::Sender<QResult>>>,
 }
 
 impl DNSAsyncClient {
@@ -27,7 +26,7 @@ impl DNSAsyncClient {
         Self {
             cache,
             socket_manager: SocketManager::new().await,
-            active_queries: RwLock::new(HashMap::new()),
+            active_queries: std::sync::RwLock::new(HashMap::new()),
         }
     }
 
