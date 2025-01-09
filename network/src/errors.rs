@@ -5,7 +5,7 @@ use rustls::pki_types::InvalidDnsNameError;
 use tokio::task::JoinError;
 
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SocketType {
     Udp,
     Tcp,
@@ -23,7 +23,7 @@ impl Display for SocketType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SocketStage {
     Initialization,
     Connected,
@@ -165,15 +165,15 @@ pub enum SocketError {
 impl Clone for SocketError {
     fn clone(&self) -> Self {
         match self {
-            Self::Disabled(socket_type, socket_stage) => Self::Disabled(socket_type.clone(), socket_stage.clone()),
-            Self::Shutdown(socket_type, socket_stage) => Self::Shutdown(socket_type.clone(), socket_stage.clone()),
-            Self::Timeout(socket_type, socket_stage) => Self::Timeout(socket_type.clone(), socket_stage.clone()),
-            Self::JoinErrorPanic(socket_type, socket_stage) => Self::JoinErrorPanic(socket_type.clone(), socket_stage.clone()),
-            Self::JoinErrorCancelled(socket_type, socket_stage) => Self::JoinErrorCancelled(socket_type.clone(), socket_stage.clone()),
-            Self::InvalidName { socket_type, socket_stage, error: _ } => Self::InvalidName { socket_type: socket_type.clone(), socket_stage: socket_stage.clone(), error: InvalidDnsNameError },
-            Self::Io { socket_type, socket_stage, error } => Self::Io { socket_type: socket_type.clone(), socket_stage: socket_stage.clone(), error: error.clone() },
-            Self::QuicConnection { socket_stage, error } => Self::QuicConnection { socket_stage: socket_stage.clone(), error: error.clone() },
-            Self::QuicConnect { socket_stage, error } => Self::QuicConnect { socket_stage: socket_stage.clone(), error: error.clone() },
+            Self::Disabled(socket_type, socket_stage) => Self::Disabled(*socket_type, *socket_stage),
+            Self::Shutdown(socket_type, socket_stage) => Self::Shutdown(*socket_type, *socket_stage),
+            Self::Timeout(socket_type, socket_stage) => Self::Timeout(*socket_type, *socket_stage),
+            Self::JoinErrorPanic(socket_type, socket_stage) => Self::JoinErrorPanic(*socket_type, *socket_stage),
+            Self::JoinErrorCancelled(socket_type, socket_stage) => Self::JoinErrorCancelled(*socket_type, *socket_stage),
+            Self::InvalidName { socket_type, socket_stage, error: _ } => Self::InvalidName { socket_type: *socket_type, socket_stage: *socket_stage, error: InvalidDnsNameError },
+            Self::Io { socket_type, socket_stage, error } => Self::Io { socket_type: *socket_type, socket_stage: *socket_stage, error: error.clone() },
+            Self::QuicConnection { socket_stage, error } => Self::QuicConnection { socket_stage: *socket_stage, error: error.clone() },
+            Self::QuicConnect { socket_stage, error } => Self::QuicConnect { socket_stage: *socket_stage, error: error.clone() },
             Self::Multiple(errors) => Self::Multiple(errors.clone()),
 
         }

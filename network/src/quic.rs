@@ -8,7 +8,7 @@ use futures::{future::BoxFuture, FutureExt};
 use log::debug;
 use pin_project::{pin_project, pinned_drop};
 use tinyvec::TinyVec;
-use tokio::{pin, select, sync::{RwLock, RwLockWriteGuard}, task::JoinHandle, time::{Instant, Sleep}};
+use tokio::{pin, select, task::JoinHandle, time::{Instant, Sleep}};
 
 use crate::{async_query::{QInitQuery, QInitQueryProj, QueryOpt}, errors::{self, QueryError}, receive::read_stream_message, rolling_average::{fetch_update, RollingAverage}, socket::{quic::{QQuicSocket, QQuicSocketProj, QuicState}, FutureSocket, PollSocket}};
 
@@ -62,10 +62,7 @@ enum QuicResponseTime {
 }
 
 #[pin_project(PinnedDrop)]
-struct QuicQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
-where
-    'a: 'd + 'g
-{
+struct QuicQueryRunner<'a, 'b, 'e, 'h> {
     socket: &'a Arc<QuicSocket>,
     query: &'b mut Message,
     quic_timeout: &'h Duration,
@@ -75,13 +72,10 @@ where
     #[pin]
     result_sender: once_watch::Sender<Result<Message, errors::QueryError>>,
     #[pin]
-    inner: InnerQQ<'c, 'd, 'e, 'f, 'g>,
+    inner: InnerQQ<'e>,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> QuicQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
-where
-    'g: 'f
-{
+impl<'a, 'b, 'e, 'h> QuicQueryRunner<'a, 'b, 'e, 'h> {
     #[inline]
     pub fn new(socket: &'a Arc<QuicSocket>, query: &'b mut Message, result_sender: once_watch::Sender<Result<Message, errors::QueryError>>, quic_timeout: &'h Duration) -> Self {
         Self {
@@ -97,18 +91,15 @@ where
 }
 
 #[pin_project(project = InnerTQProj)]
-enum InnerQQ<'c, 'd, 'e, 'f, 'g>
-where
-    'g: 'f,
-{
+enum InnerQQ<'e> {
     Fresh,
     Running {
         #[pin]
-        qq_socket: QQuicSocket<'c, 'd>,
+        qq_socket: QQuicSocket,
         #[pin]
         send_query: QuicSend<'e>,
     },
-    Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>, QuicResponseTime),
+    Cleanup(QuicResponseTime),
     Complete,
 }
 
@@ -118,10 +109,7 @@ pub(crate) enum QuicSend<'e> {
     SendAndRecv(BoxFuture<'e, Result<Message, errors::QueryError>>),
 }
 
-impl<'a, 'c, 'd, 'e, 'f, 'g> InnerQQ<'c, 'd, 'e, 'f, 'g>
-where
-    'a: 'd + 'g
-{
+impl<'e> InnerQQ<'e> {
     #[inline]
     pub fn set_running(mut self: std::pin::Pin<&mut Self>) {
         self.set(Self::Running {
@@ -131,10 +119,8 @@ where
     }
 
     #[inline]
-    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: QuicResponseTime, socket: &'a Arc<QuicSocket>) {
-        let w_active_queries = socket.active_queries.write().boxed();
-
-        self.set(Self::Cleanup(w_active_queries, execution_time));
+    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: QuicResponseTime) {
+        self.set(Self::Cleanup(execution_time));
     }
 
     #[inline]
@@ -143,7 +129,7 @@ where
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+impl<'a, 'b, 'e, 'h> Future for QuicQueryRunner<'a, 'b, 'e, 'h> {
     type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -154,14 +140,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                     let _ = this.result_sender.send(Err(errors::QueryError::Timeout));
 
-                    this.inner.set_cleanup(QuicResponseTime::Dropped, this.socket);
+                    this.inner.set_cleanup(QuicResponseTime::Dropped);
 
                     // Exit loop forever: query timed out.
                     // Because the in-flight map was set up before this future was created, we are
                     // still responsible for cleanup.
                 }
             },
-            InnerTQProj::Cleanup(_, _)
+            InnerTQProj::Cleanup(_)
           | InnerTQProj::Complete => {
                 // Not allowed to timeout. This is a cleanup state.
             },
@@ -180,7 +166,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                 InnerTQProj::Running { mut qq_socket, mut send_query } => {
                     match (send_query.as_mut().project(), qq_socket.as_mut().project()) {
                         (_, QQuicSocketProj::Fresh)
-                      | (_, QQuicSocketProj::GetQuicState(_))
                       | (_, QQuicSocketProj::GetQuicEstablishing { receive_quic_socket: _ })
                       | (_, QQuicSocketProj::InitQuic { join_handle: _ })
                       | (_, QQuicSocketProj::Closed(_)) => {
@@ -188,7 +173,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                                 PollSocket::Error(error) => {
                                     let _ = this.result_sender.send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(QuicResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(QuicResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -214,7 +199,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                             if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
                                 let _ = this.result_sender.send(Err(errors::QueryError::from(errors::SendError::from(wire_error))));
 
-                                this.inner.set_cleanup(QuicResponseTime::None, this.socket);
+                                this.inner.set_cleanup(QuicResponseTime::None);
 
                                 // Next loop will poll for the in-flight map lock to remove the
                                 // query ID and record socket statistics.
@@ -276,7 +261,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                                 Poll::Ready(Ok(message)) => {
                                     let _ = this.result_sender.send(Ok(message));
         
-                                    this.inner.set_cleanup(QuicResponseTime::Responded(this.quic_start_time.elapsed()), this.socket);
+                                    this.inner.set_cleanup(QuicResponseTime::Responded(this.quic_start_time.elapsed()));
         
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -285,7 +270,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                                 Poll::Ready(Err(recv_error)) => {
                                     let _ = this.result_sender.send(Err(errors::QueryError::from(recv_error)));
         
-                                    this.inner.set_cleanup(QuicResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(QuicResponseTime::None);
         
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -301,7 +286,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                                 PollSocket::Error(error) => {
                                     let _ = this.result_sender.send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(QuicResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(QuicResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -322,7 +307,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                         },
                     }
                 },
-                InnerTQProj::Cleanup(w_active_queries, execution_time) => {
+                InnerTQProj::Cleanup(execution_time) => {
                     // Should always transition to the cleanup state before exit. This is
                     // responsible for cleaning up the query ID from the in-flight map (failure to
                     // do so should be considered a memory leak) and for updating the socket
@@ -333,66 +318,58 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
                     // cleaned up too.
                     this.result_sender.close();
 
-                    match w_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => {
-                            match execution_time {
-                                QuicResponseTime::Dropped => {
-                                    let average_quic_dropped_packets = this.socket.add_dropped_packet_to_quic_average();
-                                    let average_quic_response_time = this.socket.average_quic_response_time();
-                                    if average_quic_response_time.is_finite() {
-                                        if average_quic_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.quic_timeout = bound(
-                                                min(
-                                                    w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                    Duration::from_secs_f64(average_quic_response_time * TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                                ),
-                                                MIN_TCP_TIMEOUT,
-                                                MAX_TCP_TIMEOUT,
-                                            );
-                                        }
-                                    } else {
-                                        if average_quic_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.quic_timeout = bound(
-                                                w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                MIN_TCP_TIMEOUT,
-                                                MAX_TCP_TIMEOUT,
-                                            );
-                                        }
-                                    }
-                                },
-                                QuicResponseTime::Responded(response_time) => {
-                                    let (average_quic_response_time, average_quic_dropped_packets) = this.socket.add_response_time_to_quic_average(*response_time);
-                                    if average_quic_dropped_packets.current_average() <= DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.quic_timeout = bound(
-                                            max(
-                                                w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                Duration::from_secs_f64(average_quic_response_time.current_average() * TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                            ),
-                                            MIN_TCP_TIMEOUT,
-                                            MAX_TCP_TIMEOUT,
-                                        );
-                                    }
-                                },
-                                QuicResponseTime::None => (),
+                    let mut w_active_queries = this.socket.active_queries.write().unwrap();
+                    match execution_time {
+                        QuicResponseTime::Dropped => {
+                            let average_quic_dropped_packets = this.socket.add_dropped_packet_to_quic_average();
+                            let average_quic_response_time = this.socket.average_quic_response_time();
+                            if average_quic_response_time.is_finite() {
+                                if average_quic_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                    w_active_queries.quic_timeout = bound(
+                                        min(
+                                            w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                            Duration::from_secs_f64(average_quic_response_time * TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                        ),
+                                        MIN_TCP_TIMEOUT,
+                                        MAX_TCP_TIMEOUT,
+                                    );
+                                }
+                            } else {
+                                if average_quic_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                    w_active_queries.quic_timeout = bound(
+                                        w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        MIN_TCP_TIMEOUT,
+                                        MAX_TCP_TIMEOUT,
+                                    );
+                                }
                             }
-
-                            // We are responsible for clearing these maps. Otherwise, the memory
-                            // will only ever be cleaned up when the socket itself is dropped.
-                            w_active_queries.in_flight.remove(&this.query.id);
-                            w_active_queries.active.remove(&this.query.question);
-                            drop(w_active_queries);
-
-                            this.inner.set_complete();
-
-                            // Socket should not be polled again.
-                            return Poll::Ready(());
                         },
-                        Poll::Pending => {
-                            // Only waiting on the write lock to clear the in-flight maps. Once
-                            // acquired, cleanup can be done.
-                            return Poll::Pending;
+                        QuicResponseTime::Responded(response_time) => {
+                            let (average_quic_response_time, average_quic_dropped_packets) = this.socket.add_response_time_to_quic_average(*response_time);
+                            if average_quic_dropped_packets.current_average() <= DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                w_active_queries.quic_timeout = bound(
+                                    max(
+                                        w_active_queries.quic_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        Duration::from_secs_f64(average_quic_response_time.current_average() * TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                    ),
+                                    MIN_TCP_TIMEOUT,
+                                    MAX_TCP_TIMEOUT,
+                                );
+                            }
                         },
+                        QuicResponseTime::None => (),
                     }
+
+                    // We are responsible for clearing these maps. Otherwise, the memory
+                    // will only ever be cleaned up when the socket itself is dropped.
+                    w_active_queries.in_flight.remove(&this.query.id);
+                    w_active_queries.active.remove(&this.query.question);
+                    drop(w_active_queries);
+
+                    this.inner.set_complete();
+
+                    // Socket should not be polled again.
+                    return Poll::Ready(());
                 },
                 InnerTQProj::Complete => {
                     panic!("QUIC only query polled after completion");
@@ -403,24 +380,16 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for QuicQueryRunner<'a, 'b, 'c, 'd, 
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for QuicQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+impl<'a, 'b, 'e, 'h> PinnedDrop for QuicQueryRunner<'a, 'b, 'e, 'h> {
     fn drop(mut self: Pin<&mut Self>) {
-        async fn cleanup(socket: Arc<QuicSocket>, query: Message) {
-            let mut w_active_queries = socket.active_queries.write().await;
-            let _ = w_active_queries.in_flight.remove(&query.id);
-            let _ = w_active_queries.active.remove(&query.question);
-            drop(w_active_queries);
-        }
-
         match self.as_mut().project().inner.as_mut().project() {
             InnerTQProj::Fresh
           | InnerTQProj::Running { qq_socket: _, send_query: _ }
-          | InnerTQProj::Cleanup(_, _) => {
-                // Unfortunately, cannot re-use the existing futures because this struct is pinned.
-                // Spawning the cleanup in a separate task will ensure eventual cleanup.
-                let socket = self.socket.clone();
-                let query = self.query.clone();
-                tokio::spawn(cleanup(socket, query));
+          | InnerTQProj::Cleanup(_) => {
+                let mut w_active_queries = self.socket.active_queries.write().unwrap();
+                let _ = w_active_queries.in_flight.remove(&self.query.id);
+                let _ = w_active_queries.active.remove(&self.query.question);
+                drop(w_active_queries);
             },
             InnerTQProj::Complete => {
                 // Nothing to do for active queries. Already done cleaning up.
@@ -430,17 +399,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for QuicQueryRunner<'a, 'b, 'c, 
 }
 
 #[pin_project]
-pub struct QuicQuery<'a, 'b, 'c, 'd>
-where
-    'a: 'd
-{
+pub struct QuicQuery<'a, 'b> {
     socket: &'a Arc<QuicSocket>,
     query: &'b mut Message,
     #[pin]
-    inner: QInitQuery<'c, 'd, ActiveQueries>,
+    inner: QInitQuery,
 }
 
-impl<'a, 'b, 'c, 'd> QuicQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b> QuicQuery<'a, 'b> {
     #[inline]
     pub fn new(socket: &'a Arc<QuicSocket>, query: &'b mut Message) -> Self {
         Self {
@@ -451,7 +417,7 @@ impl<'a, 'b, 'c, 'd> QuicQuery<'a, 'b, 'c, 'd> {
     }
 }
 
-impl<'a, 'b, 'c, 'd> Future for QuicQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b> Future for QuicQuery<'a, 'b> {
     type Output = Result<Message, errors::QueryError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -459,113 +425,93 @@ impl<'a, 'b, 'c, 'd> Future for QuicQuery<'a, 'b, 'c, 'd> {
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
                 QInitQueryProj::Fresh => {
-                    this.inner.set_read_active_query(&this.socket.active_queries);
+                    let r_active_queries = this.socket.active_queries.read().unwrap();
+                    match r_active_queries.active.get(&this.query.question) {
+                        Some((query_id, result_sender)) => {
+                            // A query has already been made for this question and is in
+                            // flight. This future can listen for that response instead of
+                            // making a duplicate query.
+                            this.query.id = *query_id;
+                            let result_receiver = result_sender.subscribe();
+                            drop(r_active_queries);
 
-                    // The future for the read-lock will be polled during the next loop.
-                    continue;
-                },
-                QInitQueryProj::ReadActiveQuery(r_active_queries) => {
-                    match r_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(r_active_queries) => {
-                            match r_active_queries.active.get(&this.query.question) {
-                                Some((query_id, result_sender)) => {
-                                    // A query has already been made for this question and is in
-                                    // flight. This future can listen for that response instead of
-                                    // making a duplicate query.
-                                    this.query.id = *query_id;
-                                    let result_receiver = result_sender.subscribe();
-                                    drop(r_active_queries);
+                            this.inner.set_following(result_receiver);
 
-                                    this.inner.set_following(result_receiver);
-
-                                    // The next loop will poll the receiver until a result is
-                                    // received.
-                                    continue;
-                                },
-                                None => {
-                                    // This is a new query and has not yet been registered. Acquire
-                                    // the write lock to register it.
-                                    drop(r_active_queries);
-                                    this.inner.set_write_active_query(&this.socket.active_queries);
-
-                                    // During the next loop, the write-lock will be polled.
-                                    continue;
-                                },
-                            }
+                            // The next loop will poll the receiver until a result is
+                            // received.
+                            continue;
                         },
-                        Poll::Pending => {
-                            // Waiting on the read-lock only. Will be awoken once it is available.
-                            return Poll::Pending;
+                        None => {
+                            // This is a new query and has not yet been registered. Acquire
+                            // the write lock to register it.
+                            drop(r_active_queries);
+                            this.inner.set_write_active_query();
+
+                            // During the next loop, the write-lock will be polled.
+                            continue;
                         },
                     }
                 },
-                QInitQueryProj::WriteActiveQuery(w_active_queries) => {
+                QInitQueryProj::WriteActiveQuery => {
                     // Note that the same checks for the read-lock need to be made again in case
                     // something changed between when the lock was dropped and now.
-                    match w_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => {
-                            match w_active_queries.active.get(&this.query.question) {
-                                Some((query_id, result_sender)) => {
-                                    // A query has already been made for this question and is in
-                                    // flight. This future can listen for that response instead of
-                                    // making a duplicate query.
-                                    this.query.id = *query_id;
-                                    let result_receiver = result_sender.subscribe();
-                                    drop(w_active_queries);
+                    let mut w_active_queries = this.socket.active_queries.write().unwrap();
+                    match w_active_queries.active.get(&this.query.question) {
+                        Some((query_id, result_sender)) => {
+                            // A query has already been made for this question and is in
+                            // flight. This future can listen for that response instead of
+                            // making a duplicate query.
+                            this.query.id = *query_id;
+                            let result_receiver = result_sender.subscribe();
+                            drop(w_active_queries);
 
-                                    this.inner.set_following(result_receiver);
+                            this.inner.set_following(result_receiver);
 
-                                    // The next loop will poll the receiver until a result is
-                                    // received.
-                                    continue;
-                                },
-                                None => {
-                                    // This question is not already in flight on this socket. Set
-                                    // up the channels for the listener to send the answer on once
-                                    // received and start a query-runner that will send and manage
-                                    // the query.
-                                    let (result_sender, result_receiver) = once_watch::channel();
-
-                                    // This is the initial query ID. However, it could change if it
-                                    // is already in use.
-                                    this.query.id = rand::random();
-
-                                    // verify that ID is unique.
-                                    while w_active_queries.in_flight.contains_key(&this.query.id) {
-                                        this.query.id = rand::random();
-                                        // FIXME: should this fail after some number of non-unique
-                                        // keys? May want to verify that the list isn't full.
-                                    }
-
-                                    // The query-runner is spawned as an independent task since it
-                                    // must run to completion. It should not be cancelled if this
-                                    // task is cancelled because there may be others that are
-                                    // listening for the response too.
-                                    let join_handle = tokio::spawn({
-                                        let quic_timeout = w_active_queries.quic_timeout;
-                                        let result_sender = result_sender.clone();
-                                        let socket = this.socket.clone();
-                                        let mut query = this.query.clone();
-                                        async move {
-                                            QuicQueryRunner::new(&socket, &mut query, result_sender, &quic_timeout).await;
-                                        }
-                                    });
-
-                                    w_active_queries.in_flight.insert(this.query.id, (result_sender.clone(), join_handle));
-                                    w_active_queries.active.insert(this.query.question.clone(), (this.query.id, result_sender));
-                                    drop(w_active_queries);
-
-                                    this.inner.set_following(result_receiver);
-
-                                    // The next loop will poll the receiver until a result is
-                                    // received from the newly spawned query-runner.
-                                    continue;
-                                },
-                            }
+                            // The next loop will poll the receiver until a result is
+                            // received.
+                            continue;
                         },
-                        Poll::Pending => {
-                            // Waiting on the write-lock only. Will be awoken once it is available.
-                            return Poll::Pending;
+                        None => {
+                            // This question is not already in flight on this socket. Set
+                            // up the channels for the listener to send the answer on once
+                            // received and start a query-runner that will send and manage
+                            // the query.
+                            let (result_sender, result_receiver) = once_watch::channel();
+
+                            // This is the initial query ID. However, it could change if it
+                            // is already in use.
+                            this.query.id = rand::random();
+
+                            // verify that ID is unique.
+                            while w_active_queries.in_flight.contains_key(&this.query.id) {
+                                this.query.id = rand::random();
+                                // FIXME: should this fail after some number of non-unique
+                                // keys? May want to verify that the list isn't full.
+                            }
+
+                            // The query-runner is spawned as an independent task since it
+                            // must run to completion. It should not be cancelled if this
+                            // task is cancelled because there may be others that are
+                            // listening for the response too.
+                            let join_handle = tokio::spawn({
+                                let quic_timeout = w_active_queries.quic_timeout;
+                                let result_sender = result_sender.clone();
+                                let socket = this.socket.clone();
+                                let mut query = this.query.clone();
+                                async move {
+                                    QuicQueryRunner::new(&socket, &mut query, result_sender, &quic_timeout).await;
+                                }
+                            });
+
+                            w_active_queries.in_flight.insert(this.query.id, (result_sender.clone(), join_handle));
+                            w_active_queries.active.insert(this.query.question.clone(), (this.query.id, result_sender));
+                            drop(w_active_queries);
+
+                            this.inner.set_following(result_receiver);
+
+                            // The next loop will poll the receiver until a result is
+                            // received from the newly spawned query-runner.
+                            continue;
                         },
                     }
                 },
@@ -619,7 +565,7 @@ impl crate::socket::quic::QuicSocket for QuicSocket {
     }
 
     #[inline]
-    fn state(&self) ->  &RwLock<QuicState>  {
+    fn state(&self) ->  &std::sync::RwLock<QuicState>  {
         &self.quic
     }
 
@@ -650,7 +596,7 @@ impl QuicSocket {
     async fn listen_quic_cleanup(self: Arc<Self>, kill_quic: AwakeToken) {
         println!("Cleaning up QUIC socket {}", self.upstream_address);
 
-        let mut w_state = self.quic.write().await;
+        let mut w_state = self.quic.write().unwrap();
         match &*w_state {
             QuicState::Managed { socket: _, kill: managed_kill_quic } => {
                 // If the managed socket is the one that we are cleaning up...
@@ -699,8 +645,8 @@ impl ActiveQueries {
 pub struct QuicSocket {
     ns_name: CDomainName,
     upstream_address: IpAddr,
-    quic: RwLock<QuicState>,
-    active_queries: RwLock<ActiveQueries>,
+    quic: std::sync::RwLock<QuicState>,
+    active_queries: std::sync::RwLock<ActiveQueries>,
     client_config: Arc<quinn::ClientConfig>,
 
     // Rolling averages
@@ -718,8 +664,8 @@ impl QuicSocket {
         Arc::new(QuicSocket {
             ns_name,
             upstream_address,
-            quic: RwLock::new(QuicState::None),
-            active_queries: RwLock::new(ActiveQueries::new()),
+            quic: std::sync::RwLock::new(QuicState::None),
+            active_queries: std::sync::RwLock::new(ActiveQueries::new()),
             client_config,
 
             average_quic_response_time: Atomic::new(RollingAverage::new()),
@@ -836,7 +782,7 @@ impl QuicSocket {
         <Self as crate::socket::quic::QuicSocket>::disable(self).await;
     }
 
-    pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> QuicQuery<'a, 'b, 'c, 'd> {
+    pub fn query<'a, 'b>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> QuicQuery<'a, 'b> {
         // If the UDP socket is unreliable, send most data via QUIC. Some queries should still use
         // UDP to determine if the network conditions are improving. However, if the QUIC connection
         // is also unstable, then we should not rely on it.

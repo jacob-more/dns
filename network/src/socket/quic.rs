@@ -3,10 +3,9 @@ use std::{future::Future, net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}, pin::Pi
 use async_lib::{awake_token::{AwakeToken, AwokenToken, SameAwakeToken}, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
 use async_trait::async_trait;
 use dns_lib::types::c_domain_name::CDomainName;
-use futures::{future::BoxFuture, FutureExt};
 use pin_project::{pin_project, pinned_drop};
 use quinn::Connecting;
-use tokio::{sync::{RwLock, RwLockReadGuard, RwLockWriteGuard}, task::JoinHandle, time::Sleep};
+use tokio::{task::JoinHandle, time::Sleep};
 
 use crate::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
 
@@ -30,7 +29,7 @@ pub(crate) enum QuicState {
 pub(crate) trait QuicSocket where Self: 'static + Sized + Send + Sync {
     fn peer_addr(&self) -> SocketAddr;
     fn peer_name(&self) -> &CDomainName;
-    fn state(&self) -> &RwLock<QuicState>;
+    fn state(&self) -> &std::sync::RwLock<QuicState>;
     fn client_config(&self) -> &Arc<quinn::ClientConfig>;
 
     /// Start the QUIC listener and drive the QUIC state to Managed.
@@ -52,46 +51,54 @@ pub(crate) trait QuicSocket where Self: 'static + Sized + Send + Sync {
     /// Shut down the QUIC listener and drive the QUIC state to None.
     #[inline]
     async fn shutdown(self: Arc<Self>) {
-        let mut w_state = self.state().write().await;
-        match &*w_state {
-            QuicState::Managed { socket: _, kill } => {
-                let quic_kill = kill.clone();
-                *w_state = QuicState::None;
-                drop(w_state);
+        let receiver;
+        {
+            let mut w_state = self.state().write().unwrap();
+            match &*w_state {
+                QuicState::Managed { socket: _, kill } => {
+                    let quic_kill = kill.clone();
+                    *w_state = QuicState::None;
+                    drop(w_state);
+    
+                    quic_kill.awake();
+    
+                    // Note: this task is not responsible for actual cleanup. Once the listener closes, it
+                    // will kill any active queries and change the QuicState.
+                    return;
+                },
+                QuicState::Establishing { sender, kill } => {
+                    let sender = sender.clone();
+                    let kill_init_quic = kill.clone();
+                    *w_state = QuicState::None;
+                    drop(w_state);
+    
+                    // Try to prevent the socket from being initialized.
+                    kill_init_quic.awake();
+                    sender.close();
+                    receiver = sender.subscribe();
+                },
+                QuicState::None
+              | QuicState::Blocked => {
+                    // Already shut down
+                    drop(w_state);
+                    return;
+                },
+            }
+        }
 
+        // If the socket still initialized, shut it down immediately.
+        match receiver.await {
+            Ok((_, quic_kill)) => {
                 quic_kill.awake();
-
-                // Note: this task is not responsible for actual cleanup. Once the listener closes, it
-                // will kill any active queries and change the QuicState.
             },
-            QuicState::Establishing { sender, kill } => {
-                let sender = sender.clone();
-                let kill_init_quic = kill.clone();
-                *w_state = QuicState::None;
-                drop(w_state);
-
-                // Try to prevent the socket from being initialized.
-                kill_init_quic.awake();
-                sender.close();
-                let receiver = sender.subscribe();
-
-                // If the socket still initialized, shut it down immediately.
-                match receiver.await {
-                    Ok((_, quic_kill)) => {
-                        quic_kill.awake();
-                    },
-                    Err(_) => (), //< Successful cancellation
-                }
-            },
-            QuicState::None => drop(w_state),    //< Already shut down
-            QuicState::Blocked => drop(w_state), //< Already shut down
+            Err(_) => (), //< Successful cancellation
         }
     }
 
     /// If the QUIC state is Blocked, changes it to None.
     #[inline]
     async fn enable(self: Arc<Self>) {
-        let mut w_state = self.state().write().await;
+        let mut w_state = self.state().write().unwrap();
         match &*w_state {
             QuicState::Managed { socket: _, kill: _ } => (),      //< Already enabled
             QuicState::Establishing { sender: _, kill: _ } => (), //< Already enabled
@@ -104,45 +111,51 @@ pub(crate) trait QuicSocket where Self: 'static + Sized + Send + Sync {
     /// Sets the QUIC state to Blocked, shutting down the socket if needed.
     #[inline]
     async fn disable(self: Arc<Self>) {
-        let mut w_state = self.state().write().await;
-        match &*w_state {
-            QuicState::Managed { socket: _, kill } => {
-                let kill_quic = kill.clone();
-                *w_state = QuicState::Blocked;
-                drop(w_state);
+        let receiver;
+        {
+            let mut w_state = self.state().write().unwrap();
+            match &*w_state {
+                QuicState::Managed { socket: _, kill } => {
+                    let kill_quic = kill.clone();
+                    *w_state = QuicState::Blocked;
+                    drop(w_state);
+    
+                    kill_quic.awake();
+    
+                    // Note: this task is not responsible for actual cleanup. Once the listener closes, it
+                    // will kill any active queries and change the QuicState.
+                    return;
+                },
+                QuicState::Establishing { sender, kill }=> {
+                    let sender = sender.clone();
+                    let kill_init_quic = kill.clone();
+                    *w_state = QuicState::Blocked;
+                    drop(w_state);
+    
+                    // Try to prevent the socket from being initialized.
+                    kill_init_quic.awake();
+                    sender.close();
+                    receiver = sender.subscribe();
+                },
+                QuicState::None => {
+                    *w_state = QuicState::Blocked;
+                    drop(w_state);
+                    return;
+                },
+                QuicState::Blocked => {
+                    // Already disabled
+                    drop(w_state);
+                    return;
+                },
+            }
+        }
 
+        // If the socket still initialized, shut it down immediately.
+        match receiver.await {
+            Ok((_, kill_quic)) => {
                 kill_quic.awake();
-
-                // Note: this task is not responsible for actual cleanup. Once the listener closes, it
-                // will kill any active queries and change the QuicState.
             },
-            QuicState::Establishing { sender, kill }=> {
-                let sender = sender.clone();
-                let kill_init_quic = kill.clone();
-                *w_state = QuicState::Blocked;
-                drop(w_state);
-
-                // Try to prevent the socket from being initialized.
-                kill_init_quic.awake();
-                sender.close();
-                let receiver = sender.subscribe();
-
-                // If the socket still initialized, shut it down immediately.
-                match receiver.await {
-                    Ok((_, kill_quic)) => {
-                        kill_quic.awake();
-                    },
-                    Err(_) => (), //< Successful cancellation
-                }
-            },
-            QuicState::None => {
-                *w_state = QuicState::Blocked;
-                drop(w_state)
-            },
-            QuicState::Blocked => {
-                // Already disabled
-                drop(w_state)
-            },
+            Err(_) => (), //< Successful cancellation
         }
     }
 
@@ -153,12 +166,8 @@ pub(crate) trait QuicSocket where Self: 'static + Sized + Send + Sync {
 }
 
 #[pin_project(project = QQuicSocketProj)]
-pub(crate) enum QQuicSocket<'c, 'd>
-where
-    'd: 'c,
-{
+pub(crate) enum QQuicSocket {
     Fresh,
-    GetQuicState(BoxFuture<'c, RwLockReadGuard<'d, QuicState>>),
     GetQuicEstablishing {
         #[pin]
         receive_quic_socket: once_watch::Receiver<(Arc<quinn::Connection>, AwakeToken)>,
@@ -175,18 +184,7 @@ where
     Closed(errors::SocketError),
 }
 
-impl<'a, 'c, 'd, 'e> QQuicSocket<'c, 'd>
-where
-    'a: 'd,
-    'd: 'c,
-{
-    #[inline]
-    pub fn set_get_quic_state<S: QuicSocket>(mut self: std::pin::Pin<&mut Self>, socket: &'a Arc<S>) {
-        let r_quic_state = socket.state().read().boxed();
-
-        self.set(Self::GetQuicState(r_quic_state));
-    }
-
+impl<'a> QQuicSocket {
     #[inline]
     pub fn set_get_quic_establishing(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<(Arc<quinn::Connection>, AwakeToken)>) {
         self.set(Self::GetQuicEstablishing { receive_quic_socket: receiver });
@@ -210,51 +208,50 @@ where
     }
 }
 
-impl<'c, 'd, S: QuicSocket> FutureSocket<'d, S, errors::SocketError> for QQuicSocket<'c, 'd> {
-    fn poll<'a>(self: &mut Pin<&mut Self>, socket: &'a Arc<S>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::SocketError> where 'a: 'd {
+impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQuicSocket {
+    fn poll(self: &mut Pin<&mut Self>, socket: &'a Arc<S>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::SocketError> where 'a: 'd {
         match self.as_mut().project() {
             QQuicSocketProj::Fresh => {
-                self.as_mut().set_get_quic_state(socket);
+                let r_quic_state = socket.state().read().unwrap();
+                match &*r_quic_state {
+                    QuicState::Managed { socket, kill } => {
+                        let udp_socket = socket.clone();
+                        let kill_udp = kill.clone();
+                        drop(r_quic_state);
 
-                // Next loop should poll `r_quic_state`
-                return PollSocket::Continue;
-            },
-            QQuicSocketProj::GetQuicState(r_quic_state) => {
-                match r_quic_state.as_mut().poll(cx) {
-                    Poll::Ready(quic_state) => {
-                        match &*quic_state {
-                            QuicState::Managed { socket, kill } => {
-                                self.as_mut().set_acquired(socket.clone(), kill.clone());
+                        self.as_mut().set_acquired(udp_socket, kill_udp);
 
-                                // Next loop should poll `kill_quic`
-                                return PollSocket::Continue;
-                            },
-                            QuicState::Establishing { sender, kill: _ } => {
-                                self.as_mut().set_get_quic_establishing(sender.subscribe());
-
-                                // Next loop should poll `receive_quic_socket`
-                                return PollSocket::Continue;
-                            },
-                            QuicState::None => {
-                                self.as_mut().set_init_quic(socket);
-
-                                // Next loop should poll `join_handle`
-                                return PollSocket::Continue;
-                            },
-                            QuicState::Blocked => {
-                                let error = errors::SocketError::Disabled(
-                                    errors::SocketType::Quic,
-                                    errors::SocketStage::Initialization,
-                                );
-
-                                self.as_mut().set_closed(error.clone());
-
-                                return PollSocket::Error(error);
-                            },
-                        }
+                        // Next loop should poll `kill_quic`
+                        return PollSocket::Continue;
                     },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
+                    QuicState::Establishing { sender, kill: _ } => {
+                        let sender = sender.subscribe();
+                        drop(r_quic_state);
+
+                        self.as_mut().set_get_quic_establishing(sender);
+
+                        // Next loop should poll `receive_quic_socket`
+                        return PollSocket::Continue;
+                    },
+                    QuicState::None => {
+                        drop(r_quic_state);
+
+                        self.as_mut().set_init_quic(socket);
+
+                        // Next loop should poll `join_handle`
+                        return PollSocket::Continue;
+                    },
+                    QuicState::Blocked => {
+                        drop(r_quic_state);
+
+                        let error = errors::SocketError::Disabled(
+                            errors::SocketType::Quic,
+                            errors::SocketStage::Initialization,
+                        );
+
+                        self.as_mut().set_closed(error.clone());
+
+                        return PollSocket::Error(error);
                     },
                 }
             },
@@ -342,9 +339,8 @@ enum CleanupReason<E> {
 }
 
 #[pin_project(PinnedDrop)]
-struct InitQuic<'a, 'b, 'c, 'e, 'f, 'k, 'l, S>
+struct InitQuic<'a, S>
 where
-    'a: 'c + 'f + 'l,
     S: QuicSocket,
 {
     socket: &'a Arc<S>,
@@ -354,25 +350,18 @@ where
     #[pin]
     timeout: Sleep,
     #[pin]
-    inner: InnerInitQuic<'b, 'c, 'e, 'f, 'k, 'l>,
+    inner: InnerInitQuic,
 }
 
 #[pin_project(project = InnerInitQuicProj)]
-enum InnerInitQuic<'b, 'c, 'e, 'f, 'k, 'l>
-where
-    'c: 'b,
-    'f: 'e,
-    'l: 'k,
-{
+enum InnerInitQuic {
     Fresh,
-    WriteEstablishing(BoxFuture<'b, RwLockWriteGuard<'c, QuicState>>),
+    WriteEstablishing,
     ConnectingQuic(#[pin] Connecting),
     WriteNone {
         reason: CleanupReason<errors::SocketError>,
-        w_quic_state: BoxFuture<'e, RwLockWriteGuard<'f, QuicState>>,
     },
     WriteManaged {
-        w_quic_state: BoxFuture<'k, RwLockWriteGuard<'l, QuicState>>,
         quic_socket: Arc<quinn::Connection>,
     },
     GetEstablishing {
@@ -382,7 +371,7 @@ where
     Complete,
 }
 
-impl<'a, 'b, 'c, 'e, 'f, 'k, 'l, S> InitQuic<'a, 'b, 'c, 'e, 'f, 'k, 'l, S>
+impl<'a, S> InitQuic<'a, S>
 where
     S: QuicSocket,
 {
@@ -400,19 +389,13 @@ where
             inner: InnerInitQuic::Fresh,
         }
     }
-}
 
-impl<'a, 'b, 'c, 'e, 'f, 'k, 'l, S> Future for InitQuic<'a, 'b, 'c, 'e, 'f, 'k, 'l, S>
-where
-    S: QuicSocket,
-{
-    type Output = Result<(Arc<quinn::Connection>, AwakeToken), errors::SocketError>;
-
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    #[inline]
+    fn poll_timeouts(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Result<(), errors::SocketError> {
         let mut this = self.as_mut().project();
         match this.inner.as_mut().project() {
             InnerInitQuicProj::Fresh
-          | InnerInitQuicProj::WriteEstablishing(_) => {
+          | InnerInitQuicProj::WriteEstablishing => {
                 if let Poll::Ready(()) = this.kill_quic.as_mut().poll(cx) {
                     this.quic_socket_sender.close();
                     this.kill_quic.awake();
@@ -423,8 +406,8 @@ where
 
                     *this.inner = InnerInitQuic::Complete;
 
-                    // Exit loop: query killed.
-                    return Poll::Ready(Err(error));
+                    // Query killed.
+                    return Err(error);
                 }
 
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
@@ -437,24 +420,26 @@ where
 
                     *this.inner = InnerInitQuic::Complete;
 
-                    // Exit loop: query timed out.
-                    return Poll::Ready(Err(error));
+                    // Query timed out.
+                    return Err(error);
                 }
+
+                return Ok(());
             },
             InnerInitQuicProj::ConnectingQuic(_) => {
                 if let Poll::Ready(()) = this.kill_quic.as_mut().poll(cx) {
-                    let w_quic_state = this.socket.state().write().boxed();
-
-                    *this.inner = InnerInitQuic::WriteNone { reason: CleanupReason::Timeout, w_quic_state };
+                    *this.inner = InnerInitQuic::WriteNone { reason: CleanupReason::Timeout };
 
                     // First loop: poll the write lock.
+                    return Ok(());
                 } else if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
-                    let w_quic_state = this.socket.state().write().boxed();
-
-                    *this.inner = InnerInitQuic::WriteNone { reason: CleanupReason::Killed, w_quic_state };
+                    *this.inner = InnerInitQuic::WriteNone { reason: CleanupReason::Killed };
 
                     // First loop: poll the write lock.
-                }
+                    return Ok(());
+                } 
+
+                return Ok(());
             },
             InnerInitQuicProj::GetEstablishing { receive_quic_socket: _ } => {
                 // Does not poll `kill_quic` because that gets awoken to kill
@@ -470,126 +455,133 @@ where
                     *this.inner = InnerInitQuic::Complete;
 
                     // Exit loop: query timed out.
-                    return Poll::Ready(Err(error));
+                    return Err(error);
                 }
+
+                return Ok(());
             },
-            InnerInitQuicProj::WriteNone { reason: _, w_quic_state: _ }
-          | InnerInitQuicProj::WriteManaged { w_quic_state: _, quic_socket: _ }
+            InnerInitQuicProj::WriteNone { reason: _ }
+          | InnerInitQuicProj::WriteManaged { quic_socket: _ }
           | InnerInitQuicProj::Complete => {
                 // Not allowed to timeout or be killed. These are cleanup
                 // states.
+                return Ok(());
             },
+        }
+    }
+}
+
+impl<'a, S> Future for InitQuic<'a, S>
+where
+    S: QuicSocket,
+{
+    type Output = Result<(Arc<quinn::Connection>, AwakeToken), errors::SocketError>;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+        if let Err(error) = self.as_mut().poll_timeouts(cx) {
+            return Poll::Ready(Err(error));
         }
 
         loop {
+            let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
-                InnerInitQuicProj::Fresh => {
-                    let w_quic_state = this.socket.state().write().boxed();
+                InnerInitQuicProj::Fresh
+              | InnerInitQuicProj::WriteEstablishing => {
+                    let mut w_quic_state = this.socket.state().write().unwrap();
+                    match &*w_quic_state {
+                        QuicState::Managed { socket, kill } => {
+                            let quic_socket = socket.clone();
+                            let kill_quic_token = kill.clone();
+                            drop(w_quic_state);
 
-                    *this.inner = InnerInitQuic::WriteEstablishing(w_quic_state);
+                            let _ = this.quic_socket_sender.send((quic_socket.clone(), kill_quic_token.clone()));
+                            this.kill_quic.awake();
 
-                    // Next loop: poll the write lock to get the QUIC state
-                    continue;
-                }
-                InnerInitQuicProj::WriteEstablishing(w_quic_state) => {
-                    match w_quic_state.as_mut().poll(cx) {
-                        Poll::Ready(mut quic_state) => {
-                            match &*quic_state {
-                                QuicState::Managed { socket, kill } => {
-                                    let quic_socket = socket.clone();
-                                    let kill_quic_token = kill.clone();
+                            *this.inner = InnerInitQuic::Complete;
 
-                                    let _ = this.quic_socket_sender.send((quic_socket.clone(), kill_quic_token.clone()));
-                                    this.kill_quic.awake();
+                            // Exit loop: connection already setup.
+                            // Nothing to do.
+                            return Poll::Ready(Ok((quic_socket, kill_quic_token)));
+                        },
+                        QuicState::Establishing { sender: active_sender, kill: _ } => {
+                            let receive_quic_socket = active_sender.subscribe();
+                            drop(w_quic_state);
+
+                            *this.inner = InnerInitQuic::GetEstablishing { receive_quic_socket };
+
+                            // Next loop: poll the receiver. Another
+                            // process is setting up the connection.
+                            continue;
+                        },
+                        QuicState::None => {
+                            let quic_socket_sender = this.quic_socket_sender.clone();
+                            let kill_init_quic = this.kill_quic.get_awake_token();
+
+                            *w_quic_state = QuicState::Establishing {
+                                sender: quic_socket_sender,
+                                kill: kill_init_quic,
+                            };
+                            drop(w_quic_state);
+
+                            let local_addr = match this.socket.peer_addr() {
+                                SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                                SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+                            };
+                            let endpoint = match quinn::Endpoint::client(local_addr) {
+                                Ok(endpoint) => endpoint,
+                                Err(error) => {
+                                    let io_error = errors::IoError::from(error);
+                                    let socket_error = errors::SocketError::Io {
+                                        socket_type: errors::SocketType::Quic,
+                                        socket_stage: errors::SocketStage::Initialization,
+                                        error: io_error,
+                                    };
 
                                     *this.inner = InnerInitQuic::Complete;
 
-                                    // Exit loop: connection already setup.
-                                    // Nothing to do.
-                                    return Poll::Ready(Ok((quic_socket, kill_quic_token)));
+                                    // Exit loop: connection error.
+                                    return Poll::Ready(Err(socket_error));
                                 },
-                                QuicState::Establishing { sender: active_sender, kill: _ } => {
-                                    let receive_quic_socket = active_sender.subscribe();
-
-                                    *this.inner = InnerInitQuic::GetEstablishing { receive_quic_socket };
-
-                                    // Next loop: poll the receiver. Another
-                                    // process is setting up the connection.
-                                    continue;
-                                },
-                                QuicState::None => {
-                                    let quic_socket_sender = this.quic_socket_sender.clone();
-                                    let kill_init_quic = this.kill_quic.get_awake_token();
-                                    let local_addr = match this.socket.peer_addr() {
-                                        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-                                        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+                            };
+                            let init_connection = match endpoint.connect_with(
+                                (**this.socket.client_config()).clone(),
+                                this.socket.peer_addr(),
+                                &this.socket.peer_name().to_string(),
+                            ) {
+                                Ok(connection) => connection,
+                                Err(error) => {
+                                    let socket_error = errors::SocketError::QuicConnect {
+                                        socket_stage: errors::SocketStage::Initialization,
+                                        error,
                                     };
-                                    let endpoint = match quinn::Endpoint::client(local_addr) {
-                                        Ok(endpoint) => endpoint,
-                                        Err(error) => {
-                                            let io_error = errors::IoError::from(error);
-                                            let socket_error = errors::SocketError::Io {
-                                                socket_type: errors::SocketType::Quic,
-                                                socket_stage: errors::SocketStage::Initialization,
-                                                error: io_error,
-                                            };
-
-                                            *this.inner = InnerInitQuic::Complete;
-        
-                                            // Exit loop: connection error.
-                                            return Poll::Ready(Err(socket_error));
-                                        },
-                                    };
-                                    let init_connection = match endpoint.connect_with(
-                                        (**this.socket.client_config()).clone(),
-                                        this.socket.peer_addr(),
-                                        &this.socket.peer_name().to_string(),
-                                    ) {
-                                        Ok(connection) => connection,
-                                        Err(error) => {
-                                            let socket_error = errors::SocketError::QuicConnect {
-                                                socket_stage: errors::SocketStage::Initialization,
-                                                error,
-                                            };
-
-                                            *this.inner = InnerInitQuic::Complete;
-        
-                                            // Exit loop: connection error.
-                                            return Poll::Ready(Err(socket_error));
-                                        },
-                                    };
-
-                                    *quic_state = QuicState::Establishing {
-                                        sender: quic_socket_sender,
-                                        kill: kill_init_quic,
-                                    };
-
-                                    *this.inner = InnerInitQuic::ConnectingQuic(init_connection);
-
-                                    // Next loop: poll the QUIC stream and start
-                                    // connecting.
-                                    continue;
-                                },
-                                QuicState::Blocked => {
-                                    this.quic_socket_sender.close();
-                                    this.kill_quic.awake();
-                                    let error = errors::SocketError::Disabled(
-                                        errors::SocketType::Quic,
-                                        errors::SocketStage::Initialization,
-                                    );
 
                                     *this.inner = InnerInitQuic::Complete;
 
-                                    // Exit loop: connection not allowed.
-                                    return Poll::Ready(Err(error));
+                                    // Exit loop: connection error.
+                                    return Poll::Ready(Err(socket_error));
                                 },
-                            }
-                        }
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the QuicState
-                            // write lock is available, the timeout condition
-                            // occurs, or the connection is killed.
-                            return Poll::Pending;
+                            };
+
+                            *this.inner = InnerInitQuic::ConnectingQuic(init_connection);
+
+                            // Next loop: poll the QUIC stream and start
+                            // connecting.
+                            continue;
+                        },
+                        QuicState::Blocked => {
+                            drop(w_quic_state);
+
+                            this.quic_socket_sender.close();
+                            this.kill_quic.awake();
+                            let error = errors::SocketError::Disabled(
+                                errors::SocketType::Quic,
+                                errors::SocketStage::Initialization,
+                            );
+
+                            *this.inner = InnerInitQuic::Complete;
+
+                            // Exit loop: connection not allowed.
+                            return Poll::Ready(Err(error));
                         },
                     }
                 },
@@ -597,23 +589,21 @@ where
                     match init_connection.as_mut().poll(cx) {
                         Poll::Ready(Ok(quic_socket)) => {
                             let quic_socket = Arc::new(quic_socket);
-                            let w_quic_state = this.socket.state().write().boxed();
                             tokio::spawn(this.socket.clone().listen(quic_socket.clone(), this.kill_quic.get_awake_token()));
 
-                            *this.inner = InnerInitQuic::WriteManaged { w_quic_state, quic_socket };
+                            *this.inner = InnerInitQuic::WriteManaged { quic_socket };
 
                             // Next loop: poll the write lock.
                             continue;
                         },
                         Poll::Ready(Err(error)) => {
-                            let w_quic_state = this.socket.state().write().boxed();
                             let error = errors::SocketError::QuicConnection {
                                 socket_stage: errors::SocketStage::Initialization,
                                 error,
                             };
                             println!("{error:?}");
 
-                            *this.inner = InnerInitQuic::WriteNone { reason: CleanupReason::ConnectionError(error), w_quic_state };
+                            *this.inner = InnerInitQuic::WriteNone { reason: CleanupReason::ConnectionError(error) };
 
                             // Next loop: poll the write lock.
                             continue;
@@ -626,248 +616,222 @@ where
                         },
                     }
                 },
-                InnerInitQuicProj::WriteNone { reason: CleanupReason::ConnectionError(error), w_quic_state } => {
-                    match w_quic_state.as_mut().poll(cx) {
-                        Poll::Ready(mut w_quic_state) => {
-                            match &*w_quic_state {
-                                QuicState::Managed { socket, kill } => {
-                                    let quic_socket = socket.clone();
-                                    let kill_quic_token = kill.clone();
+                InnerInitQuicProj::WriteNone { reason: CleanupReason::ConnectionError(error) } => {
+                    let mut w_quic_state = this.socket.state().write().unwrap();
+                    match &*w_quic_state {
+                        QuicState::Managed { socket, kill } => {
+                            let quic_socket = socket.clone();
+                            let kill_quic_token = kill.clone();
+                            drop(w_quic_state);
 
-                                    let _ = this.quic_socket_sender.send((quic_socket.clone(), kill_quic_token.clone()));
-                                    this.kill_quic.awake();
+                            let _ = this.quic_socket_sender.send((quic_socket.clone(), kill_quic_token.clone()));
+                            this.kill_quic.awake();
 
-                                    *this.inner = InnerInitQuic::Complete;
+                            *this.inner = InnerInitQuic::Complete;
 
-                                    // Exit loop: connection already setup.
-                                    // Nothing to do.
-                                    return Poll::Ready(Ok((quic_socket, kill_quic_token)));
-                                },
-                                QuicState::Establishing { sender, kill: active_kill_quic_token } => {
-                                    // If we are the one who set the state to Establishing...
-                                    if this.kill_quic.same_awake_token(active_kill_quic_token) {
-                                        *w_quic_state = QuicState::None;
-                                        drop(w_quic_state);
-                                        this.quic_socket_sender.close();
-                                        this.kill_quic.awake();
-                                        let error = error.clone();
+                            // Exit loop: connection already setup.
+                            // Nothing to do.
+                            return Poll::Ready(Ok((quic_socket, kill_quic_token)));
+                        },
+                        QuicState::Establishing { sender, kill: active_kill_quic_token } => {
+                            // If we are the one who set the state to Establishing...
+                            if this.kill_quic.same_awake_token(active_kill_quic_token) {
+                                *w_quic_state = QuicState::None;
+                                drop(w_quic_state);
 
-                                        *this.inner = InnerInitQuic::Complete;
+                                this.quic_socket_sender.close();
+                                this.kill_quic.awake();
+                                let error = error.clone();
 
-                                        // Exit loop: we received a connection
-                                        // error.
-                                        return Poll::Ready(Err(error));
-                                    // If some other process set the state to Establishing...
-                                    } else {
-                                        let receive_quic_socket = sender.subscribe();
+                                *this.inner = InnerInitQuic::Complete;
 
-                                        *this.inner = InnerInitQuic::GetEstablishing { receive_quic_socket };
+                                // Exit loop: we received a connection
+                                // error.
+                                return Poll::Ready(Err(error));
+                            // If some other process set the state to Establishing...
+                            } else {
+                                let receive_quic_socket = sender.subscribe();
+                                drop(w_quic_state);
 
-                                        // Next loop: poll the receiver.
-                                        continue;
-                                    }
-                                },
-                                QuicState::None
-                              | QuicState::Blocked => {
-                                    drop(w_quic_state);
-                                    this.quic_socket_sender.close();
-                                    this.kill_quic.awake();
-                                    let error = error.clone();
+                                *this.inner = InnerInitQuic::GetEstablishing { receive_quic_socket };
 
-                                    *this.inner = InnerInitQuic::Complete;
-
-                                    // Exit loop: we received a connection
-                                    // error.
-                                    return Poll::Ready(Err(error));
-                                },
+                                // Next loop: poll the receiver.
+                                continue;
                             }
                         },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the QuicState
-                            // write lock is available. Cannot time out or be
-                            // killed.
-                            return Poll::Pending;
+                        QuicState::None
+                      | QuicState::Blocked => {
+                            drop(w_quic_state);
+
+                            this.quic_socket_sender.close();
+                            this.kill_quic.awake();
+                            let error = error.clone();
+
+                            *this.inner = InnerInitQuic::Complete;
+
+                            // Exit loop: we received a connection
+                            // error.
+                            return Poll::Ready(Err(error));
                         },
                     }
                 },
-                InnerInitQuicProj::WriteNone { reason: CleanupReason::Timeout, w_quic_state } => {
-                    match w_quic_state.as_mut().poll(cx) {
-                        Poll::Ready(mut w_quic_state) => {
-                            match &*w_quic_state {
-                                QuicState::Managed { socket, kill } => {
-                                    let quic_socket = socket.clone();
-                                    let kill_quic_token = kill.clone();
+                InnerInitQuicProj::WriteNone { reason: CleanupReason::Timeout } => {
+                    let mut w_quic_state = this.socket.state().write().unwrap();
+                    match &*w_quic_state {
+                        QuicState::Managed { socket, kill } => {
+                            let quic_socket = socket.clone();
+                            let kill_quic_token = kill.clone();
+                            drop(w_quic_state);
 
-                                    let _ = this.quic_socket_sender.send((quic_socket.clone(), kill_quic_token.clone()));
-                                    this.kill_quic.awake();
+                            let _ = this.quic_socket_sender.send((quic_socket.clone(), kill_quic_token.clone()));
+                            this.kill_quic.awake();
 
-                                    *this.inner = InnerInitQuic::Complete;
+                            *this.inner = InnerInitQuic::Complete;
 
-                                    // Exit loop: connection already setup.
-                                    // Nothing to do.
-                                    return Poll::Ready(Ok((quic_socket, kill_quic_token)));
-                                },
-                                QuicState::Establishing { sender: _, kill: active_kill_quic_token } => {
-                                    // If we are the one who set the state to Establishing...
-                                    if this.kill_quic.same_awake_token(active_kill_quic_token) {
-                                        *w_quic_state = QuicState::None;
-                                    }
-                                    drop(w_quic_state);
-                                    this.quic_socket_sender.close();
-                                    this.kill_quic.awake();
-
-                                    *this.inner = InnerInitQuic::Complete;
-
-                                    // Exit loop: connection timed out.
-                                    return Poll::Ready(Err(errors::SocketError::Timeout(
-                                        errors::SocketType::Quic,
-                                        errors::SocketStage::Initialization,
-                                    )));
-                                },
-                                QuicState::None
-                              | QuicState::Blocked => {
-                                    drop(w_quic_state);
-                                    this.quic_socket_sender.close();
-                                    this.kill_quic.awake();
-
-                                    *this.inner = InnerInitQuic::Complete;
-
-                                    // Exit loop: connection timed out.
-                                    return Poll::Ready(Err(errors::SocketError::Timeout(
-                                        errors::SocketType::Quic,
-                                        errors::SocketStage::Initialization,
-                                    )));
-                                },
-                            }
+                            // Exit loop: connection already setup.
+                            // Nothing to do.
+                            return Poll::Ready(Ok((quic_socket, kill_quic_token)));
                         },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the QuicState
-                            // write lock is available. Cannot time out or be
-                            // killed.
-                            return Poll::Pending;
+                        QuicState::Establishing { sender: _, kill: active_kill_quic_token } => {
+                            // If we are the one who set the state to Establishing...
+                            if this.kill_quic.same_awake_token(active_kill_quic_token) {
+                                *w_quic_state = QuicState::None;
+                            }
+                            drop(w_quic_state);
+
+                            this.quic_socket_sender.close();
+                            this.kill_quic.awake();
+
+                            *this.inner = InnerInitQuic::Complete;
+
+                            // Exit loop: connection timed out.
+                            return Poll::Ready(Err(errors::SocketError::Timeout(
+                                errors::SocketType::Quic,
+                                errors::SocketStage::Initialization,
+                            )));
+                        },
+                        QuicState::None
+                      | QuicState::Blocked => {
+                            drop(w_quic_state);
+
+                            this.quic_socket_sender.close();
+                            this.kill_quic.awake();
+
+                            *this.inner = InnerInitQuic::Complete;
+
+                            // Exit loop: connection timed out.
+                            return Poll::Ready(Err(errors::SocketError::Timeout(
+                                errors::SocketType::Quic,
+                                errors::SocketStage::Initialization,
+                            )));
                         },
                     }
                 },
-                InnerInitQuicProj::WriteNone { reason: CleanupReason::Killed, w_quic_state } => {
-                    match w_quic_state.as_mut().poll(cx) {
-                        Poll::Ready(mut w_quic_state) => {
-                            match &*w_quic_state {
-                                QuicState::Establishing { sender: _, kill: active_kill_quic_token } => {
-                                    // If we are the one who set the state to Establishing...
-                                    if this.kill_quic.same_awake_token(active_kill_quic_token) {
-                                        *w_quic_state = QuicState::None;
-                                    }
-                                    drop(w_quic_state);
-                                    this.quic_socket_sender.close();
-                                    this.kill_quic.awake();
-
-                                    *this.inner = InnerInitQuic::Complete;
-
-                                    // Exit loop: connection killed.
-                                    return Poll::Ready(Err(errors::SocketError::Shutdown(
-                                        errors::SocketType::Quic,
-                                        errors::SocketStage::Initialization,
-                                    )));
-                                },
-                                QuicState::Managed { socket: _, kill: _ }
-                              | QuicState::None
-                              | QuicState::Blocked => {
-                                    drop(w_quic_state);
-                                    this.quic_socket_sender.close();
-                                    this.kill_quic.awake();
-
-                                    *this.inner = InnerInitQuic::Complete;
-
-                                    // Exit loop: connection killed.
-                                    return Poll::Ready(Err(errors::SocketError::Shutdown(
-                                        errors::SocketType::Quic,
-                                        errors::SocketStage::Initialization,
-                                    )));
-                                },
+                InnerInitQuicProj::WriteNone { reason: CleanupReason::Killed } => {
+                    let mut w_quic_state = this.socket.state().write().unwrap();
+                    match &*w_quic_state {
+                        QuicState::Establishing { sender: _, kill: active_kill_quic_token } => {
+                            // If we are the one who set the state to Establishing...
+                            if this.kill_quic.same_awake_token(active_kill_quic_token) {
+                                *w_quic_state = QuicState::None;
                             }
+                            drop(w_quic_state);
+
+                            this.quic_socket_sender.close();
+                            this.kill_quic.awake();
+
+                            *this.inner = InnerInitQuic::Complete;
+
+                            // Exit loop: connection killed.
+                            return Poll::Ready(Err(errors::SocketError::Shutdown(
+                                errors::SocketType::Quic,
+                                errors::SocketStage::Initialization,
+                            )));
                         },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the QuicState
-                            // write lock is available. Cannot time out or be
-                            // killed.
-                            return Poll::Pending;
+                        QuicState::Managed { socket: _, kill: _ }
+                      | QuicState::None
+                      | QuicState::Blocked => {
+                            drop(w_quic_state);
+
+                            this.quic_socket_sender.close();
+                            this.kill_quic.awake();
+
+                            *this.inner = InnerInitQuic::Complete;
+
+                            // Exit loop: connection killed.
+                            return Poll::Ready(Err(errors::SocketError::Shutdown(
+                                errors::SocketType::Quic,
+                                errors::SocketStage::Initialization,
+                            )));
                         },
                     }
+
                 },
-                InnerInitQuicProj::WriteManaged { w_quic_state, quic_socket } => {
-                    match w_quic_state.as_mut().poll(cx) {
-                        Poll::Ready(mut w_quic_state) => {
-                            match &*w_quic_state {
-                                QuicState::Establishing { sender: active_sender, kill: active_kill_quic_token } => {
-                                    // If we are the one who set the state to Establishing...
-                                    if this.kill_quic.same_awake_token(active_kill_quic_token) {
-                                        *w_quic_state = QuicState::Managed { socket: quic_socket.clone(), kill: this.kill_quic.get_awake_token() };
-                                        drop(w_quic_state);
+                InnerInitQuicProj::WriteManaged { quic_socket } => {
+                    let mut w_quic_state = this.socket.state().write().unwrap();
+                    match &*w_quic_state {
+                        QuicState::Establishing { sender: active_sender, kill: active_kill_quic_token } => {
+                            // If we are the one who set the state to Establishing...
+                            if this.kill_quic.same_awake_token(active_kill_quic_token) {
+                                *w_quic_state = QuicState::Managed { socket: quic_socket.clone(), kill: this.kill_quic.get_awake_token() };
+                                drop(w_quic_state);
 
-                                        let _ = this.quic_socket_sender.send((quic_socket.clone(), this.kill_quic.get_awake_token()));
+                                let _ = this.quic_socket_sender.send((quic_socket.clone(), this.kill_quic.get_awake_token()));
 
-                                        let quic_socket = quic_socket.clone();
-                                        let kill_quic_token = this.kill_quic.get_awake_token();
+                                let quic_socket = quic_socket.clone();
+                                let kill_quic_token = this.kill_quic.get_awake_token();
 
-                                        *this.inner = InnerInitQuic::Complete;
+                                *this.inner = InnerInitQuic::Complete;
 
-                                        // Exit loop: connection setup
-                                        // completed and registered.
-                                        return Poll::Ready(Ok((quic_socket, kill_quic_token)));
-                                    // If some other process set the state to Establishing...
-                                    } else {
-                                        let receive_quic_socket = active_sender.subscribe();
-                                        drop(w_quic_state);
+                                // Exit loop: connection setup
+                                // completed and registered.
+                                return Poll::Ready(Ok((quic_socket, kill_quic_token)));
+                            // If some other process set the state to Establishing...
+                            } else {
+                                let receive_quic_socket = active_sender.subscribe();
+                                drop(w_quic_state);
 
-                                        // Shutdown the listener we started.
-                                        this.kill_quic.awake();
+                                // Shutdown the listener we started.
+                                this.kill_quic.awake();
 
-                                        *this.inner = InnerInitQuic::GetEstablishing { receive_quic_socket };
+                                *this.inner = InnerInitQuic::GetEstablishing { receive_quic_socket };
 
-                                        // Next loop: poll the receiver.
-                                        continue;
-                                    }
-                                },
-                                QuicState::Managed { socket, kill } => {
-                                    let quic_socket = socket.clone();
-                                    let kill_quic_token = kill.clone();
-                                    drop(w_quic_state);
+                                // Next loop: poll the receiver.
+                                continue;
+                            }
+                        },
+                        QuicState::Managed { socket, kill } => {
+                            let quic_socket = socket.clone();
+                            let kill_quic_token = kill.clone();
+                            drop(w_quic_state);
 
-                                    let _ = this.quic_socket_sender.send((quic_socket.clone(), kill_quic_token.clone()));
-                                    // Shutdown the listener we started.
-                                    this.kill_quic.awake();
+                            let _ = this.quic_socket_sender.send((quic_socket.clone(), kill_quic_token.clone()));
+                            // Shutdown the listener we started.
+                            this.kill_quic.awake();
 
-                                    *this.inner = InnerInitQuic::Complete;
+                            *this.inner = InnerInitQuic::Complete;
 
-                                    // Exit loop: connection already setup.
-                                    // Nothing to do.
-                                    return Poll::Ready(Ok((quic_socket, kill_quic_token)));
-                                },
-                                QuicState::None
-                              | QuicState::Blocked => {
-                                    drop(w_quic_state);
+                            // Exit loop: connection already setup.
+                            // Nothing to do.
+                            return Poll::Ready(Ok((quic_socket, kill_quic_token)));
+                        },
+                        QuicState::None
+                      | QuicState::Blocked => {
+                            drop(w_quic_state);
 
-                                    this.quic_socket_sender.close();
-                                    // Shutdown the listener we started.
-                                    this.kill_quic.awake();
+                            this.quic_socket_sender.close();
+                            // Shutdown the listener we started.
+                            this.kill_quic.awake();
 
-                                    *this.inner = InnerInitQuic::Complete;
+                            *this.inner = InnerInitQuic::Complete;
 
-                                    // Exit loop: state changed after this task
-                                    // set it to Establishing. Indicates that
+                            // Exit loop: state changed after this task
+                            // set it to Establishing. Indicates that
                             // this task is no longer in charge.
                             return Poll::Ready(Err(errors::SocketError::Shutdown(
                                 errors::SocketType::Quic,
                                 errors::SocketStage::Initialization,
                             )));
-                                },
-                            }
-                        },
-                        Poll::Pending => {
-                            // Exit loop. Will be woken up once the QuicState
-                            // write lock is available. Cannot time out or be
-                            // killed.
-                            return Poll::Pending;
                         },
                     }
                 },
@@ -912,79 +876,69 @@ where
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'e, 'f, 'k, 'l, S> PinnedDrop for InitQuic<'a, 'b, 'c, 'e, 'f, 'k, 'l, S>
+impl<'a, S> PinnedDrop for InitQuic<'a, S>
 where
     S: QuicSocket
 {
     fn drop(self: Pin<&mut Self>) {
         match &self.inner {
             InnerInitQuic::Fresh
-          | InnerInitQuic::WriteEstablishing(_)
+          | InnerInitQuic::WriteEstablishing
           | InnerInitQuic::GetEstablishing { receive_quic_socket: _ }
           | InnerInitQuic::Complete => {
                 // Nothing to do.
             },
             InnerInitQuic::ConnectingQuic(_)
-          | InnerInitQuic::WriteNone { reason: _, w_quic_state: _ } => {
-                let quic_socket = self.socket.clone();
-                let kill_quic_token = self.kill_quic.get_awake_token();
-                tokio::spawn(async move {
-                    let mut w_quic_state = quic_socket.state().write().await;
-                    match &*w_quic_state {
-                        QuicState::Establishing { sender: _, kill: active_kill_quic_token } => {
-                            // If we are the one who set the state to Establishing...
-                            if &kill_quic_token == active_kill_quic_token {
-                                *w_quic_state = QuicState::None;
-                            }
-                            drop(w_quic_state);
-                        },
-                        QuicState::Managed { socket: _, kill: _ }
-                      | QuicState::None
-                      | QuicState::Blocked => {
-                            drop(w_quic_state);
-                        },
-                    }
-                });
+          | InnerInitQuic::WriteNone { reason: _ } => {
+                let mut w_quic_state = self.socket.state().write().unwrap();
+                match &*w_quic_state {
+                    QuicState::Establishing { sender: _, kill: active_kill_quic_token } => {
+                        // If we are the one who set the state to Establishing...
+                        if self.kill_quic.same_awake_token(active_kill_quic_token) {
+                            *w_quic_state = QuicState::None;
+                        }
+                        drop(w_quic_state);
+                    },
+                    QuicState::Managed { socket: _, kill: _ }
+                  | QuicState::None
+                  | QuicState::Blocked => {
+                        drop(w_quic_state);
+                    },
+                }
             },
             // If this struct is dropped while it is trying to write the
             // connection to the QuicState, we will spawn a task to complete
             // this operation. This way, those that depend on receiving this
             // the connection don't unexpectedly receive errors and try to
             // re-initialize the connection.
-            InnerInitQuic::WriteManaged { w_quic_state: _, quic_socket } => {
-                let quic_socket = quic_socket.clone();
-                let socket = self.socket.clone();
-                let quic_socket_sender = self.quic_socket_sender.clone();
-                let kill_quic_token = self.kill_quic.get_awake_token();
-                tokio::spawn(async move {
-                    let mut w_quic_state = socket.state().write().await;
-                    match &*w_quic_state {
-                        QuicState::Establishing { sender: _, kill: active_kill_quic_token } => {
-                            // If we are the one who set the state to Establishing...
-                            if &kill_quic_token == active_kill_quic_token {
-                                *w_quic_state = QuicState::Managed { socket: quic_socket.clone(), kill: kill_quic_token.clone() };
-                                drop(w_quic_state);
+            InnerInitQuic::WriteManaged { quic_socket } => {
+                let mut w_quic_state = self.socket.state().write().unwrap();
+                match &*w_quic_state {
+                    QuicState::Establishing { sender: _, kill: active_kill_quic_token } => {
+                        // If we are the one who set the state to Establishing...
+                        if self.kill_quic.same_awake_token(active_kill_quic_token) {
+                            *w_quic_state = QuicState::Managed { socket: quic_socket.clone(), kill: self.kill_quic.get_awake_token() };
+                            drop(w_quic_state);
 
-                                // Ignore send errors. They just indicate that all receivers have been dropped.
-                                let _ = quic_socket_sender.send((quic_socket, kill_quic_token));
-                            // If some other process set the state to Establishing...
-                            } else {
-                                drop(w_quic_state);
-
-                                // Shutdown the listener we started.
-                                kill_quic_token.awake();
-                            }
-                        },
-                        QuicState::Managed { socket: _, kill: _ }
-                      | QuicState::None
-                      | QuicState::Blocked => {
+                            // Ignore send errors. They just indicate that all receivers have been dropped.
+                            let _ = self.quic_socket_sender.send((quic_socket.clone(), self.kill_quic.get_awake_token()));
+                        // If some other process set the state to Establishing...
+                        } else {
                             drop(w_quic_state);
 
                             // Shutdown the listener we started.
-                            kill_quic_token.awake();
-                        },
-                    }
-                });
+                            self.kill_quic.awake();
+                        }
+                    },
+                    QuicState::Managed { socket: _, kill: _ }
+                  | QuicState::None
+                  | QuicState::Blocked => {
+                        drop(w_quic_state);
+
+                        // Shutdown the listener we started.
+                        self.kill_quic.awake();
+                    },
+                }
             },
         }
     }

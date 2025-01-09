@@ -1,13 +1,13 @@
 use std::{cmp::{max, min}, collections::HashMap, future::Future, net::{IpAddr, SocketAddr}, num::NonZeroU8, pin::Pin, sync::{atomic::{AtomicBool, Ordering}, Arc}, task::Poll, time::Duration};
 
-use async_lib::{awake_token::{AwakeToken, AwokenToken, SameAwakeToken}, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
+use async_lib::{awake_token::AwakeToken, once_watch::{self, OnceWatchSend, OnceWatchSubscribe}};
 use async_trait::async_trait;
 use atomic::Atomic;
 use dns_lib::{interface::ports::{DNS_TCP_PORT, DNS_UDP_PORT}, query::{message::Message, question::Question}, serde::wire::{to_wire::ToWire, write_wire::WriteWire}, types::c_domain_name::CompressionMap};
-use futures::{future::BoxFuture, FutureExt};
+use futures::FutureExt;
 use pin_project::{pin_project, pinned_drop};
 use tinyvec::TinyVec;
-use tokio::{io::{self, AsyncWriteExt}, join, net::{self, tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream}, pin, select, sync::{Mutex, RwLock, RwLockWriteGuard}, task::{self, JoinHandle}, time::{Instant, Sleep}};
+use tokio::{io::AsyncWriteExt, join, net::{self, tcp::OwnedReadHalf}, pin, select, task::JoinHandle, time::{Instant, Sleep}};
 
 use crate::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt}, errors, receive::{read_stream_message, read_udp_message}, rolling_average::{fetch_update, RollingAverage}, socket::{tcp::{QTcpSocket, QTcpSocketProj, TcpSocket, TcpState}, udp::{QUdpSocket, QUdpSocketProj, UdpSocket, UdpState}, udp_tcp::{QUdpTcpSocket, QUdpTcpSocketProj}, FutureSocket, PollSocket}};
 
@@ -107,12 +107,12 @@ fn bound<T>(value: T, lower_bound: T, upper_bound: T) -> T where T: Ord {
 }
 
 #[pin_project(project = MixedQueryProj)]
-pub enum MixedQuery<'a, 'b, 'c, 'd> {
-    Tcp(#[pin] TcpQuery<'a, 'b, 'c, 'd>),
-    Udp(#[pin] UdpQuery<'a, 'b, 'c, 'd>),
+pub enum MixedQuery<'a, 'b> {
+    Tcp(#[pin] TcpQuery<'a, 'b>),
+    Udp(#[pin] UdpQuery<'a, 'b>),
 }
 
-impl<'a, 'b, 'c, 'd> Future for MixedQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b> Future for MixedQuery<'a, 'b> {
     type Output = Result<Message, errors::QueryError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -150,10 +150,7 @@ enum LoopPoll {
 }
 
 #[pin_project(PinnedDrop)]
-struct TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
-where
-    'a: 'd + 'g
-{
+struct TcpQueryRunner<'a, 'b, 'e, 'h> {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
     tcp_timeout: &'h Duration,
@@ -163,13 +160,10 @@ where
     #[pin]
     result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>,
     #[pin]
-    inner: InnerTQ<'c, 'd, 'e, 'f, 'g>,
+    inner: InnerTQ<'e>,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h>
-where
-    'g: 'f
-{
+impl<'a, 'b, 'e, 'f, 'h> TcpQueryRunner<'a, 'b, 'e, 'h> {
     #[inline]
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>, tcp_timeout: &'h Duration) -> Self {
         Self {
@@ -185,25 +179,19 @@ where
 }
 
 #[pin_project(project = InnerTQProj)]
-enum InnerTQ<'c, 'd, 'e, 'f, 'g>
-where
-    'g: 'f
-{
+enum InnerTQ<'e> {
     Fresh,
     Running {
         #[pin]
-        tq_socket: QTcpSocket<'c, 'd>,
+        tq_socket: QTcpSocket,
         #[pin]
         send_query: QSend<'e, QSendType, errors::SendError>,
     },
-    Cleanup(BoxFuture<'f, RwLockWriteGuard<'g, ActiveQueries>>, TcpResponseTime),
+    Cleanup(TcpResponseTime),
     Complete,
 }
 
-impl<'a, 'c, 'd, 'e, 'f, 'g> InnerTQ<'c, 'd, 'e, 'f, 'g>
-where
-    'a: 'd + 'g
-{
+impl<'e> InnerTQ<'e> {
     #[inline]
     pub fn set_running(mut self: std::pin::Pin<&mut Self>, query_type: QSendType) {
         self.set(Self::Running {
@@ -213,10 +201,8 @@ where
     }
 
     #[inline]
-    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: TcpResponseTime, socket: &'a Arc<MixedSocket>) {
-        let w_active_queries = socket.active_queries.write().boxed();
-
-        self.set(Self::Cleanup(w_active_queries, execution_time));
+    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: TcpResponseTime) {
+        self.set(Self::Cleanup(execution_time));
     }
 
     #[inline]
@@ -225,7 +211,7 @@ where
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+impl<'a, 'b, 'e, 'h> Future for TcpQueryRunner<'a, 'b, 'e, 'h> {
     type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -236,14 +222,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                 if let Poll::Ready(()) = this.timeout.as_mut().poll(cx) {
                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::Timeout));
 
-                    this.inner.set_cleanup(TcpResponseTime::Dropped, this.socket);
+                    this.inner.set_cleanup(TcpResponseTime::Dropped);
 
                     // Exit loop forever: query timed out.
                     // Because the in-flight map was set up before this future was created, we are
                     // still responsible for cleanup.
                 }
             },
-            InnerTQProj::Cleanup(_, _)
+            InnerTQProj::Cleanup(_)
           | InnerTQProj::Complete => {
                 // Not allowed to timeout. This is a cleanup state.
             },
@@ -262,7 +248,6 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                 InnerTQProj::Running { mut tq_socket, mut send_query } => {
                     match (send_query.as_mut().project(), tq_socket.as_mut().project()) {
                         (QSendProj::Fresh(_), QTcpSocketProj::Fresh)
-                      | (QSendProj::Fresh(_), QTcpSocketProj::GetTcpState(_))
                       | (QSendProj::Fresh(_), QTcpSocketProj::GetTcpEstablishing { receive_tcp_socket: _ })
                       | (QSendProj::Fresh(_), QTcpSocketProj::InitTcp { join_handle: _ })
                       | (QSendProj::Fresh(_), QTcpSocketProj::Closed(_)) => {
@@ -276,7 +261,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 PollSocket::Error(error) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -308,7 +293,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                             if let PollSocket::Error(error) = tq_socket.poll(this.socket, cx) {
                                 let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                this.inner.set_cleanup(TcpResponseTime::None, this.socket);
+                                this.inner.set_cleanup(TcpResponseTime::None);
 
                                 // Next loop will poll for the in-flight map lock to remove the
                                 // query ID and record socket statistics.
@@ -320,7 +305,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                             if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
                                 let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(errors::SendError::from(wire_error))));
 
-                                this.inner.set_cleanup(TcpResponseTime::None, this.socket);
+                                this.inner.set_cleanup(TcpResponseTime::None);
 
                                 // Next loop will poll for the in-flight map lock to remove the
                                 // query ID and record socket statistics.
@@ -336,6 +321,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 let wire_length = wire_length;
 
                                 socket.recent_messages_sent.store(true, Ordering::Release);
+
                                 let mut w_tcp_stream = tcp_socket.lock().await;
                                 let bytes_written = match w_tcp_stream.write(&raw_message[..wire_length]).await {
                                     Ok(bytes) => bytes,
@@ -349,6 +335,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                     },
                                 };
                                 drop(w_tcp_stream);
+
                                 // Verify that the correct number of bytes were written.
                                 if bytes_written != wire_length {
                                     return Err(errors::SendError::IncorrectNumberBytes {
@@ -378,7 +365,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 (_, PollSocket::Error(error)) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -387,7 +374,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 (Poll::Ready(Err(error)), _) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -423,7 +410,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 Poll::Ready(Ok(Ok(_))) => {
                                     let execution_time = this.tcp_start_time.elapsed();
 
-                                    this.inner.set_cleanup(TcpResponseTime::Responded(execution_time), this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::Responded(execution_time));
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -431,7 +418,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 },
                                 Poll::Ready(Ok(Err(_)))
                               | Poll::Ready(Err(_)) => {
-                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -447,7 +434,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                                 PollSocket::Error(error) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(TcpResponseTime::None, this.socket);
+                                    this.inner.set_cleanup(TcpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -468,7 +455,7 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                         },
                     }
                 },
-                InnerTQProj::Cleanup(w_active_queries, execution_time) => {
+                InnerTQProj::Cleanup(execution_time) => {
                     // Should always transition to the cleanup state before exit. This is
                     // responsible for cleaning up the query ID from the in-flight map (failure to
                     // do so should be considered a memory leak) and for updating the socket
@@ -479,66 +466,58 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
                     // cleaned up too.
                     this.result_receiver.close();
 
-                    match w_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => {
-                            match execution_time {
-                                TcpResponseTime::Dropped => {
-                                    let average_tcp_dropped_packets = this.socket.add_dropped_packet_to_tcp_average();
-                                    let average_tcp_response_time = this.socket.average_tcp_response_time();
-                                    if average_tcp_response_time.is_finite() {
-                                        if average_tcp_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.tcp_timeout = bound(
-                                                min(
-                                                    w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                    Duration::from_secs_f64(average_tcp_response_time * TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                                ),
-                                                MIN_TCP_TIMEOUT,
-                                                MAX_TCP_TIMEOUT,
-                                            );
-                                        }
-                                    } else {
-                                        if average_tcp_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.tcp_timeout = bound(
-                                                w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                MIN_TCP_TIMEOUT,
-                                                MAX_TCP_TIMEOUT,
-                                            );
-                                        }
-                                    }
-                                },
-                                TcpResponseTime::Responded(response_time) => {
-                                    let (average_tcp_response_time, average_tcp_dropped_packets) = this.socket.add_response_time_to_tcp_average(*response_time);
-                                    if average_tcp_dropped_packets.current_average() <= DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.tcp_timeout = bound(
-                                            max(
-                                                w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                Duration::from_secs_f64(average_tcp_response_time.current_average() * TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                            ),
-                                            MIN_TCP_TIMEOUT,
-                                            MAX_TCP_TIMEOUT,
-                                        );
-                                    }
-                                },
-                                TcpResponseTime::None => (),
+                    let mut w_active_queries = this.socket.active_queries.write().unwrap();
+                    match execution_time {
+                        TcpResponseTime::Dropped => {
+                            let average_tcp_dropped_packets = this.socket.add_dropped_packet_to_tcp_average();
+                            let average_tcp_response_time = this.socket.average_tcp_response_time();
+                            if average_tcp_response_time.is_finite() {
+                                if average_tcp_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                    w_active_queries.tcp_timeout = bound(
+                                        min(
+                                            w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                            Duration::from_secs_f64(average_tcp_response_time * TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                        ),
+                                        MIN_TCP_TIMEOUT,
+                                        MAX_TCP_TIMEOUT,
+                                    );
+                                }
+                            } else {
+                                if average_tcp_dropped_packets.current_average() >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                    w_active_queries.tcp_timeout = bound(
+                                        w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        MIN_TCP_TIMEOUT,
+                                        MAX_TCP_TIMEOUT,
+                                    );
+                                }
                             }
-
-                            // We are responsible for clearing these maps. Otherwise, the memory
-                            // will only ever be cleaned up when the socket itself is dropped.
-                            w_active_queries.in_flight.remove(&this.query.id);
-                            w_active_queries.tcp_only.remove(&this.query.question);
-                            drop(w_active_queries);
-
-                            this.inner.set_complete();
-
-                            // Socket should not be polled again.
-                            return Poll::Ready(());
                         },
-                        Poll::Pending => {
-                            // Only waiting on the write lock to clear the in-flight maps. Once
-                            // acquired, cleanup can be done.
-                            return Poll::Pending;
+                        TcpResponseTime::Responded(response_time) => {
+                            let (average_tcp_response_time, average_tcp_dropped_packets) = this.socket.add_response_time_to_tcp_average(*response_time);
+                            if average_tcp_dropped_packets.current_average() <= DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                w_active_queries.tcp_timeout = bound(
+                                    max(
+                                        w_active_queries.tcp_timeout.saturating_add(TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        Duration::from_secs_f64(average_tcp_response_time.current_average() * TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                    ),
+                                    MIN_TCP_TIMEOUT,
+                                    MAX_TCP_TIMEOUT,
+                                );
+                            }
                         },
+                        TcpResponseTime::None => (),
                     }
+
+                    // We are responsible for clearing these maps. Otherwise, the memory
+                    // will only ever be cleaned up when the socket itself is dropped.
+                    w_active_queries.in_flight.remove(&this.query.id);
+                    w_active_queries.tcp_only.remove(&this.query.question);
+                    drop(w_active_queries);
+
+                    this.inner.set_complete();
+
+                    // Socket should not be polled again.
+                    return Poll::Ready(());
                 },
                 InnerTQProj::Complete => {
                     panic!("TCP only query polled after completion");
@@ -549,24 +528,16 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> Future for TcpQueryRunner<'a, 'b, 'c, 'd, '
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for TcpQueryRunner<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> {
+impl<'a, 'b, 'e, 'h> PinnedDrop for TcpQueryRunner<'a, 'b, 'e, 'h> {
     fn drop(mut self: Pin<&mut Self>) {
-        async fn cleanup(socket: Arc<MixedSocket>, query: Message) {
-            let mut w_active_queries = socket.active_queries.write().await;
-            let _ = w_active_queries.in_flight.remove(&query.id);
-            let _ = w_active_queries.tcp_only.remove(&query.question);
-            drop(w_active_queries);
-        }
-
         match self.as_mut().project().inner.as_mut().project() {
             InnerTQProj::Fresh
           | InnerTQProj::Running { tq_socket: _, send_query: _ }
-          | InnerTQProj::Cleanup(_, _) => {
-                // Unfortunately, cannot re-use the existing futures because this struct is pinned.
-                // Spawning the cleanup in a separate task will ensure eventual cleanup.
-                let socket = self.socket.clone();
-                let query = self.query.clone();
-                tokio::spawn(cleanup(socket, query));
+          | InnerTQProj::Cleanup(_) => {
+                let mut w_active_queries = self.socket.active_queries.write().unwrap();
+                let _ = w_active_queries.in_flight.remove(&self.query.id);
+                let _ = w_active_queries.tcp_only.remove(&self.query.question);
+                drop(w_active_queries);
             },
             InnerTQProj::Complete => {
                 // Nothing to do for active queries. Already done cleaning up.
@@ -576,17 +547,14 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h> PinnedDrop for TcpQueryRunner<'a, 'b, 'c, '
 }
 
 #[pin_project]
-struct TcpQuery<'a, 'b, 'c, 'd>
-where
-    'a: 'd
-{
+struct TcpQuery<'a, 'b> {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
     #[pin]
-    inner: QInitQuery<'c, 'd, ActiveQueries>,
+    inner: QInitQuery,
 }
 
-impl<'a, 'b, 'c, 'd> TcpQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b> TcpQuery<'a, 'b> {
     #[inline]
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message) -> Self {
         Self {
@@ -597,7 +565,7 @@ impl<'a, 'b, 'c, 'd> TcpQuery<'a, 'b, 'c, 'd> {
     }
 }
 
-impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b> Future for TcpQuery<'a, 'b> {
     type Output = Result<Message, errors::QueryError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -605,113 +573,94 @@ impl<'a, 'b, 'c, 'd> Future for TcpQuery<'a, 'b, 'c, 'd> {
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
                 QInitQueryProj::Fresh => {
-                    this.inner.set_read_active_query(&this.socket.active_queries);
+                    let r_active_queries = this.socket.active_queries.read().unwrap();
+                    match r_active_queries.tcp_only.get(&this.query.question) {
+                        Some((query_id, result_sender)) => {
+                            // A query has already been made for this question and is in
+                            // flight. This future can listen for that response instead of
+                            // making a duplicate query.
+                            this.query.id = *query_id;
+                            let result_receiver = result_sender.subscribe();
+                            drop(r_active_queries);
 
-                    // The future for the read-lock will be polled during the next loop.
-                    continue;
-                },
-                QInitQueryProj::ReadActiveQuery(r_active_queries) => {
-                    match r_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(r_active_queries) => {
-                            match r_active_queries.tcp_only.get(&this.query.question) {
-                                Some((query_id, result_sender)) => {
-                                    // A query has already been made for this question and is in
-                                    // flight. This future can listen for that response instead of
-                                    // making a duplicate query.
-                                    this.query.id = *query_id;
-                                    let result_receiver = result_sender.subscribe();
-                                    drop(r_active_queries);
+                            this.inner.set_following(result_receiver);
 
-                                    this.inner.set_following(result_receiver);
-
-                                    // The next loop will poll the receiver until a result is
-                                    // received.
-                                    continue;
-                                },
-                                None => {
-                                    // This is a new query and has not yet been registered. Acquire
-                                    // the write lock to register it.
-                                    drop(r_active_queries);
-                                    this.inner.set_write_active_query(&this.socket.active_queries);
-
-                                    // During the next loop, the write-lock will be polled.
-                                    continue;
-                                },
-                            }
+                            // The next loop will poll the receiver until a result is
+                            // received.
+                            continue;
                         },
-                        Poll::Pending => {
-                            // Waiting on the read-lock only. Will be awoken once it is available.
-                            return Poll::Pending;
+                        None => {
+                            // This is a new query and has not yet been registered. Acquire
+                            // the write lock to register it.
+                            drop(r_active_queries);
+
+                            this.inner.set_write_active_query();
+
+                            // During the next loop, the write-lock will be polled.
+                            continue;
                         },
                     }
                 },
-                QInitQueryProj::WriteActiveQuery(w_active_queries) => {
+                QInitQueryProj::WriteActiveQuery => {
                     // Note that the same checks for the read-lock need to be made again in case
                     // something changed between when the lock was dropped and now.
-                    match w_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => {
-                            match w_active_queries.tcp_only.get(&this.query.question) {
-                                Some((query_id, result_sender)) => {
-                                    // A query has already been made for this question and is in
-                                    // flight. This future can listen for that response instead of
-                                    // making a duplicate query.
-                                    this.query.id = *query_id;
-                                    let result_receiver = result_sender.subscribe();
-                                    drop(w_active_queries);
+                    let mut w_active_queries = this.socket.active_queries.write().unwrap();
+                    match w_active_queries.tcp_only.get(&this.query.question) {
+                        Some((query_id, result_sender)) => {
+                            // A query has already been made for this question and is in
+                            // flight. This future can listen for that response instead of
+                            // making a duplicate query.
+                            this.query.id = *query_id;
+                            let result_receiver = result_sender.subscribe();
+                            drop(w_active_queries);
 
-                                    this.inner.set_following(result_receiver);
+                            this.inner.set_following(result_receiver);
 
-                                    // The next loop will poll the receiver until a result is
-                                    // received.
-                                    continue;
-                                },
-                                None => {
-                                    // This question is not already in flight on this socket. Set
-                                    // up the channels for the listener to send the answer on once
-                                    // received and start a query-runner that will send and manage
-                                    // the query.
-                                    let (result_sender, result_receiver) = once_watch::channel();
-
-                                    // This is the initial query ID. However, it could change if it
-                                    // is already in use.
-                                    this.query.id = rand::random();
-
-                                    // verify that ID is unique.
-                                    while w_active_queries.in_flight.contains_key(&this.query.id) {
-                                        this.query.id = rand::random();
-                                        // FIXME: should this fail after some number of non-unique
-                                        // keys? May want to verify that the list isn't full.
-                                    }
-
-                                    // The query-runner is spawned as an independent task since it
-                                    // must run to completion. It should not be cancelled if this
-                                    // task is cancelled because there may be others that are
-                                    // listening for the response too.
-                                    let join_handle = tokio::spawn({
-                                        let tcp_timeout = w_active_queries.tcp_timeout;
-                                        let result_receiver = result_sender.subscribe();
-                                        let socket = this.socket.clone();
-                                        let mut query = this.query.clone();
-                                        async move {
-                                            TcpQueryRunner::new(&socket, &mut query, result_receiver, &tcp_timeout).await;
-                                        }
-                                    });
-
-                                    w_active_queries.in_flight.insert(this.query.id, (result_sender.clone(), join_handle));
-                                    w_active_queries.tcp_only.insert(this.query.question.clone(), (this.query.id, result_sender));
-                                    drop(w_active_queries);
-
-                                    this.inner.set_following(result_receiver);
-
-                                    // The next loop will poll the receiver until a result is
-                                    // received from the newly spawned query-runner.
-                                    continue;
-                                },
-                            }
+                            // The next loop will poll the receiver until a result is
+                            // received.
+                            continue;
                         },
-                        Poll::Pending => {
-                            // Waiting on the write-lock only. Will be awoken once it is available.
-                            return Poll::Pending;
+                        None => {
+                            // This question is not already in flight on this socket. Set
+                            // up the channels for the listener to send the answer on once
+                            // received and start a query-runner that will send and manage
+                            // the query.
+                            let (result_sender, result_receiver) = once_watch::channel();
+
+                            // This is the initial query ID. However, it could change if it
+                            // is already in use.
+                            this.query.id = rand::random();
+
+                            // verify that ID is unique.
+                            while w_active_queries.in_flight.contains_key(&this.query.id) {
+                                this.query.id = rand::random();
+                                // FIXME: should this fail after some number of non-unique
+                                // keys? May want to verify that the list isn't full.
+                            }
+
+                            // The query-runner is spawned as an independent task since it
+                            // must run to completion. It should not be cancelled if this
+                            // task is cancelled because there may be others that are
+                            // listening for the response too.
+                            let join_handle = tokio::spawn({
+                                let tcp_timeout = w_active_queries.tcp_timeout;
+                                let result_receiver = result_sender.subscribe();
+                                let socket = this.socket.clone();
+                                let mut query = this.query.clone();
+                                async move {
+                                    TcpQueryRunner::new(&socket, &mut query, result_receiver, &tcp_timeout).await;
+                                }
+                            });
+
+                            w_active_queries.in_flight.insert(this.query.id, (result_sender.clone(), join_handle));
+                            w_active_queries.tcp_only.insert(this.query.question.clone(), (this.query.id, result_sender));
+                            drop(w_active_queries);
+
+                            this.inner.set_following(result_receiver);
+
+                            // The next loop will poll the receiver until a result is
+                            // received from the newly spawned query-runner.
+                            continue;
                         },
                     }
                 },
@@ -760,7 +709,7 @@ impl TcpSocket for MixedSocket {
     }
 
     #[inline]
-    fn state(&self) ->  &RwLock<TcpState>  {
+    fn state(&self) ->  &std::sync::RwLock<TcpState>  {
         &self.tcp
     }
 
@@ -784,7 +733,7 @@ impl TcpSocket for MixedSocket {
                             self.recent_messages_received.store(true, Ordering::Release);
                             let response_id = response.id;
                             println!("Received TCP Response: {response:?}");
-                            let r_active_queries = self.active_queries.read().await;
+                            let r_active_queries = self.active_queries.read().unwrap();
                             if let Some((sender, _)) = r_active_queries.in_flight.get(&response_id) {
                                 let _ = sender.send(Ok(response));
                             };
@@ -810,7 +759,7 @@ impl MixedSocket {
     async fn listen_tcp_cleanup(self: Arc<Self>, kill_tcp: AwakeToken) {
         println!("Cleaning up TCP socket {}", self.upstream_address);
 
-        let mut w_state = self.tcp.write().await;
+        let mut w_state = self.tcp.write().unwrap();
         match &*w_state {
             TcpState::Managed { socket: _, kill: managed_kill_tcp } => {
                 // If the managed socket is the one that we are cleaning up...
@@ -838,9 +787,9 @@ impl MixedSocket {
 }
 
 #[pin_project(PinnedDrop)]
-struct UdpQueryRunner<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i>
+struct UdpQueryRunner<'a, 'b, 'c, 'f, 'i>
 where
-    'a: 'd + 'h
+    'a: 'c,
 {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
@@ -853,13 +802,10 @@ where
     #[pin]
     result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>,
     #[pin]
-    inner: InnerUQ<'c, 'd, 'f, 'g, 'h>,
+    inner: InnerUQ<'c, 'f>,
 }
 
-impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> UdpQueryRunner<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i>
-where
-    'h: 'g
-{
+impl<'a, 'b, 'c, 'f, 'i> UdpQueryRunner<'a, 'b, 'c, 'f, 'i> {
     #[inline]
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message, result_receiver: once_watch::Receiver<Result<Message, errors::QueryError>>, udp_retransmission_timeout: &'i Duration, udp_timeout: &'i Duration) -> Self {
         Self {
@@ -886,25 +832,19 @@ where
 }
 
 #[pin_project(project = InnerUQProj)]
-enum InnerUQ<'c, 'd, 'f, 'g, 'h>
-where
-    'h: 'g
-{
+enum InnerUQ<'c, 'f> {
     Fresh { udp_retransmissions: u8 },
     Running {
         #[pin]
-        socket: QUdpTcpSocket<'c, 'd>,
+        socket: QUdpTcpSocket<'c>,
         #[pin]
         send_query: QSend<'f, QSendType, errors::SendError>,
     },
-    Cleanup(BoxFuture<'g, RwLockWriteGuard<'h, ActiveQueries>>, UdpResponseTime),
+    Cleanup(UdpResponseTime),
     Complete,
 }
 
-impl<'a, 'c, 'd, 'f, 'g, 'h> InnerUQ<'c, 'd, 'f, 'g, 'h>
-where
-    'a: 'd + 'h
-{
+impl<'c, 'f> InnerUQ<'c, 'f> {
     #[inline]
     pub fn set_running_udp(mut self: std::pin::Pin<&mut Self>, udp_retransmissions: u8, query_type: QSendType) {
         self.set(Self::Running {
@@ -922,10 +862,8 @@ where
     }
 
     #[inline]
-    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: UdpResponseTime, socket: &'a Arc<MixedSocket>) {
-        let w_active_queries = socket.active_queries.write().boxed();
-
-        self.set(Self::Cleanup(w_active_queries, execution_time));
+    pub fn set_cleanup(mut self: std::pin::Pin<&mut Self>, execution_time: UdpResponseTime) {
+        self.set(Self::Cleanup(execution_time));
     }
 
     #[inline]
@@ -934,7 +872,7 @@ where
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> {
+impl<'a, 'b, 'c, 'f, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'f, 'i> {
     type Output = ();
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -1015,12 +953,12 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                             // in-flight map.
                             let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::Timeout));
 
-                            this.inner.set_cleanup(UdpResponseTime::Dropped, this.socket);
+                            this.inner.set_cleanup(UdpResponseTime::Dropped);
                         }
                     },
                 }
             },
-            InnerUQProj::Cleanup(_, _)
+            InnerUQProj::Cleanup(_)
           | InnerUQProj::Complete => {
                 // Not allowed to timeout. This is a cleanup state.
             },
@@ -1048,7 +986,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                     Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
-                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
+                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated });
 
                                         // Next loop will poll for the in-flight map lock to remove
                                         // the query ID and record socket statistics.
@@ -1056,7 +994,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                     },
                                     Poll::Ready(Ok(Err(_)))
                                   | Poll::Ready(Err(_)) => {
-                                        this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
+                                        this.inner.set_cleanup(UdpResponseTime::Dropped);
 
                                         // Next loop will poll for the in-flight map lock to remove
                                         // the query ID and record socket statistics.
@@ -1070,7 +1008,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 PollSocket::Error(error) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1086,7 +1024,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 if let Err(wire_error) = this.query.to_wire_format(&mut write_wire, &mut Some(CompressionMap::new())) {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(errors::SendError::from(wire_error))));
 
-                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1157,7 +1095,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                     Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
-                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
+                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated });
 
                                         // Next loop will poll for the in-flight map lock to remove
                                         // the query ID and record socket statistics.
@@ -1165,7 +1103,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                     },
                                     Poll::Ready(Ok(Err(_)))
                                   | Poll::Ready(Err(_)) => {
-                                        this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
+                                        this.inner.set_cleanup(UdpResponseTime::Dropped);
 
                                         // Next loop will poll for the in-flight map lock to remove
                                         // the query ID and record socket statistics.
@@ -1179,7 +1117,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 PollSocket::Error(error) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1195,7 +1133,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 if let Err(wire_error) = this.query.to_wire_format_with_two_octet_length(&mut write_wire, &mut Some(CompressionMap::new())) {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(errors::SendError::from(wire_error))));
 
-                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1259,7 +1197,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                     Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                         let execution_time = this.udp_start_time.elapsed();
 
-                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
+                                        this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated });
 
                                         // Next loop will poll for the in-flight map lock to remove
                                         // the query ID and record socket statistics.
@@ -1267,7 +1205,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                     },
                                     Poll::Ready(Ok(Err(_)))
                                   | Poll::Ready(Err(_)) => {
-                                        this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
+                                        this.inner.set_cleanup(UdpResponseTime::Dropped);
 
                                         // Next loop will poll for the in-flight map lock to remove
                                         // the query ID and record socket statistics.
@@ -1281,7 +1219,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 PollSocket::Error(error) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1295,7 +1233,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 Poll::Ready(Err(error)) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1321,7 +1259,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 Poll::Ready(Ok(Ok(Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: truncated, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ }))) => {
                                     let execution_time = this.udp_start_time.elapsed();
 
-                                    this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated }, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::Responded { execution_time, truncated });
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1329,7 +1267,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 },
                                 Poll::Ready(Ok(Err(_)))
                               | Poll::Ready(Err(_)) => {
-                                    this.inner.set_cleanup(UdpResponseTime::Dropped, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::Dropped);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1342,7 +1280,7 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                                 PollSocket::Error(error) => {
                                     let _ = this.result_receiver.get_sender().send(Err(errors::QueryError::from(error)));
 
-                                    this.inner.set_cleanup(UdpResponseTime::None, &this.socket);
+                                    this.inner.set_cleanup(UdpResponseTime::None);
 
                                     // Next loop will poll for the in-flight map lock to remove the
                                     // query ID and record socket statistics.
@@ -1354,113 +1292,106 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
                         },
                     }
                 },
-                InnerUQProj::Cleanup(w_active_queries, execution_time) => {
+                InnerUQProj::Cleanup(execution_time) => {
                     this.result_receiver.close();
 
-                    match w_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => {
-                            match execution_time {
-                                UdpResponseTime::Dropped => {
-                                    let average_udp_dropped_packets = this.socket.add_dropped_packet_to_udp_average();
-                                    let average_udp_response_time = this.socket.average_udp_response_time();
-                                    if average_udp_response_time.is_finite() {
-                                        if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.udp_timeout = bound(
-                                                min(
-                                                    w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                    Duration::from_secs_f64(average_udp_response_time * UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                                ),
-                                                MIN_UDP_TIMEOUT,
-                                                MAX_UDP_TIMEOUT,
-                                            );
-                                        }
-                                        if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.udp_retransmit_timeout = bound(
-                                                min(
-                                                    w_active_queries.udp_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                    Duration::from_secs_f64(average_udp_response_time * UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                                ),
-                                                MIN_UDP_RETRANSMISSION_TIMEOUT,
-                                                MAX_UDP_RETRANSMISSION_TIMEOUT,
-                                            );
-                                        }
-                                    } else {
-                                        if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.udp_timeout = bound(
-                                                w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                MIN_UDP_TIMEOUT,
-                                                MAX_UDP_TIMEOUT,
-                                            );
-                                        }
-                                        if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                            w_active_queries.udp_retransmit_timeout = bound(
-                                                w_active_queries.udp_retransmit_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                MIN_UDP_RETRANSMISSION_TIMEOUT,
-                                                MAX_UDP_RETRANSMISSION_TIMEOUT,
-                                            );
-                                        }
-                                    }
-                                },
-                                UdpResponseTime::UdpDroppedTcpResponded(response_time) => {
-                                    let average_udp_dropped_packets = this.socket.add_dropped_packet_to_udp_average();
-                                    let (average_tcp_response_time, average_tcp_dropped_packets) = this.socket.add_response_time_to_tcp_average(*response_time);
-                                    if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.udp_timeout = bound(
+                    let mut w_active_queries = this.socket.active_queries.write().unwrap();
+                    match execution_time {
+                        UdpResponseTime::Dropped => {
+                            let average_udp_dropped_packets = this.socket.add_dropped_packet_to_udp_average();
+                            let average_udp_response_time = this.socket.average_udp_response_time();
+                            if average_udp_response_time.is_finite() {
+                                if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                    w_active_queries.udp_timeout = bound(
+                                        min(
                                             w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                            MIN_UDP_TIMEOUT,
-                                            MAX_UDP_TIMEOUT,
-                                        );
-                                    }
-                                    if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.udp_retransmit_timeout = bound(
-                                            w_active_queries.udp_retransmit_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                            MIN_UDP_RETRANSMISSION_TIMEOUT,
-                                            MAX_UDP_RETRANSMISSION_TIMEOUT,
-                                        );
-                                    }
-                                },
-                                UdpResponseTime::Responded { execution_time: response_time, truncated } => {
-                                    let (average_udp_response_time, average_udp_dropped_packets) = this.socket.add_response_time_to_udp_average(*response_time);
-                                    if average_udp_dropped_packets.current_average() <= DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.udp_timeout = bound(
-                                            bound(
-                                                w_active_queries.udp_timeout.saturating_sub(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                                Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                            ),
-                                            MIN_UDP_TIMEOUT,
-                                            MAX_UDP_TIMEOUT,
-                                        );
-                                    }
-                                    if average_udp_dropped_packets.current_average() <= DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
-                                        w_active_queries.udp_retransmit_timeout = bound(
-                                            bound(
-                                                w_active_queries.udp_retransmit_timeout.saturating_sub(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
-                                                Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                                Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
-                                            ),
-                                            MIN_UDP_RETRANSMISSION_TIMEOUT,
-                                            MAX_UDP_RETRANSMISSION_TIMEOUT,
-                                        );
-                                    }
-                                    this.socket.add_truncated_packet_to_udp_average(*truncated);
-                                },
-                                UdpResponseTime::None => (),
+                                            Duration::from_secs_f64(average_udp_response_time * UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                        ),
+                                        MIN_UDP_TIMEOUT,
+                                        MAX_UDP_TIMEOUT,
+                                    );
+                                }
+                                if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                    w_active_queries.udp_retransmit_timeout = bound(
+                                        min(
+                                            w_active_queries.udp_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                            Duration::from_secs_f64(average_udp_response_time * UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                        ),
+                                        MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                        MAX_UDP_RETRANSMISSION_TIMEOUT,
+                                    );
+                                }
+                            } else {
+                                if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                    w_active_queries.udp_timeout = bound(
+                                        w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        MIN_UDP_TIMEOUT,
+                                        MAX_UDP_TIMEOUT,
+                                    );
+                                }
+                                if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                    w_active_queries.udp_retransmit_timeout = bound(
+                                        w_active_queries.udp_retransmit_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                        MAX_UDP_RETRANSMISSION_TIMEOUT,
+                                    );
+                                }
                             }
-
-                            w_active_queries.in_flight.remove(&this.query.id);
-                            w_active_queries.tcp_or_udp.remove(&this.query.question);
-                            drop(w_active_queries);
-
-                            this.inner.set_complete();
-
-                            return Poll::Ready(());
                         },
-                        Poll::Pending => {
-                            // TODO
-                            return Poll::Pending;
+                        UdpResponseTime::UdpDroppedTcpResponded(response_time) => {
+                            let average_udp_dropped_packets = this.socket.add_dropped_packet_to_udp_average();
+                            let (average_tcp_response_time, average_tcp_dropped_packets) = this.socket.add_response_time_to_tcp_average(*response_time);
+                            if average_udp_dropped_packets.current_average() >= INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                w_active_queries.udp_timeout = bound(
+                                    w_active_queries.udp_timeout.saturating_add(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                    MIN_UDP_TIMEOUT,
+                                    MAX_UDP_TIMEOUT,
+                                );
+                            }
+                            if average_udp_dropped_packets.current_average() >= INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                w_active_queries.udp_retransmit_timeout = bound(
+                                    w_active_queries.udp_retransmit_timeout.saturating_add(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                    MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                    MAX_UDP_RETRANSMISSION_TIMEOUT,
+                                );
+                            }
                         },
+                        UdpResponseTime::Responded { execution_time: response_time, truncated } => {
+                            let (average_udp_response_time, average_udp_dropped_packets) = this.socket.add_response_time_to_udp_average(*response_time);
+                            if average_udp_dropped_packets.current_average() <= DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                w_active_queries.udp_timeout = bound(
+                                    bound(
+                                        w_active_queries.udp_timeout.saturating_sub(UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                        Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                    ),
+                                    MIN_UDP_TIMEOUT,
+                                    MAX_UDP_TIMEOUT,
+                                );
+                            }
+                            if average_udp_dropped_packets.current_average() <= DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD {
+                                w_active_queries.udp_retransmit_timeout = bound(
+                                    bound(
+                                        w_active_queries.udp_retransmit_timeout.saturating_sub(UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED),
+                                        Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                        Duration::from_secs_f64(average_udp_response_time.current_average() * UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME / MILLISECONDS_IN_1_SECOND),
+                                    ),
+                                    MIN_UDP_RETRANSMISSION_TIMEOUT,
+                                    MAX_UDP_RETRANSMISSION_TIMEOUT,
+                                );
+                            }
+                            this.socket.add_truncated_packet_to_udp_average(*truncated);
+                        },
+                        UdpResponseTime::None => (),
                     }
+
+                    w_active_queries.in_flight.remove(&this.query.id);
+                    w_active_queries.tcp_or_udp.remove(&this.query.question);
+                    drop(w_active_queries);
+
+                    this.inner.set_complete();
+
+                    return Poll::Ready(());
                 },
                 InnerUQProj::Complete => {
                     panic!("UDP query polled after completion");
@@ -1471,22 +1402,16 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'd, '
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> {
+impl<'a, 'b, 'c, 'f, 'i> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, 'f, 'i> {
     fn drop(mut self: Pin<&mut Self>) {
-        async fn cleanup(socket: Arc<MixedSocket>, query: Message) {
-            let mut w_active_queries = socket.active_queries.write().await;
-            let _ = w_active_queries.in_flight.remove(&query.id);
-            let _ = w_active_queries.tcp_or_udp.remove(&query.question);
-            drop(w_active_queries);
-        }
-
         match self.as_mut().project().inner.as_mut().project() {
             InnerUQProj::Fresh { udp_retransmissions: _ }
           | InnerUQProj::Running { socket: _, send_query: _ }
-          | InnerUQProj::Cleanup(_, _) => {
-                let socket = self.socket.clone();
-                let query = self.query.clone();
-                tokio::spawn(cleanup(socket, query));
+          | InnerUQProj::Cleanup(_) => {
+                let mut w_active_queries = self.socket.active_queries.write().unwrap();
+                let _ = w_active_queries.in_flight.remove(&self.query.id);
+                let _ = w_active_queries.tcp_or_udp.remove(&self.query.question);
+                drop(w_active_queries);
             },
             InnerUQProj::Complete => {
                 // Nothing to do for active queries.
@@ -1496,17 +1421,14 @@ impl<'a, 'b, 'c, 'd, 'f, 'g, 'h, 'i> PinnedDrop for UdpQueryRunner<'a, 'b, 'c, '
 }
 
 #[pin_project]
-struct UdpQuery<'a, 'b, 'c, 'd>
-where
-    'a: 'd
-{
+struct UdpQuery<'a, 'b> {
     socket: &'a Arc<MixedSocket>,
     query: &'b mut Message,
     #[pin]
-    inner: QInitQuery<'c, 'd, ActiveQueries>,
+    inner: QInitQuery,
 }
 
-impl<'a, 'b, 'c, 'd> UdpQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b> UdpQuery<'a, 'b> {
     #[inline]
     pub fn new(socket: &'a Arc<MixedSocket>, query: &'b mut Message) -> Self {
         Self {
@@ -1517,7 +1439,7 @@ impl<'a, 'b, 'c, 'd> UdpQuery<'a, 'b, 'c, 'd> {
     }
 }
 
-impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
+impl<'a, 'b> Future for UdpQuery<'a, 'b> {
     type Output = Result<Message, errors::QueryError>;
 
     fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
@@ -1525,106 +1447,85 @@ impl<'a, 'b, 'c, 'd> Future for UdpQuery<'a, 'b, 'c, 'd> {
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
                 QInitQueryProj::Fresh => {
-                    this.inner.set_read_active_query(&this.socket.active_queries);
+                    let r_active_queries = this.socket.active_queries.read().unwrap();
+                    match (
+                        r_active_queries.tcp_or_udp.get(&this.query.question),
+                        r_active_queries.tcp_only.get(&this.query.question)
+                    ) {
+                        (Some((query_id, result_sender)), _)
+                      | (_, Some((query_id, result_sender))) => {
+                            this.query.id = *query_id;
+                            let result_receiver = result_sender.subscribe();
+                            drop(r_active_queries);
 
-                    // TODO
-                    continue;
-                },
-                QInitQueryProj::ReadActiveQuery(r_active_queries) => {
-                    match r_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(r_active_queries) => {
-                            match (
-                                r_active_queries.tcp_or_udp.get(&this.query.question),
-                                r_active_queries.tcp_only.get(&this.query.question)
-                            ) {
-                                (Some((query_id, result_sender)), _)
-                              | (_, Some((query_id, result_sender))) => {
-                                    this.query.id = *query_id;
-                                    let result_receiver = result_sender.subscribe();
-                                    drop(r_active_queries);
+                            this.inner.set_following(result_receiver);
 
-                                    this.inner.set_following(result_receiver);
-                                    // println!("{} Following(1) active query '{}'", this.socket.upstream_socket, this.query.question);
-
-                                    // TODO
-                                    continue;
-                                },
-                                (None, None) => {
-                                    drop(r_active_queries);
-                                    this.inner.set_write_active_query(&this.socket.active_queries);
-
-                                    // TODO
-                                    continue;
-                                },
-                            }
-                        },
-                        Poll::Pending => {
                             // TODO
-                            return Poll::Pending;
+                            continue;
+                        },
+                        (None, None) => {
+                            drop(r_active_queries);
+
+                            this.inner.set_write_active_query();
+
+                            // TODO
+                            continue;
                         },
                     }
                 },
-                QInitQueryProj::WriteActiveQuery(w_active_queries) => {
-                    match w_active_queries.as_mut().poll(cx) {
-                        Poll::Ready(mut w_active_queries) => {
-                            match (
-                                w_active_queries.tcp_or_udp.get(&this.query.question),
-                                w_active_queries.tcp_only.get(&this.query.question)
-                            ) {
-                                (Some((query_id, result_sender)), _)
-                              | (_, Some((query_id, result_sender))) => {
-                                    this.query.id = *query_id;
-                                    let result_receiver = result_sender.subscribe();
-                                    drop(w_active_queries);
+                QInitQueryProj::WriteActiveQuery => {
+                    let mut w_active_queries = this.socket.active_queries.write().unwrap();
+                    match (
+                        w_active_queries.tcp_or_udp.get(&this.query.question),
+                        w_active_queries.tcp_only.get(&this.query.question)
+                    ) {
+                        (Some((query_id, result_sender)), _)
+                      | (_, Some((query_id, result_sender))) => {
+                            this.query.id = *query_id;
+                            let result_receiver = result_sender.subscribe();
+                            drop(w_active_queries);
 
-                                    this.inner.set_following(result_receiver);
-                                    // println!("{} Following(2) active query '{}'", this.socket.upstream_socket, this.query.question);
+                            this.inner.set_following(result_receiver);
 
-                                    // TODO
-                                    continue;
-                                },
-                                (None, None) => {
-                                    let (result_sender, result_receiver) = once_watch::channel();
-
-                                    // This is the initial query ID. However, it could change if it
-                                    // is already in use.
-                                    this.query.id = rand::random();
-
-                                    // verify that ID is unique.
-                                    while w_active_queries.in_flight.contains_key(&this.query.id) {
-                                        this.query.id = rand::random();
-                                        // FIXME: should this fail after some number of non-unique
-                                        // keys? May want to verify that the list isn't full.
-                                    }
-
-                                    let join_handle = tokio::spawn({
-                                        let udp_retransmit_timeout = w_active_queries.udp_retransmit_timeout;
-                                        let udp_timeout = w_active_queries.udp_timeout;
-                                        let result_receiver = result_sender.subscribe();
-                                        let socket = this.socket.clone();
-                                        let mut query = this.query.clone();
-                                        async move {
-                                            UdpQueryRunner::new(&socket, &mut query, result_receiver, &udp_retransmit_timeout, &udp_timeout).await;
-                                        }
-                                    });
-
-                                    w_active_queries.in_flight.insert(this.query.id, (result_sender.clone(), join_handle));
-                                    w_active_queries.tcp_or_udp.insert(this.query.question.clone(), (this.query.id, result_sender));
-                                    drop(w_active_queries);
-
-                                    this.inner.set_following(result_receiver);
-                                    // println!("{} Following(3) active query '{}'", this.socket.upstream_socket, this.query.question);
-
-                                    // TODO
-                                    continue;
-                                },
-                            }
-                        },
-                        Poll::Pending => {
                             // TODO
-                            return Poll::Pending;
+                            continue;
+                        },
+                        (None, None) => {
+                            let (result_sender, result_receiver) = once_watch::channel();
+
+                            // This is the initial query ID. However, it could change if it
+                            // is already in use.
+                            this.query.id = rand::random();
+
+                            // verify that ID is unique.
+                            while w_active_queries.in_flight.contains_key(&this.query.id) {
+                                this.query.id = rand::random();
+                                // FIXME: should this fail after some number of non-unique
+                                // keys? May want to verify that the list isn't full.
+                            }
+
+                            let join_handle = tokio::spawn({
+                                let udp_retransmit_timeout = w_active_queries.udp_retransmit_timeout;
+                                let udp_timeout = w_active_queries.udp_timeout;
+                                let result_receiver = result_sender.subscribe();
+                                let socket = this.socket.clone();
+                                let mut query = this.query.clone();
+                                async move {
+                                    UdpQueryRunner::new(&socket, &mut query, result_receiver, &udp_retransmit_timeout, &udp_timeout).await;
+                                }
+                            });
+
+                            w_active_queries.in_flight.insert(this.query.id, (result_sender.clone(), join_handle));
+                            w_active_queries.tcp_or_udp.insert(this.query.question.clone(), (this.query.id, result_sender));
+                            drop(w_active_queries);
+
+                            this.inner.set_following(result_receiver);
+
+                            // TODO
+                            continue;
                         },
                     }
+
                 },
                 QInitQueryProj::Following(mut result_receiver) => {
                     match result_receiver.as_mut().poll(cx) {
@@ -1672,7 +1573,7 @@ impl super::socket::udp::UdpSocket for MixedSocket {
     }
 
     #[inline]
-    fn state(&self) ->  &RwLock<UdpState>  {
+    fn state(&self) ->  &std::sync::RwLock<UdpState>  {
         &self.udp
     }
 
@@ -1697,7 +1598,7 @@ impl super::socket::udp::UdpSocket for MixedSocket {
                             self.recent_messages_received.store(true, Ordering::Release);
                             let response_id = response.id;
                             println!("Received UDP Response: {response:?}");
-                            let r_active_queries = self.active_queries.read().await;
+                            let r_active_queries = self.active_queries.read().unwrap();
                             if let Some((sender, _)) = r_active_queries.in_flight.get(&response_id) {
                                 let _ = sender.send(Ok(response));
                             };
@@ -1723,7 +1624,7 @@ impl MixedSocket {
     async fn listen_udp_cleanup(self: Arc<Self>,  kill_udp: AwakeToken) {
         println!("Cleaning up UDP socket {}", self.upstream_address);
 
-        let mut w_state = self.udp.write().await;
+        let mut w_state = self.udp.write().unwrap();
         match &*w_state {
             UdpState::Managed(_, managed_kill_udp) => {
                 // If the managed socket is the one that we are cleaning up...
@@ -1740,8 +1641,10 @@ impl MixedSocket {
                     drop(w_state);
                 }
             },
-            UdpState::None => (),
-            UdpState::Blocked => (),
+            UdpState::None
+          | UdpState::Blocked => {
+                drop(w_state);
+            },
         }
     }
 }
@@ -1773,9 +1676,9 @@ impl ActiveQueries {
 
 pub struct MixedSocket {
     upstream_address: IpAddr,
-    tcp: RwLock<TcpState>,
-    udp: RwLock<UdpState>,
-    active_queries: RwLock<ActiveQueries>,
+    tcp: std::sync::RwLock<TcpState>,
+    udp: std::sync::RwLock<UdpState>,
+    active_queries: std::sync::RwLock<ActiveQueries>,
 
     // Rolling averages
     average_tcp_response_time: Atomic<RollingAverage>,
@@ -1794,9 +1697,9 @@ impl MixedSocket {
     pub fn new(upstream_address: IpAddr) -> Arc<Self> {
         Arc::new(MixedSocket {
             upstream_address,
-            tcp: RwLock::new(TcpState::None),
-            udp: RwLock::new(UdpState::None),
-            active_queries: RwLock::new(ActiveQueries::new()),
+            tcp: std::sync::RwLock::new(TcpState::None),
+            udp: std::sync::RwLock::new(UdpState::None),
+            active_queries: std::sync::RwLock::new(ActiveQueries::new()),
 
             average_tcp_response_time: Atomic::new(RollingAverage::new()),
             average_tcp_dropped_packets: Atomic::new(RollingAverage::new()),
@@ -1999,7 +1902,7 @@ impl MixedSocket {
         );
     }
 
-    pub fn query<'a, 'b, 'c, 'd>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> MixedQuery<'a, 'b, 'c, 'd> {
+    pub fn query<'a, 'b>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> MixedQuery<'a, 'b> {
         // If the UDP socket is unreliable, send most data via TCP. Some queries should still use
         // UDP to determine if the network conditions are improving. However, if the TCP connection
         // is also unstable, then we should not rely on it.

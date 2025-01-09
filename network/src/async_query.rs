@@ -2,9 +2,8 @@ use std::fmt::Display;
 
 use async_lib::once_watch;
 use dns_lib::query::message::Message;
-use futures::{future::BoxFuture, FutureExt};
+use futures::future::BoxFuture;
 use pin_project::pin_project;
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::errors;
 
@@ -35,35 +34,17 @@ impl Display for QSendType {
 }
 
 #[pin_project(project = QInitQueryProj)]
-pub(crate) enum QInitQuery<'w, 'x, AQ>
-where
-    'x: 'w,
-    AQ: Sync + Send,
-{
+pub(crate) enum QInitQuery {
     Fresh,
-    ReadActiveQuery(BoxFuture<'w, RwLockReadGuard<'x, AQ>>),
-    WriteActiveQuery(BoxFuture<'w, RwLockWriteGuard<'x, AQ>>),
+    WriteActiveQuery,
     Following(#[pin] once_watch::Receiver<Result<Message, errors::QueryError>>),
     Complete,
 }
 
-impl<'a, 'w, 'x, AQ> QInitQuery<'w, 'x, AQ>
-where
-    'a: 'x,
-    AQ: Sync + Send,
-{
+impl QInitQuery {
     #[inline]
-    pub fn set_read_active_query(mut self: std::pin::Pin<&mut Self>, active_queries: &'a RwLock<AQ>) {
-        let r_active_queries = active_queries.read().boxed();
-
-        self.set(QInitQuery::ReadActiveQuery(r_active_queries));
-    }
-
-    #[inline]
-    pub fn set_write_active_query(mut self: std::pin::Pin<&mut Self>, active_queries: &'a RwLock<AQ>) {
-        let w_active_queries = active_queries.write().boxed();
-
-        self.set(QInitQuery::WriteActiveQuery(w_active_queries));
+    pub fn set_write_active_query(mut self: std::pin::Pin<&mut Self>) {
+        self.set(QInitQuery::WriteActiveQuery);
     }
 
     #[inline]
