@@ -131,10 +131,13 @@ impl<T> Sender<T> {
     }
 
     pub fn close(&self) -> bool {
-        if self.shared().data.write().unwrap().try_close() {
+        let mut w_data = self.shared().data.write().unwrap();
+        if w_data.try_close() {
+            drop(w_data);
             self.awake_token.awake();
             return true;
         } else {
+            drop(w_data);
             return false;
         }
     }
@@ -243,10 +246,13 @@ impl<T> Receiver<T> {
     }
 
     pub fn close(&self) -> bool {
-        if self.shared().data.write().unwrap().try_close() {
+        let mut w_data = self.shared().data.write().unwrap();
+        if w_data.try_close() {
+            drop(w_data);
             self.awoken_token.get_shared_awake_token().awake();
             return true;
         } else {
+            drop(w_data);
             return false;
         }
     }
