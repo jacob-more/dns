@@ -319,7 +319,7 @@ const DATE_TIME_DIGITS: usize = 14;
 
 impl FromPresentation for Time {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
         match tokens {
             &[] => Err(TokenError::OutOfTokens),
             &[token, ..] => {

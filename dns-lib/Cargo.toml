@@ -9,6 +9,7 @@ edition = "2021"
 dns-macros = {path="../dns-macros"}
 
 async-trait = "0.1"
+futures = "0.3"
 lazy_static = "1.5"
 mac_address = "1.1"
 regex = "1.11"

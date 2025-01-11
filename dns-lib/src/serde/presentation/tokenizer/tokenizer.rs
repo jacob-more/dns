@@ -109,7 +109,7 @@ impl<'a> Tokenizer<'a> {
 }
 
 impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Result<Token<'a>, TokenizerError<'a>>;
+    type Item = Result<Token<'a>, TokenizerError>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {

@@ -77,7 +77,7 @@ impl WKS {
 
 impl FromTokenizedRData for WKS {
     #[inline]
-    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
         lazy_static!{
             static ref REGEX_UNSIGNED_INT: Regex = Regex::new(r"\A((\d)+)\z").unwrap();
         }

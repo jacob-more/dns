@@ -39,7 +39,7 @@ impl DerefMut for CDS {
 }
 
 impl FromTokenizedRData for CDS {
-    fn from_tokenized_rdata<'a, 'b>(record: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(record: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
         Ok(Self { ds: DS::from_tokenized_rdata(record)? })
     }
 }

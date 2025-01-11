@@ -7,9 +7,9 @@ use crate::{resource_record::{dnssec_alg::DnsSecAlgorithmError, ports::PortError
 use super::tokenizer::errors::TokenizerError;
 
 #[derive(Debug)]
-pub enum TokenizedRecordError<'a> {
-    TokenizerError(TokenizerError<'a>),
-    TokenError(TokenError<'a>),
+pub enum TokenizedRecordError {
+    TokenizerError(TokenizerError),
+    TokenError(TokenError),
     TooManyRDataTokensError{ expected: usize, received: usize },
     TooFewRDataTokensError{ expected: usize, received: usize },
     UnsupportedRType(RType),
@@ -17,8 +17,8 @@ pub enum TokenizedRecordError<'a> {
     OutOfBoundsError(String),
     ValueError(String),
 }
-impl<'a> Error for TokenizedRecordError<'a> {}
-impl<'a> Display for TokenizedRecordError<'a> {
+impl Error for TokenizedRecordError {}
+impl Display for TokenizedRecordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TokenizerError(error) => write!(f, "{error}"),
@@ -32,28 +32,28 @@ impl<'a> Display for TokenizedRecordError<'a> {
         }
     }
 }
-impl<'a> From<TokenizerError<'a>> for TokenizedRecordError<'a> {
-    fn from(value: TokenizerError<'a>) -> Self {
+impl From<TokenizerError> for TokenizedRecordError {
+    fn from(value: TokenizerError) -> Self {
         Self::TokenizerError(value)
     }
 }
-impl<'a> From<TokenError<'a>> for TokenizedRecordError<'a> {
-    fn from(value: TokenError<'a>) -> Self {
+impl From<TokenError> for TokenizedRecordError {
+    fn from(value: TokenError) -> Self {
         Self::TokenError(value)
     }
 }
 
 #[derive(Debug)]
-pub enum TokenError<'a> {
+pub enum TokenError {
     OutOfTokens,
     ParseIntError(ParseIntError),
     TryFromIntError(TryFromIntError),
     UxTryFromIntError,
     AddressParseError(AddrParseError),
     MacParseError(MacParseError),
-    RClassError(RClassError<'a>),
-    RTypeError(RTypeError<'a>),
-    DnsSecAlgorithmError(DnsSecAlgorithmError<'a>),
+    RClassError(RClassError),
+    RTypeError(RTypeError),
+    DnsSecAlgorithmError(DnsSecAlgorithmError),
     AsciiError(AsciiError),
     CharacterStringError(CharacterStringError),
     CDomainNameError(CDomainNameError),
@@ -63,12 +63,12 @@ pub enum TokenError<'a> {
     ExtendedBase32Error(ExtendedBase32Error),
     Base64Error(Base64Error),
     TimeError(TimeError),
-    ProtocolError(ProtocolError<'a>),
+    ProtocolError(ProtocolError),
     PortError(PortError),
-    CertificateTypeError(CertificateTypeError<'a>),
+    CertificateTypeError(CertificateTypeError),
 }
-impl<'a> Error for TokenError<'a> {}
-impl<'a> Display for TokenError<'a> {
+impl Error for TokenError {}
+impl Display for TokenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::OutOfTokens => write!(f, "Token Error: no tokens to parse. At least 1 was expected"),
@@ -95,98 +95,98 @@ impl<'a> Display for TokenError<'a> {
         }
     }
 }
-impl<'a> From<ParseIntError> for TokenError<'a> {
+impl From<ParseIntError> for TokenError {
     fn from(value: ParseIntError) -> Self {
         Self::ParseIntError(value)
     }
 }
-impl<'a> From<AddrParseError> for TokenError<'a> {
+impl From<AddrParseError> for TokenError {
     fn from(value: AddrParseError) -> Self {
         Self::AddressParseError(value)
     }
 }
-impl<'a> From<MacParseError> for TokenError<'a> {
+impl From<MacParseError> for TokenError {
     fn from(value: MacParseError) -> Self {
         Self::MacParseError(value)
     }
 }
-impl<'a> From<RClassError<'a>> for TokenError<'a> {
-    fn from(value: RClassError<'a>) -> Self {
+impl From<RClassError> for TokenError {
+    fn from(value: RClassError) -> Self {
         Self::RClassError(value)
     }
 }
-impl<'a> From<RTypeError<'a>> for TokenError<'a> {
-    fn from(value: RTypeError<'a>) -> Self {
+impl From<RTypeError> for TokenError {
+    fn from(value: RTypeError) -> Self {
         Self::RTypeError(value)
     }
 }
-impl<'a> From<DnsSecAlgorithmError<'a>> for TokenError<'a> {
-    fn from(value: DnsSecAlgorithmError<'a>) -> Self {
+impl From<DnsSecAlgorithmError> for TokenError {
+    fn from(value: DnsSecAlgorithmError) -> Self {
         Self::DnsSecAlgorithmError(value)
     }
 }
-impl<'a> From<AsciiError> for TokenError<'a> {
+impl From<AsciiError> for TokenError {
     fn from(value: AsciiError) -> Self {
         Self::AsciiError(value)
     }
 }
-impl<'a> From<CharacterStringError> for TokenError<'a> {
+impl From<CharacterStringError> for TokenError {
     fn from(value: CharacterStringError) -> Self {
         Self::CharacterStringError(value)
     }
 }
-impl<'a> From<CDomainNameError> for TokenError<'a> {
+impl From<CDomainNameError> for TokenError {
     fn from(value: CDomainNameError) -> Self {
         Self::CDomainNameError(value)
     }
 }
-impl<'a> From<DomainNameError> for TokenError<'a> {
+impl From<DomainNameError> for TokenError {
     fn from(value: DomainNameError) -> Self {
         Self::DomainNameError(value)
     }
 }
-impl<'a> From<Base16Error> for TokenError<'a> {
+impl From<Base16Error> for TokenError {
     fn from(value: Base16Error) -> Self {
         Self::Base16Error(value)
     }
 }
-impl<'a> From<Base32Error> for TokenError<'a> {
+impl From<Base32Error> for TokenError {
     fn from(value: Base32Error) -> Self {
         Self::Base32Error(value)
     }
 }
-impl<'a> From<ExtendedBase32Error> for TokenError<'a> {
+impl From<ExtendedBase32Error> for TokenError {
     fn from(value: ExtendedBase32Error) -> Self {
         Self::ExtendedBase32Error(value)
     }
 }
-impl<'a> From<Base64Error> for TokenError<'a> {
+impl From<Base64Error> for TokenError {
     fn from(value: Base64Error) -> Self {
         Self::Base64Error(value)
     }
 }
-impl<'a> From<TimeError> for TokenError<'a> {
+impl From<TimeError> for TokenError {
     fn from(value: TimeError) -> Self {
         Self::TimeError(value)
     }
 }
-impl<'a> From<DateTimeError> for TokenError<'a> {
+impl From<DateTimeError> for TokenError {
     fn from(value: DateTimeError) -> Self {
         Self::TimeError(TimeError::DateTimeError(value))
     }
 }
-impl<'a> From<ProtocolError<'a>> for TokenError<'a> {
-    fn from(value: ProtocolError<'a>) -> Self {
+impl From<ProtocolError> for TokenError {
+    fn from(value: ProtocolError) -> Self {
         Self::ProtocolError(value)
     }
 }
-impl<'a> From<PortError> for TokenError<'a> {
+impl From<PortError> for TokenError {
     fn from(value: PortError) -> Self {
         Self::PortError(value)
     }
 }
-impl<'a> From<CertificateTypeError<'a>> for TokenError<'a> {
-    fn from(value: CertificateTypeError<'a>) -> Self {
+impl From<CertificateTypeError> for TokenError {
+    fn from(value: CertificateTypeError) -> Self {
         Self::CertificateTypeError(value)
     }
 }

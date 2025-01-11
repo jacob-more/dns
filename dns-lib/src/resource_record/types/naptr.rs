@@ -68,7 +68,7 @@ impl FromWire for NAPTR {
 
 impl FromTokenizedRData for NAPTR {
     #[inline]
-    fn from_tokenized_rdata<'a, 'b>(record: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(record: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
         match record.as_slice() {
             &[order, preference, flags, service, replacement, regexp] => {
                 let (order, _) = u16::from_token_format(&[order])?;

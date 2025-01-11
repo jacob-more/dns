@@ -3,11 +3,11 @@ use std::{error::Error, fmt::Display};
 use crate::gen_enum::enum_encoding;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-pub enum ProtocolError<'a> {
-    UnknownMnemonic(&'a str),
+pub enum ProtocolError {
+    UnknownMnemonic(String),
 }
-impl<'a> Error for ProtocolError<'a> {}
-impl<'a> Display for ProtocolError<'a> {
+impl<'a> Error for ProtocolError {}
+impl<'a> Display for ProtocolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownMnemonic(protocol) => write!(f, "Unknown Protocol Mnemonic: {protocol}"),

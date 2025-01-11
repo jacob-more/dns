@@ -22,7 +22,7 @@ impl TXT {
 
 impl FromTokenizedRData for TXT {
     #[inline]
-    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
         match rdata.as_slice() {
             &[_, ..] => {
                 let mut strings = Vec::with_capacity(rdata.len());

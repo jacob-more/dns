@@ -115,7 +115,7 @@ impl FromWire for AMTRELAY {
 
 impl FromTokenizedRData for AMTRELAY {
     #[inline]
-    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
         match rdata.as_slice() {
             &[precedence, discovery_optional, relay_type, relay] => {
                 let (precedence, _) = u8::from_token_format(&[precedence])?;

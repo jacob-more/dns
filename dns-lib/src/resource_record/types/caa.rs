@@ -120,7 +120,7 @@ impl FromWire for CAA {
 
 impl FromTokenizedRData for CAA {
     #[inline]
-    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, TokenizedRecordError> where Self: Sized {
         match rdata.as_slice() {
             &[flags, tag, value] => {
                 // Flags must be between 0 and 255. This is enforced by the type, u8.

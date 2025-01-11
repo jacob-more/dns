@@ -3,11 +3,11 @@ use std::{fmt::Display, error::Error};
 use crate::gen_enum::enum_encoding;
 
 #[derive(Debug)]
-pub enum DnsSecAlgorithmError<'a> {
-    UnknownMnemonic(&'a str),
+pub enum DnsSecAlgorithmError {
+    UnknownMnemonic(String),
 }
-impl<'a> Error for DnsSecAlgorithmError<'a> {}
-impl<'a> Display for DnsSecAlgorithmError<'a> {
+impl<'a> Error for DnsSecAlgorithmError {}
+impl<'a> Display for DnsSecAlgorithmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownMnemonic(mnemonic) => write!(f, "unknown dns security algorithm mnemonic '{mnemonic}'"),

@@ -45,7 +45,7 @@ fn impl_from_tokenized_rdata_struct_macro(data: &DataStruct, ast: &DeriveInput) 
         gen = quote! {
             impl crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData for #name {
                 #[inline]
-                fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+                fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
                     match rdata.as_slice() {
                         &[] => Ok(Self {}),
                         &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError(0, rdata.len())),
@@ -58,7 +58,7 @@ fn impl_from_tokenized_rdata_struct_macro(data: &DataStruct, ast: &DeriveInput) 
         gen = quote! {
             impl crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData for #name {
                 #[inline]
-                fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+                fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
                     match rdata.as_slice() {
                         &[#pattern_match] => {
                             #from_token_calls

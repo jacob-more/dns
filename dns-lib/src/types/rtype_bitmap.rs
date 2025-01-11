@@ -170,7 +170,7 @@ impl ToPresentation for RTypeBitmap {
 }
 
 impl FromPresentation for RTypeBitmap {
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), crate::serde::presentation::errors::TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), crate::serde::presentation::errors::TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
         let mut rtypes = Vec::with_capacity(tokens.len());
         for token in tokens {
             rtypes.push(RType::from_token_format(&[token])?.0);

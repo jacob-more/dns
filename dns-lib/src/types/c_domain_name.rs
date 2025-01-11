@@ -706,7 +706,7 @@ impl FromWire for CDomainName {
 
 impl FromPresentation for CDomainName {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
         let (ascii_domain_name, tokens) = AsciiString::from_token_format(tokens)?;
         Ok((Self::new(&ascii_domain_name)?, tokens))
     }

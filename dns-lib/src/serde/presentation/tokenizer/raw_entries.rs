@@ -90,7 +90,7 @@ impl<'a> RawEntryIter<'a> {
 }
 
 impl<'a> Iterator for RawEntryIter<'a> {
-    type Item = Result<RawEntry<'a>, TokenizerError<'a>>;
+    type Item = Result<RawEntry<'a>, TokenizerError>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {

@@ -281,7 +281,7 @@ impl FromWire for CharacterString {
 
 impl FromPresentation for CharacterString {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
         match tokens {
             &[] => Err(TokenError::OutOfTokens),
             &[token, ..] => Ok((Self::from_utf8(token)?, &tokens[1..])),

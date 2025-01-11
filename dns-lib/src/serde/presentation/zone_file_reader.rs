@@ -27,7 +27,7 @@ impl<'a> ZoneFileReader<'a> {
 }
 
 impl<'a> Iterator for ZoneFileReader<'a> {
-    type Item = Result<ZoneToken<'a>, TokenizedRecordError<'a>>;
+    type Item = Result<ZoneToken<'a>, TokenizedRecordError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_token = match self.tokenizer.next() {

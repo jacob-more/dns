@@ -25,7 +25,7 @@ impl APL {
 
 impl FromTokenizedRData for APL {
     #[inline]
-    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
         let mut apitems = Vec::with_capacity(rdata.len());
         for token in rdata {
             apitems.push(APItem::from_token_format(token)?);
@@ -221,7 +221,7 @@ impl FromWire for APItem {
 
 impl APItem {
     #[inline]
-    fn from_token_format<'a, 'b>(mut token: &'a str) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_token_format(mut token: &str) -> Result<Self, TokenizedRecordError> where Self: Sized {
         lazy_static!(
             static ref REGEX_ADDRESS_FAMILY: Regex = Regex::new(r"\A([0-9]+):").unwrap();
             static ref REGEX_NEGATION_FLAG: Regex = Regex::new(r"\A!").unwrap();

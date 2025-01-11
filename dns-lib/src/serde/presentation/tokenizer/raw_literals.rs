@@ -76,7 +76,7 @@ impl<'a> RawLiteralIter<'a> {
 }
 
 impl<'a> Iterator for RawLiteralIter<'a> {
-    type Item = Result<RawLiteral<'a>, TokenizerError<'a>>;
+    type Item = Result<RawLiteral<'a>, TokenizerError>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -119,7 +119,7 @@ impl<'a> Iterator for RawLiteralIter<'a> {
             return Some(Ok(result));
         }
 
-        return Some(Err(TokenizerError::UnknownToken(self.feed)));
+        return Some(Err(TokenizerError::UnknownToken(self.feed.to_string())));
     }
 }
 

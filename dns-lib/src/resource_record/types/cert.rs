@@ -16,11 +16,11 @@ pub struct CERT {
 }
 
 #[derive(Debug)]
-pub enum CertificateTypeError<'a> {
-    UnknownMnemonic(&'a str),
+pub enum CertificateTypeError {
+    UnknownMnemonic(String),
 }
-impl<'a> Error for CertificateTypeError<'a> {}
-impl<'a> Display for CertificateTypeError<'a> {
+impl<'a> Error for CertificateTypeError {}
+impl<'a> Display for CertificateTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownMnemonic(mnemonic) => write!(f, "unknown certificate type mnemonic '{mnemonic}'"),

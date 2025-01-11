@@ -105,7 +105,7 @@ impl FromWire for A6 {
 
 impl FromTokenizedRData for A6 {
     #[inline]
-    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
         match rdata.as_slice() {
             &[token1, token2] => {
                 let (prefix_length, _) = u8::from_token_format(&[token1])?;

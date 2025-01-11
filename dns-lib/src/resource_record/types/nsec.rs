@@ -14,7 +14,7 @@ pub struct NSEC {
 }
 
 impl FromTokenizedRData for NSEC {
-    fn from_tokenized_rdata<'a, 'b>(rdata: &Vec<&'a str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+    fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
         match rdata.as_slice() {
             &[] | &[_] => Err(TokenizedRecordError::TooFewRDataTokensError{expected: 2, received: rdata.len()}),
             &[next_domain_name, ..] => {

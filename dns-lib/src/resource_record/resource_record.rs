@@ -259,7 +259,7 @@ macro_rules! gen_record_data {
         )+
 
         impl ResourceRecord<RecordData> {
-            pub fn from_tokenized_record<'a, 'b>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecordToken<'a>) -> Result<Self, TokenizedRecordError<'b>> where Self: Sized, 'a: 'b {
+            pub fn from_tokenized_record<'a>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecordToken<'a>) -> Result<Self, TokenizedRecordError> where Self: Sized {
                 let name = CDomainName::from_token_format(&[record.domain_name])?.0;
                 let rclass = RClass::from_token_format(&[record.rclass])?.0;
                 let ttl = Time::from_token_format(&[record.ttl])?.0;

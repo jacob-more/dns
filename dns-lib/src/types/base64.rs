@@ -403,7 +403,7 @@ impl BaseConversions for Base64 {
 
 impl FromPresentation for Base64 {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError<'b>> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
         let (encoded, tokens) = AsciiString::from_token_format(tokens)?;
         Ok((Self::encode(&encoded)?, tokens))
     }

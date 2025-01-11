@@ -3,11 +3,11 @@ use std::{fmt::Display, error::Error};
 use crate::gen_enum::enum_encoding;
 
 #[derive(Debug)]
-pub enum RTypeError<'a> {
-    UnknownMnemonic(&'a str),
+pub enum RTypeError {
+    UnknownMnemonic(String),
 }
-impl<'a> Error for RTypeError<'a> {}
-impl<'a> Display for RTypeError<'a> {
+impl<'a> Error for RTypeError {}
+impl<'a> Display for RTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownMnemonic(mnemonic) => write!(f, "unknown type mnemonic '{mnemonic}'"),

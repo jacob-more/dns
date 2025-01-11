@@ -102,7 +102,7 @@ impl<'a> EntryIter<'a> {
 }
 
 impl<'a> Iterator for EntryIter<'a> {
-    type Item = Result<Entry<'a>, TokenizerError<'a>>;
+    type Item = Result<Entry<'a>, TokenizerError>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -181,7 +181,7 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr(domain_name: Option<StringLiteral<'a>>, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr(domain_name: Option<StringLiteral<'a>>, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError> {
         match other_tokens {
             &[RawItem::Text(token_1), RawItem::Text(token_2), ..] => {
                 // If the first token is an rtype, then the rest is the rdata and we should not read it
@@ -200,18 +200,18 @@ impl<'a> EntryIter<'a> {
                     if (!REGEX_RCLASS.is_match(token_3)) && REGEX_RTYPE.is_match(token_3) {
                         return Self::parse_rr_rtype_third(domain_name, token_1, token_2, token_3, &other_tokens[3..]);
                     } else {
-                        return Err(TokenizerError::UnknownToken(token_3));
+                        return Err(TokenizerError::UnknownToken(token_3.to_string()));
                     }
                 }
 
-                return Err(TokenizerError::TwoUnknownTokens(token_1, token_2));
+                return Err(TokenizerError::TwoUnknownTokens(token_1.to_string(), token_2.to_string()));
             },
             _ => return Err(TokenizerError::UnknownTokens),
         }
     }
 
     #[inline]
-    fn parse_rr_rtype_first(domain_name: Option<StringLiteral<'a>>, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_first(domain_name: Option<StringLiteral<'a>>, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError> {
         Ok(Self::new_rr(
             domain_name,
             None,
@@ -222,7 +222,7 @@ impl<'a> EntryIter<'a> {
     }
 
     #[inline]
-    fn parse_rr_rtype_second(domain_name: Option<StringLiteral<'a>>, token_1: &'a str, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_second(domain_name: Option<StringLiteral<'a>>, token_1: &'a str, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError> {
         if REGEX_RCLASS.is_match(token_1) {
             Ok(Self::new_rr(
                 domain_name,
@@ -240,12 +240,12 @@ impl<'a> EntryIter<'a> {
                 other_tokens.iter()
             ))
         } else {
-            Err(TokenizerError::UnknownToken(token_1))
+            Err(TokenizerError::UnknownToken(token_1.to_string()))
         }
     }
 
     #[inline]
-    fn parse_rr_rtype_third(domain_name: Option<StringLiteral<'a>>, token_1: &'a str, token_2: &'a str, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError<'a>> {
+    fn parse_rr_rtype_third(domain_name: Option<StringLiteral<'a>>, token_1: &'a str, token_2: &'a str, rtype: &'a str, other_tokens: &[RawItem<'a>]) -> Result<Entry<'a>, TokenizerError> {
         if REGEX_RCLASS.is_match(token_1) && REGEX_TTL.is_match(token_2) {
             Ok(Self::new_rr(
                 domain_name,
@@ -263,7 +263,7 @@ impl<'a> EntryIter<'a> {
                 other_tokens.iter()
             ))
         } else {
-            Err(TokenizerError::TwoUnknownTokens(token_1, token_2))
+            Err(TokenizerError::TwoUnknownTokens(token_1.to_string(), token_2.to_string()))
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::{error::Error, fmt::Display, io};
 
 #[derive(Debug)]
-pub enum TokenizerError<'a> {
+pub enum TokenizerError {
     IOError(io::Error),
     NestedOpenParenthesis,
     UnopenedClosingParenthesis,
@@ -11,12 +11,12 @@ pub enum TokenizerError<'a> {
     BlankClassUsedBeforeDefined,
     BlankTTLUsedBeforeDefined,
     UnknownTokens,
-    UnknownToken(&'a str),
-    TwoUnknownTokens(&'a str, &'a str),
-    ThreeUnknownTokens(&'a str, &'a str, &'a str),
+    UnknownToken(String),
+    TwoUnknownTokens(String, String),
+    ThreeUnknownTokens(String, String, String),
 }
-impl<'a> Error for TokenizerError<'a> {}
-impl<'a> Display for TokenizerError<'a> {
+impl Error for TokenizerError {}
+impl Display for TokenizerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::IOError(error) => write!(f, "{error}"),
