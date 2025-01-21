@@ -10,7 +10,13 @@ A place to test ideas and verify that current implementations are working as int
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-lib = { path = "../async-lib" }
 dns-lib = { path = "../dns-lib" }
 dns-cache = { path = "../dns-cache" }
 dns-client = { path = "../dns-client" }
 dns-server = { path = "../dns-server" }
+
+env_logger = "0.11"
+futures = "0.3"
+rustls = "0.23"
+tokio = { version = "1.43", features = ["full", "tracing"] }
