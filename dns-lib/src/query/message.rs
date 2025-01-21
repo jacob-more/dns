@@ -7,6 +7,12 @@ use crate::{resource_record::{resource_record::ResourceRecord, rcode::RCode, opc
 
 use super::{qr::QR, question::Question};
 
+
+/// The theoretical minimum number of bytes that a Message requires. This
+/// message would include ONLY header bytes.
+const MIN_MESSAGE_BYTE_LEN: u16 = 96;
+
+
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-4
 #[derive(Clone, PartialEq, Hash, Debug)]
 pub struct Message {
@@ -89,6 +95,59 @@ impl Message {
     pub fn additional(&self) -> &[ResourceRecord] {
         &self.additional
     }
+
+    /// Truncates the message until it contains at most `byte_len` bytes in its
+    /// serialized form. It then sets the `truncation` flag to `true`.
+    #[inline]
+    pub fn truncate(&mut self, byte_len: u16) {
+        // TODO: Consider coming up with a system that can determine the compressed message size to
+        // get a better grasp on which records actually need to be dropped. This might not be
+        // needed though, since the client should NEVER use the contents of a truncated message
+        // and is supposed to re-query via TCP.
+
+        let mut total_serial_len = self.serial_length();
+
+        // Don't truncate if we don't have to.
+        if total_serial_len <= byte_len {
+            return;
+        }
+        self.truncation = true;
+
+        while let Some(record) = self.additional.pop() {
+            total_serial_len -= record.serial_length();
+            if total_serial_len <= byte_len {
+                return;
+            }
+        }
+
+        while let Some(record) = self.authority.pop() {
+            total_serial_len -= record.serial_length();
+            if total_serial_len <= byte_len {
+                return;
+            }
+        }
+
+        while let Some(record) = self.answer.pop() {
+            total_serial_len -= record.serial_length();
+            if total_serial_len <= byte_len {
+                return;
+            }
+        }
+
+        // Should we remove the question? Since the message still has an ID, it
+        // can still be identified by the client. This way, they can at least
+        // be notified that the message was truncated.
+        while let Some(record) = self.question.pop() {
+            total_serial_len -= record.serial_length();
+            if total_serial_len <= byte_len {
+                return;
+            }
+        }
+
+        // TODO: make sure the OPT record is handled correctly once that has been implemented. It
+        // may need special handling.
+    }
+}
 
 impl Display for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
