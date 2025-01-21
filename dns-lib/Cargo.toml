@@ -14,7 +14,7 @@ lazy_static = "1.5"
 mac_address = "1.1"
 regex = "1.11"
 tinyvec = { version = "1.8", features = ["alloc"] }
-tokio = { version = "1.42", features = ["full"] }
+tokio = { version = "1.43", features = ["full"] }
 ux = "0.1"
 xml = "0.8"
 
