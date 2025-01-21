@@ -314,15 +314,33 @@ impl FromWire for Message {
             qd_count -= 1;
         }
         while an_count > 0 {
-            answer.push(ResourceRecord::from_wire_format(wire)?);
+            // TODO: once handling of Unknown RRs is implemented, this match can be collapsed back
+            // down into a simple `?`.
+            match ResourceRecord::from_wire_format(wire) {
+                Ok(record) => answer.push(record),
+                Err(error @ ReadWireError::UnsupportedRType(_)) => println!("{error}"),
+                Err(error) => return Err(error),
+            }
             an_count -= 1;
         }
         while ns_count > 0 {
-            authority.push(ResourceRecord::from_wire_format(wire)?);
+            // TODO: once handling of Unknown RRs is implemented, this match can be collapsed back
+            // down into a simple `?`.
+            match ResourceRecord::from_wire_format(wire) {
+                Ok(record) => authority.push(record),
+                Err(error @ ReadWireError::UnsupportedRType(_)) => println!("{error}"),
+                Err(error) => return Err(error),
+            }
             ns_count -= 1;
         }
         while ar_count > 0 {
-            additional.push(ResourceRecord::from_wire_format(wire)?);
+            // TODO: once handling of Unknown RRs is implemented, this match can be collapsed back
+            // down into a simple `?`.
+            match ResourceRecord::from_wire_format(wire) {
+                Ok(record) => additional.push(record),
+                Err(error @ ReadWireError::UnsupportedRType(_)) => println!("{error}"),
+                Err(error) => return Err(error),
+            }
             ar_count -= 1;
         }
 
