@@ -11,6 +11,7 @@ use result::{QOk, QResult};
 
 mod qname_minimizer;
 mod query;
+mod network;
 mod result;
 
 

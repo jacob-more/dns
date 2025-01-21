@@ -7,7 +7,7 @@ use pin_project::{pin_project, pinned_drop};
 use quinn::Connecting;
 use tokio::{task::JoinHandle, time::Sleep};
 
-use crate::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
+use crate::network::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
 
 use super::{FutureSocket, PollSocket};
 

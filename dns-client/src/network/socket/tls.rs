@@ -9,7 +9,7 @@ use rustls::pki_types::ServerName;
 use tokio::{net::TcpStream, sync::Mutex, task::JoinHandle, time::Sleep};
 use tokio_rustls::{client::TlsStream, Connect, TlsConnector};
 
-use crate::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
+use crate::network::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
 
 use super::{FutureSocket, PollSocket};
 

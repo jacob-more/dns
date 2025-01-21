@@ -6,7 +6,7 @@ use futures::{future::BoxFuture, FutureExt};
 use pin_project::{pin_project, pinned_drop};
 use tokio::{net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, TcpStream}, task::JoinHandle, time::Sleep};
 
-use crate::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
+use crate::network::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
 
 use super::{FutureSocket, PollSocket};
 

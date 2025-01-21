@@ -5,7 +5,7 @@ use futures::StreamExt;
 use rustls::RootCertStore;
 use tokio::{select, sync::{watch, RwLock}, task::JoinHandle};
 
-use crate::{mixed_tcp_udp::MixedSocket, quic::QuicSocket, tls::TlsSocket};
+use crate::network::{mixed_tcp_udp::MixedSocket, quic::QuicSocket, tls::TlsSocket};
 
 
 const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(30);

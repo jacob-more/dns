@@ -2,9 +2,8 @@ use std::{net::IpAddr, sync::Arc};
 
 use dns_lib::{interface::cache::cache::AsyncCache, query::{message::Message, question::Question}};
 use log::trace;
-use network::{async_query::QueryOpt, errors::QueryError, mixed_tcp_udp::MixedSocket};
 
-use crate::DNSAsyncClient;
+use crate::{network::{async_query::QueryOpt, errors::QueryError, mixed_tcp_udp::MixedSocket}, DNSAsyncClient};
 
 pub async fn query_network<CCache>(client: &DNSAsyncClient, cache: Arc<CCache>, question: &Question, name_server_address: &IpAddr) -> Result<Message, QueryError> where CCache: AsyncCache + Sync {
     let mut message_question = Message::from(question);

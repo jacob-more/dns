@@ -5,7 +5,7 @@ use dns_lib::query::message::Message;
 use futures::future::BoxFuture;
 use pin_project::pin_project;
 
-use crate::errors;
+use crate::network::errors;
 
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

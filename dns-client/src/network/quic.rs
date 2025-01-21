@@ -10,7 +10,7 @@ use pin_project::{pin_project, pinned_drop};
 use tinyvec::TinyVec;
 use tokio::{pin, select, task::JoinHandle, time::{Instant, Sleep}};
 
-use crate::{async_query::{QInitQuery, QInitQueryProj, QueryOpt}, errors::{self, QueryError}, receive::read_stream_message, rolling_average::{fetch_update, RollingAverage}, socket::{quic::{QQuicSocket, QQuicSocketProj, QuicState}, FutureSocket, PollSocket}};
+use crate::network::{async_query::{QInitQuery, QInitQueryProj, QueryOpt}, errors::{self, QueryError}, receive::read_stream_message, rolling_average::{fetch_update, RollingAverage}, socket::{quic::{QQuicSocket, QQuicSocketProj, QuicState}, FutureSocket, PollSocket}};
 
 const MAX_MESSAGE_SIZE: u16 = 4092;
 
@@ -553,7 +553,7 @@ impl<'a, 'b> Future for QuicQuery<'a, 'b> {
 
 // Implement QUIC functions on QuicSocket
 #[async_trait]
-impl crate::socket::quic::QuicSocket for QuicSocket {
+impl crate::network::socket::quic::QuicSocket for QuicSocket {
     #[inline]
     fn peer_addr(&self) ->  SocketAddr {
         SocketAddr::new(self.upstream_address, DOQ_UDP_PORT)
@@ -764,22 +764,22 @@ impl QuicSocket {
 
     #[inline]
     pub async fn start(self: Arc<Self>) -> Result<(), errors::SocketError> {
-        <Self as crate::socket::quic::QuicSocket>::start(self).await
+        <Self as crate::network::socket::quic::QuicSocket>::start(self).await
     }
 
     #[inline]
     pub async fn shutdown(self: Arc<Self>) {
-        <Self as crate::socket::quic::QuicSocket>::shutdown(self).await;
+        <Self as crate::network::socket::quic::QuicSocket>::shutdown(self).await;
     }
 
     #[inline]
     pub async fn enable(self: Arc<Self>) {
-        <Self as crate::socket::quic::QuicSocket>::enable(self).await;
+        <Self as crate::network::socket::quic::QuicSocket>::enable(self).await;
     }
 
     #[inline]
     pub async fn disable(self: Arc<Self>) {
-        <Self as crate::socket::quic::QuicSocket>::disable(self).await;
+        <Self as crate::network::socket::quic::QuicSocket>::disable(self).await;
     }
 
     pub fn query<'a, 'b>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> QuicQuery<'a, 'b> {

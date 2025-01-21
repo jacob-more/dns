@@ -6,7 +6,6 @@ members = [
     "dns-cache",
     "dns-server",
     "dns-client",
-    "network",
     "dns-experimental",
 ]
 resolver = "2"

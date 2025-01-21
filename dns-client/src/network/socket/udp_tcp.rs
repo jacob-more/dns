@@ -2,7 +2,7 @@ use std::{pin::Pin, sync::Arc};
 
 use pin_project::pin_project;
 
-use crate::errors;
+use crate::network::errors;
 
 use super::{tcp::{QTcpSocket, TcpSocket}, udp::{QUdpSocket, UdpSocket}, FutureSocket, PollSocket};
 

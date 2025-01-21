@@ -9,7 +9,7 @@ use pin_project::{pin_project, pinned_drop};
 use tinyvec::TinyVec;
 use tokio::{io::AsyncWriteExt, join, net::{self, tcp::OwnedReadHalf}, pin, select, task::JoinHandle, time::{Instant, Sleep}};
 
-use crate::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt}, errors, receive::{read_stream_message, read_udp_message}, rolling_average::{fetch_update, RollingAverage}, socket::{tcp::{QTcpSocket, QTcpSocketProj, TcpSocket, TcpState}, udp::{QUdpSocket, QUdpSocketProj, UdpSocket, UdpState}, udp_tcp::{QUdpTcpSocket, QUdpTcpSocketProj}, FutureSocket, PollSocket}};
+use crate::network::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt}, errors, receive::{read_stream_message, read_udp_message}, rolling_average::{fetch_update, RollingAverage}, socket::{tcp::{QTcpSocket, QTcpSocketProj, TcpSocket, TcpState}, udp::{QUdpSocket, QUdpSocketProj, UdpSocket, UdpState}, udp_tcp::{QUdpTcpSocket, QUdpTcpSocketProj}, FutureSocket, PollSocket}};
 
 const MAX_MESSAGE_SIZE: u16 = 4092;
 
@@ -1943,7 +1943,7 @@ mod mixed_udp_tcp_tests {
     use tokio::{io::AsyncReadExt, select};
     use ux::u3;
 
-    use crate::mixed_tcp_udp::{MixedSocket, QueryOpt};
+    use crate::network::mixed_tcp_udp::{MixedSocket, QueryOpt};
 
     const LISTEN_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 53);
     const SEND_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);

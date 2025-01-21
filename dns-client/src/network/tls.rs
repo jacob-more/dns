@@ -10,7 +10,7 @@ use rustls::ClientConfig;
 use tinyvec::TinyVec;
 use tokio::{io::AsyncWriteExt, pin, select, task::JoinHandle, time::{Instant, Sleep}};
 
-use crate::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt}, errors, receive::read_stream_message, rolling_average::{fetch_update, RollingAverage}, socket::{tls::{QTlsSocket, QTlsSocketProj, TlsReadHalf, TlsState}, FutureSocket, PollSocket}};
+use crate::network::{async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt}, errors, receive::read_stream_message, rolling_average::{fetch_update, RollingAverage}, socket::{tls::{QTlsSocket, QTlsSocketProj, TlsReadHalf, TlsState}, FutureSocket, PollSocket}};
 
 const MAX_MESSAGE_SIZE: u16 = 4092;
 
@@ -612,7 +612,7 @@ impl<'a, 'b> Future for TlsQuery<'a, 'b> {
 
 // Implement TLS functions on TlsSocket
 #[async_trait]
-impl crate::socket::tls::TlsSocket for TlsSocket {
+impl crate::network::socket::tls::TlsSocket for TlsSocket {
     #[inline]
     fn peer_addr(&self) ->  SocketAddr {
         SocketAddr::new(self.upstream_address, DOT_TCP_PORT)
@@ -847,22 +847,22 @@ impl TlsSocket {
 
     #[inline]
     pub async fn start(self: Arc<Self>) -> Result<(), errors::SocketError> {
-        <Self as crate::socket::tls::TlsSocket>::start(self).await
+        <Self as crate::network::socket::tls::TlsSocket>::start(self).await
     }
 
     #[inline]
     pub async fn shutdown(self: Arc<Self>) {
-        <Self as crate::socket::tls::TlsSocket>::shutdown(self).await;
+        <Self as crate::network::socket::tls::TlsSocket>::shutdown(self).await;
     }
 
     #[inline]
     pub async fn enable(self: Arc<Self>) {
-        <Self as crate::socket::tls::TlsSocket>::enable(self).await;
+        <Self as crate::network::socket::tls::TlsSocket>::enable(self).await;
     }
 
     #[inline]
     pub async fn disable(self: Arc<Self>) {
-        <Self as crate::socket::tls::TlsSocket>::disable(self).await;
+        <Self as crate::network::socket::tls::TlsSocket>::disable(self).await;
     }
 
     pub fn query<'a, 'b>(self: &'a Arc<Self>, query: &'b mut Message, options: QueryOpt) -> TlsQuery<'a, 'b> {

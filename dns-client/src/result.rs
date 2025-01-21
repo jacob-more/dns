@@ -1,7 +1,8 @@
 use std::{fmt::{Debug, Display}, hash::Hash};
 
 use dns_lib::{interface::client::ContextErr, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::ns::NS}, types::c_domain_name::{CDomainName, CDomainNameError}};
-use network::errors::QueryError;
+
+use crate::network::errors::QueryError;
 
 
 #[derive(Clone, PartialEq, Hash, Debug)]

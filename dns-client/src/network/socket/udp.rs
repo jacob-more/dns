@@ -6,7 +6,7 @@ use futures::{future::BoxFuture, FutureExt};
 use pin_project::pin_project;
 use tokio::net;
 
-use crate::errors;
+use crate::network::errors;
 
 use super::{FutureSocket, PollSocket};
 

@@ -4,11 +4,10 @@ use async_lib::once_watch::{self, OnceWatchSend, OnceWatchSubscribe};
 use dns_lib::{interface::{cache::{cache::AsyncCache, CacheQuery, CacheResponse}, client::Context}, query::{message::Message, qr::QR}, resource_record::{rcode::RCode, resource_record::{RecordData, ResourceRecord}, rtype::RType}, types::c_domain_name::CDomainName};
 use futures::{future::BoxFuture, FutureExt};
 use log::{debug, info, trace};
-use network::{errors::QueryError, mixed_tcp_udp::MixedSocket};
 use pin_project::{pin_project, pinned_drop};
 use rand::{seq::IteratorRandom, thread_rng};
 
-use crate::{query::{network_query::query_network, recursive_query::recursive_query}, result::{QError, QOk, QResult}, DNSAsyncClient};
+use crate::{network::{errors::QueryError, mixed_tcp_udp::MixedSocket}, query::{network_query::query_network, recursive_query::recursive_query}, result::{QError, QOk, QResult}, DNSAsyncClient};
 
 fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
     match record.into_rdata() {

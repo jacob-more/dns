@@ -1,7 +1,7 @@
 use dns_lib::{query::message::Message, serde::wire::{from_wire::FromWire, read_wire::ReadWire}};
 use tokio::{io::AsyncReadExt, net::UdpSocket};
 
-use crate::errors::{self, SocketType};
+use crate::network::errors::{self, SocketType};
 
 
 #[inline]
