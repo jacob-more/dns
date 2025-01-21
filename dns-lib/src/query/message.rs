@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use tinyvec::TinyVec;
 use ux::{u3, u1, u4};
 
@@ -86,6 +88,12 @@ impl Message {
     #[inline]
     pub fn additional(&self) -> &[ResourceRecord] {
         &self.additional
+    }
+
+impl Display for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: Come up with a better display than the default debug implementation.
+        write!(f, "{self:?}")
     }
 }
 
