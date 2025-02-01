@@ -1,6 +1,6 @@
 use std::{collections::{hash_map::{Entry, Values}, HashMap}, error::Error, fmt::Display};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitiveOwnedLabel, Label, LabelOwned}}};
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitiveLabel, Label}}};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TreeCacheError {
@@ -22,7 +22,7 @@ pub struct TreeCache<Records> {
     root_nodes: HashMap<RClass, TreeNode<Records>>,
 }
 
-type ChildNodes<Records> = HashMap<CaseInsensitiveOwnedLabel, TreeNode<Records>>;
+type ChildNodes<Records> = HashMap<CaseInsensitiveLabel, TreeNode<Records>>;
 pub type MappedRecords<Records> = HashMap<RType, Records>;
 
 #[derive(Debug)]
@@ -61,10 +61,9 @@ impl<Records> TreeCache<Records> {
 
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().case_insensitive_labels().rev().skip(1) {
-            let lowercase_label = label.as_lowercase().into_case_insensitive_owned();
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
-            current_node = match current_node.children.entry(lowercase_label) {
+            current_node = match current_node.children.entry(label.as_owned_case_insensitive()) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
                     let child_node = TreeNode {
@@ -97,8 +96,7 @@ impl<Records> TreeCache<Records> {
 
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().case_insensitive_labels().rev().skip(1) {
-            let lowercase_label = label.as_lowercase().into_case_insensitive_owned();
-            if let Some(child_node) = current_node.children.get(&lowercase_label) {
+            if let Some(child_node) = current_node.children.get(label) {
                 current_node = child_node;
             } else {
                 return Ok(None);
@@ -132,19 +130,17 @@ impl<Records> TreeCache<Records> {
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels.skip(1).rev().skip(1) {
-            let lowercase_label = label.as_lowercase().into_case_insensitive_owned();
-            if let Some(child_node) = parent_node.children.get_mut(&lowercase_label) {
+            if let Some(child_node) = parent_node.children.get_mut(label) {
                 parent_node = child_node;
             } else {
                 return Ok(None);
             }
         }
 
-        let last_label = match qname.case_insensitive_labels().next() {
-            Some(last_label) => last_label.as_lowercase().into_case_insensitive_owned(),
+        match qname.case_insensitive_labels().next() {
+            Some(last_label) => return Ok(parent_node.children.remove(last_label)),
             None => return Err(TreeCacheError::InconsistentState(format!("Could not determine the last label in the qname '{qname}'"))),
         };
-        return Ok(parent_node.children.remove(&last_label));
     }
 
     #[inline]
@@ -205,7 +201,7 @@ impl<'a, Records: 'a> Iterator for TreeRootIterator<'a, Records> {
 
 struct TreeChildIterator<'a, Records: 'a> {
     self_node: Option<&'a TreeNode<Records>>,
-    children_iterator: Values<'a, CaseInsensitiveOwnedLabel, TreeNode<Records>>,
+    children_iterator: Values<'a, CaseInsensitiveLabel, TreeNode<Records>>,
     current_child_iter: Option<Box<Self>>,
 }
 

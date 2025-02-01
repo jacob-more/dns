@@ -1,6 +1,6 @@
 use std::{collections::{hash_map::Entry, HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitiveOwnedLabel, Label, LabelOwned}}};
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitiveLabel, Label}}};
 use futures::StreamExt;
 use tokio::sync::{Mutex, RwLock};
 
@@ -24,7 +24,7 @@ pub struct AsyncTreeCache<Records> {
     root_nodes: RwLock<HashMap<RClass, Arc<TreeNode<Records>>>>
 }
 
-type ChildNodes<Records> = RwLock<HashMap<CaseInsensitiveOwnedLabel, Arc<TreeNode<Records>>>>;
+type ChildNodes<Records> = RwLock<HashMap<CaseInsensitiveLabel, Arc<TreeNode<Records>>>>;
 pub type MappedRecords<Records> = RwLock<HashMap<RType, Records>>;
 
 #[derive(Debug)]
@@ -84,11 +84,10 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
 
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().case_insensitive_labels().rev().skip(1) {
-            let lowercase_label = label.as_lowercase().into_case_insensitive_owned();
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
             let read_current_node_children = current_node.children.read().await;
-            match read_current_node_children.get(&lowercase_label) {
+            match read_current_node_children.get(label) {
                 Some(child_node) => {
                     let child_node = child_node.clone();
                     drop(read_current_node_children);
@@ -99,7 +98,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                     let mut write_current_node_children = current_node.children.write().await;
                     // Need to check again since the read lock was dropped before the write lock was
                     // obtained. The state could have changed in that time.
-                    match write_current_node_children.entry(lowercase_label) {
+                    match write_current_node_children.entry(label.as_owned_case_insensitive()) {
                         Entry::Occupied(entry) => {
                             let child_node = entry.get().clone();
                             drop(write_current_node_children);
@@ -143,9 +142,8 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
 
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().case_insensitive_labels().rev().skip(1) {
-            let lowercase_label = label.as_lowercase().into_case_insensitive_owned();
             let read_current_node_children = current_node.children.read().await;
-            if let Some(child_node) = read_current_node_children.get(&lowercase_label) {
+            if let Some(child_node) = read_current_node_children.get(label) {
                 let child_node = child_node.clone();
                 drop(read_current_node_children);
                 current_node = child_node;
@@ -188,9 +186,8 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels.skip(1).rev().skip(1) {
-            let lowercase_label = label.as_lowercase().into_case_insensitive_owned();
             let read_children = parent_node.children.read().await;
-            if let Some(child_node) = read_children.get(&lowercase_label) {
+            if let Some(child_node) = read_children.get(label) {
                 let next_parent_node = child_node.clone();
                 drop(read_children);
                 parent_node = next_parent_node;
@@ -201,16 +198,16 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         }
 
         let last_label = match qname.case_insensitive_labels().next() {
-            Some(last_label) => last_label.as_lowercase().into_case_insensitive_owned(),
+            Some(last_label) => last_label,
             None => return Err(AsyncTreeCacheError::InconsistentState(format!("Could not determine the last label in the qname '{qname}'"))),
         };
         let mut write_children = parent_node.children.write().await;
-        let result = write_children.remove(&last_label);
+        let result = write_children.remove(last_label);
         drop(write_children);
         return Ok(result);
     }
 
-    async fn get_subdomains(node: Arc<TreeNode<Records>>) -> HashSet<Vec<CaseInsensitiveOwnedLabel>> {
+    async fn get_subdomains(node: Arc<TreeNode<Records>>) -> HashSet<Vec<CaseInsensitiveLabel>> {
         let read_node_children = node.children.read().await;
         let node_children = read_node_children.clone();
         drop(read_node_children);
@@ -248,7 +245,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                 let mut write_domains = domains.lock().await;
                 write_domains.extend(
                     subdomain_names.into_iter()
-                        .map(|mut subdomain_name| {subdomain_name.push(CaseInsensitiveOwnedLabel::new_root()); subdomain_name})
+                        .map(|mut subdomain_name| {subdomain_name.push(CaseInsensitiveLabel::new_root()); subdomain_name})
                         .filter_map(|domain_name| match CDomainName::from_owned_labels(domain_name) {
                             Ok(domain_name) => Some(domain_name),
                             Err(_) => None,

@@ -4,7 +4,7 @@ use tinyvec::{tiny_vec, ArrayVec, TinyVec};
 
 use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, ParseError}}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{constants::ASCII_PERIOD, AsciiError, AsciiString}};
 
-use super::{ascii::AsciiChar, domain_name::DomainName, label::{CaseInsensitiveRefLabel, CaseSensitiveOwnedLabel, CaseSensitiveRefLabel, Label, LabelOwned, LabelRef}};
+use super::{ascii::AsciiChar, domain_name::DomainName, label::{CaseInsensitiveLabelRef, CaseSensitiveLabel, CaseSensitiveLabelRef, Label, OwnedLabel}};
 
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -32,7 +32,7 @@ impl Display for CDomainNameError {
             Self::EmptyString =>       write!(f, "Domain Cannot Be Empty: domain name must have at least one byte"),
             Self::Fqdn =>              write!(f, "Domain Must Be Fully Qualified: indicates that a domain name does not have a closing dot"),
             Self::LongDomain =>        write!(f, "Domain Name Exceeded {} Wire-Format Octets", CDomainName::MAX_OCTETS),
-            Self::LongLabel =>         write!(f, "Label Exceeded {} Wire-Format Octets", CaseSensitiveOwnedLabel::MAX_OCTETS),
+            Self::LongLabel =>         write!(f, "Label Exceeded {} Wire-Format Octets", CaseSensitiveLabel::MAX_OCTETS),
             Self::LeadingDot =>        write!(f, "Bad Leading Dot: domain name must not begin with a '.' except for in the root zone"),
             Self::ConsecutiveDots =>   write!(f, "Two Consecutive Dots: domain name must not contain two consecutive dots '..' unless one of them is escaped"),
             Self::InternalRootLabel => write!(f, "Internal Root Label: domain name must not a root label unless it is the last label"),
@@ -185,7 +185,7 @@ impl CDomainName {
 
                     // TODO: Can we optimize this check? It might be able to do once per label as
                     // long as we still check against the maximum number of octets every time.
-                    if octets[length_octet_index] > CaseSensitiveOwnedLabel::MAX_OCTETS {
+                    if octets[length_octet_index] > CaseSensitiveLabel::MAX_OCTETS {
                         return Err(CDomainNameError::LongLabel);
                     }
 
@@ -213,7 +213,7 @@ impl CDomainName {
     }
 
     #[inline]
-    pub fn from_ref_labels<'a, T: LabelRef<'a>>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
+    pub fn from_labels<'a, T: Label>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
         if labels.is_empty() {
             return Err(CDomainNameError::EmptyString);
         }
@@ -226,14 +226,14 @@ impl CDomainName {
         for label in labels {
             let length_octet = label.len() as u8;
             octets.push(length_octet);
-            octets.extend(label.into_octets());
+            octets.extend(label.octets());
             length_octets.push(length_octet);
         }
         Ok(Self { octets, length_octets })
     }
 
     #[inline]
-    pub fn from_owned_labels<T: LabelOwned>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
+    pub fn from_owned_labels<T: OwnedLabel>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
         if labels.is_empty() {
             return Err(CDomainNameError::EmptyString);
         }
@@ -370,13 +370,13 @@ impl CDomainName {
     }
 
     #[inline]
-    pub fn case_sensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = CaseSensitiveRefLabel<'a>> + ExactSizeIterator<Item = CaseSensitiveRefLabel<'a>> {
+    pub fn case_sensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = &'a CaseSensitiveLabelRef> + ExactSizeIterator<Item = &'a CaseSensitiveLabelRef> {
         CDomainCaseSensitiveLabelIter::new(self)
     }
 
     #[inline]
-    pub fn case_insensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = CaseInsensitiveRefLabel<'a>> + ExactSizeIterator<Item = CaseInsensitiveRefLabel<'a>> {
-        self.case_sensitive_labels().map(|label| label.into_case_insensitive())
+    pub fn case_insensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = &'a CaseInsensitiveLabelRef> + ExactSizeIterator<Item = &'a CaseInsensitiveLabelRef> {
+        self.case_sensitive_labels().map(|label| label.as_case_insensitive())
     }
 
     #[inline]
@@ -406,12 +406,12 @@ impl<'a> CDomainCaseSensitiveLabelIter<'a> {
 }
 
 impl<'a> Iterator for CDomainCaseSensitiveLabelIter<'a> {
-    type Item = CaseSensitiveRefLabel<'a>;
+    type Item = &'a CaseSensitiveLabelRef;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.next_length_index < self.last_length_index {
             let length = self.name.length_octets[self.next_length_index as usize];
-            let label = CaseSensitiveRefLabel { octets: &self.name.octets[((self.next_octet_index as usize) + 1)..((self.next_octet_index as usize) + 1 + (length as usize))] };
+            let label = CaseSensitiveLabelRef::from_octets(&self.name.octets[((self.next_octet_index as usize) + 1)..((self.next_octet_index as usize) + 1 + (length as usize))]);
             self.next_octet_index += length + 1;
             self.next_length_index += 1;
             return Some(label);
@@ -430,7 +430,7 @@ impl<'a> DoubleEndedIterator for CDomainCaseSensitiveLabelIter<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.next_length_index < self.last_length_index {
             let length = self.name.length_octets[(self.last_length_index as usize) - 1];
-            let label = CaseSensitiveRefLabel { octets: &self.name.octets[((self.last_octet_index as usize) - (length as usize))..(self.last_octet_index as usize)] };
+            let label = CaseSensitiveLabelRef::from_octets(&self.name.octets[((self.last_octet_index as usize) - (length as usize))..(self.last_octet_index as usize)]);
             self.last_octet_index -= length + 1;
             self.last_length_index -= 1;
             return Some(label);
@@ -745,7 +745,7 @@ impl CompressionMap {
 mod circular_serde_sanity_test {
     use tinyvec::TinyVec;
 
-    use crate::{serde::wire::{circular_test::gen_test_circular_serde_sanity_test, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}, types::{ascii::AsciiString, c_domain_name::CDomainName, label::{CaseSensitiveOwnedLabel, Label}}};
+    use crate::{serde::wire::{circular_test::gen_test_circular_serde_sanity_test, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}, types::{ascii::AsciiString, c_domain_name::CDomainName, label::{CaseSensitiveLabel, Label}}};
 
 
     gen_test_circular_serde_sanity_test!(
@@ -780,8 +780,8 @@ mod circular_serde_sanity_test {
         ];
         for (domain, expected_labels) in domain_label_pairs {
             let domain_name = CDomainName::from_utf8(domain).unwrap();
-            let expected_labels = expected_labels.into_iter().map(|label| CaseSensitiveOwnedLabel { octets: TinyVec::from(AsciiString::from_utf8(label).unwrap().as_slice()) }).collect::<Vec<_>>();
-            let actual_labels = domain_name.case_sensitive_labels().map(|label| label.as_case_sensitive_owned()).collect::<Vec<_>>();
+            let expected_labels = expected_labels.into_iter().map(|label| CaseSensitiveLabel::from_octets(TinyVec::from(AsciiString::from_utf8(label).unwrap().as_slice()))).collect::<Vec<_>>();
+            let actual_labels = domain_name.case_sensitive_labels().map(|label| label.as_owned_case_sensitive()).collect::<Vec<_>>();
             assert_eq!(expected_labels, actual_labels);
         }
     }

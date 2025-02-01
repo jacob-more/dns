@@ -1,4 +1,4 @@
-use std::{fmt::{Debug, Display}, hash::{Hash, Hasher}};
+use std::{borrow::Borrow, fmt::{Debug, Display}, hash::{Hash, Hasher}, ops::Deref};
 
 use tinyvec::{tiny_vec, TinyVec};
 
@@ -7,7 +7,29 @@ use crate::{serde::presentation::parse_chars::{char_token::EscapableChar, non_es
 use super::ascii::constants::ASCII_PERIOD;
 
 
-pub trait Label: Hash + PartialEq + Eq {
+#[derive(Clone)]
+pub struct CaseSensitiveLabel {
+    // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
+    octets: TinyVec<[AsciiChar; 14]>,
+}
+
+#[derive(Clone)]
+pub struct CaseInsensitiveLabel {
+    // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
+    octets: TinyVec<[AsciiChar; 14]>,
+}
+
+#[repr(transparent)]
+pub struct CaseSensitiveLabelRef {
+    octets: [AsciiChar]
+}
+
+#[repr(transparent)]
+pub struct CaseInsensitiveLabelRef {
+    octets: [AsciiChar]
+}
+
+pub trait Label {
     const MAX_OCTETS: u8 = 63;
     const MIN_OCTETS: u8 = 0;
 
@@ -24,37 +46,23 @@ pub trait Label: Hash + PartialEq + Eq {
     }
 
     #[inline]
-    fn as_case_insensitive_owned(&self) -> CaseInsensitiveOwnedLabel {
-        CaseInsensitiveOwnedLabel { octets: self.octets().into() }
+    fn as_owned_case_sensitive(&self) -> CaseSensitiveLabel {
+        CaseSensitiveLabel::from_octets(self.octets().into())
     }
 
     #[inline]
-    fn as_case_sensitive_owned(&self) -> CaseSensitiveOwnedLabel {
-        CaseSensitiveOwnedLabel { octets: self.octets().into() }
+    fn as_owned_case_insensitive(&self) -> CaseInsensitiveLabel {
+        CaseInsensitiveLabel::from_octets(self.octets().into())
     }
 
     #[inline]
-    fn as_case_insensitive(&self) -> CaseInsensitiveRefLabel {
-        CaseInsensitiveRefLabel { octets: &self.octets() }
+    fn as_case_sensitive(&self) -> &CaseSensitiveLabelRef {
+        CaseSensitiveLabelRef::from_octets(self.octets())
     }
 
     #[inline]
-    fn as_case_sensitive(&self) -> CaseSensitiveRefLabel {
-        CaseSensitiveRefLabel { octets: &self.octets() }
-    }
-
-    #[inline]
-    fn as_lowercase(&self) -> CaseSensitiveOwnedLabel {
-        let mut octets = TinyVec::from(self.octets());
-        octets.make_ascii_lowercase();
-        CaseSensitiveOwnedLabel { octets }
-    }
-
-    #[inline]
-    fn as_uppercase(&self) -> CaseSensitiveOwnedLabel {
-        let mut octets = TinyVec::from(self.octets());
-        octets.make_ascii_uppercase();
-        CaseSensitiveOwnedLabel { octets }
+    fn as_case_insensitive(&self) -> &CaseInsensitiveLabelRef {
+        CaseInsensitiveLabelRef::from_octets(self.octets())
     }
 
     #[inline]
@@ -68,76 +76,155 @@ pub trait Label: Hash + PartialEq + Eq {
     }
 }
 
-pub trait LabelRef<'a>: Label + Sized {
-    fn into_octets(self) -> &'a [AsciiChar];
-
-    #[inline]
-    fn into_case_insensitive(self) -> CaseInsensitiveRefLabel<'a> {
-        CaseInsensitiveRefLabel { octets: self.into_octets() }
-    }
-
-    #[inline]
-    fn into_case_sensitive(self) -> CaseSensitiveRefLabel<'a> {
-        CaseSensitiveRefLabel { octets: self.into_octets() }
-    }
-}
-
-pub trait LabelOwned: Label + Sized {
+pub trait OwnedLabel: Label {
     fn into_octets(self) -> TinyVec<[AsciiChar; 14]>;
+}
 
+impl Label for CaseSensitiveLabel {
     #[inline]
-    fn into_case_insensitive_owned(self) -> CaseInsensitiveOwnedLabel {
-        CaseInsensitiveOwnedLabel { octets: self.into_octets() }
-    }
-
-    #[inline]
-    fn into_case_sensitive_owned(self) -> CaseSensitiveOwnedLabel {
-        CaseSensitiveOwnedLabel { octets: self.into_octets() }
-    }
-}
-
-#[inline]
-fn hash_case_insensitive<H: Hasher>(label: &impl Label, state: &mut H) {
-    let octets = label.octets();
-    octets.len().hash(state);
-    for character in octets {
-        character.to_ascii_lowercase().hash(state);
-    }
-}
-
-#[inline]
-fn hash_case_sensitive<H: Hasher>(label: &impl Label, state: &mut H) {
-    label.octets().hash(state);
-}
-
-#[inline]
-fn eq_case_insensitive(l1: &impl Label, l2: &impl Label) -> bool {
-    l1.octets().eq_ignore_ascii_case(l2.octets())
-}
-
-#[inline]
-fn eq_case_sensitive(l1: &impl Label, l2: &impl Label) -> bool {
-    l1.octets().eq(l2.octets())
-}
-
-#[derive(Clone, Default)]
-pub struct CaseSensitiveRefLabel<'a> {
-    pub(super) octets: &'a [AsciiChar],
-}
-
-impl<'a> Label for CaseSensitiveRefLabel<'a> {
     fn octets(&self) -> &[AsciiChar] {
         &self.octets
     }
 }
 
-impl<'a> LabelRef<'a> for CaseSensitiveRefLabel<'a> {
-    fn into_octets(self) -> &'a [AsciiChar] {
+impl Label for CaseInsensitiveLabel {
+    #[inline]
+    fn octets(&self) -> &[AsciiChar] {
         &self.octets
     }
 }
 
-impl<'a> Display for CaseSensitiveRefLabel<'a> {
+impl Label for CaseSensitiveLabelRef {
+    #[inline]
+    fn octets(&self) -> &[AsciiChar] {
+        &self.octets
+    }
+}
+
+impl Label for CaseInsensitiveLabelRef {
+    #[inline]
+    fn octets(&self) -> &[AsciiChar] {
+        &self.octets
+    }
+}
+
+impl Label for &CaseSensitiveLabel {
+    #[inline]
+    fn octets(&self) -> &[AsciiChar] {
+        &self.octets
+    }
+}
+
+impl Label for &CaseInsensitiveLabel {
+    #[inline]
+    fn octets(&self) -> &[AsciiChar] {
+        &self.octets
+    }
+}
+
+impl Label for &CaseSensitiveLabelRef {
+    #[inline]
+    fn octets(&self) -> &[AsciiChar] {
+        &self.octets
+    }
+}
+
+impl Label for &CaseInsensitiveLabelRef {
+    #[inline]
+    fn octets(&self) -> &[AsciiChar] {
+        &self.octets
+    }
+}
+
+impl OwnedLabel for CaseSensitiveLabel {
+    #[inline]
+    fn into_octets(self) -> TinyVec<[AsciiChar; 14]> {
+        self.octets
+    }
+}
+
+impl OwnedLabel for CaseInsensitiveLabel {
+    #[inline]
+    fn into_octets(self) -> TinyVec<[AsciiChar; 14]> {
+        self.octets
+    }
+}
+
+impl Deref for CaseSensitiveLabel {
+    type Target = CaseSensitiveLabelRef;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_case_sensitive()
+    }
+}
+
+impl Deref for CaseInsensitiveLabel {
+    type Target = CaseInsensitiveLabelRef;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_case_insensitive()
+    }
+}
+
+impl AsRef<CaseSensitiveLabelRef> for CaseSensitiveLabel {
+    #[inline]
+    fn as_ref(&self) -> &CaseSensitiveLabelRef {
+        &self
+    }
+}
+
+impl AsRef<CaseInsensitiveLabelRef> for CaseInsensitiveLabel {
+    #[inline]
+    fn as_ref(&self) -> &CaseInsensitiveLabelRef {
+        &self
+    }
+}
+
+impl AsRef<CaseSensitiveLabelRef> for CaseSensitiveLabelRef {
+    #[inline]
+    fn as_ref(&self) -> &CaseSensitiveLabelRef {
+        &self
+    }
+}
+
+impl AsRef<CaseInsensitiveLabelRef> for CaseInsensitiveLabelRef {
+    #[inline]
+    fn as_ref(&self) -> &CaseInsensitiveLabelRef {
+        &self
+    }
+}
+
+impl Borrow<CaseSensitiveLabelRef> for CaseSensitiveLabel {
+    #[inline]
+    fn borrow(&self) -> &CaseSensitiveLabelRef {
+        &self
+    }
+}
+
+impl Borrow<CaseInsensitiveLabelRef> for CaseInsensitiveLabel {
+    #[inline]
+    fn borrow(&self) -> &CaseInsensitiveLabelRef {
+        &self
+    }
+}
+
+impl Display for CaseSensitiveLabel {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_case_sensitive())
+    }
+}
+
+impl Display for CaseInsensitiveLabel {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_case_sensitive())
+    }
+}
+
+impl Display for CaseSensitiveLabelRef {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for character in self.iter_escaped() {
@@ -147,166 +234,173 @@ impl<'a> Display for CaseSensitiveRefLabel<'a> {
     }
 }
 
-impl<'a> Debug for CaseSensitiveRefLabel<'a> {
+impl Display for CaseInsensitiveLabelRef {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CaseSensitiveRefLabel: {self}")
+        write!(f, "{}", self.as_case_sensitive())
     }
 }
 
-impl<'a> Eq for CaseSensitiveRefLabel<'a> {}
-impl<'a> PartialEq for CaseSensitiveRefLabel<'a> {
+impl Debug for CaseSensitiveLabel {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CaseSensitiveLabel: {self}")
+    }
+}
+
+impl Debug for CaseInsensitiveLabel {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CaseInsensitiveLabel: {self}")
+    }
+}
+
+impl Debug for CaseSensitiveLabelRef {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CaseSensitiveLabelRef: {self}")
+    }
+}
+
+impl Debug for CaseInsensitiveLabelRef {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CaseInsensitiveLabelRef: {self}")
+    }
+}
+
+#[inline]
+fn hash_case_insensitive<L: Label + ?Sized, H: Hasher>(label: &L, state: &mut H) {
+    let octets = label.octets();
+    octets.len().hash(state);
+    for character in octets {
+        character.to_ascii_lowercase().hash(state);
+    }
+}
+
+#[inline]
+fn hash_case_sensitive<L: Label + ?Sized, H: Hasher>(label: &L, state: &mut H) {
+    label.octets().hash(state);
+}
+
+#[inline]
+fn eq_case_insensitive<L1: Label + ?Sized, L2: Label + ?Sized>(l1: &L1, l2: &L2) -> bool {
+    l1.octets().eq_ignore_ascii_case(l2.octets())
+}
+
+#[inline]
+fn eq_case_sensitive<L1: Label + ?Sized, L2: Label + ?Sized>(l1: &L1, l2: &L2) -> bool {
+    l1.octets().eq(l2.octets())
+}
+
+impl Eq for CaseSensitiveLabel {}
+impl<T: Label> PartialEq<T> for CaseSensitiveLabel {
+    #[inline]
+    fn eq(&self, other: &T) -> bool {
+        self.as_ref().eq(other)
+    }
+}
+impl Hash for CaseSensitiveLabel {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_ref().hash(state)
+    }
+}
+
+impl Eq for CaseInsensitiveLabel {}
+impl<T: Label> PartialEq<T> for CaseInsensitiveLabel {
+    #[inline]
+    fn eq(&self, other: &T) -> bool {
+        self.as_ref().eq(other)
+    }
+}
+impl Hash for CaseInsensitiveLabel {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_ref().hash(state)
+    }
+}
+
+impl Eq for CaseSensitiveLabelRef {}
+impl PartialEq for CaseSensitiveLabelRef {
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         eq_case_sensitive(self, other)
     }
 }
-impl<'a> Hash for CaseSensitiveRefLabel<'a> {
+impl<T: Label> PartialEq<T> for CaseSensitiveLabelRef {
+    #[inline]
+    fn eq(&self, other: &T) -> bool {
+        eq_case_sensitive(self, other)
+    }
+}
+impl Hash for CaseSensitiveLabelRef {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         hash_case_sensitive(self, state)
     }
 }
 
-#[derive(Clone, Default)]
-pub struct CaseInsensitiveRefLabel<'a> {
-    pub(super) octets: &'a [u8],
-}
-
-impl<'a> Label for CaseInsensitiveRefLabel<'a> {
-    fn octets(&self) -> &[AsciiChar] {
-        &self.octets
-    }
-}
-
-impl<'a> LabelRef<'a> for CaseInsensitiveRefLabel<'a> {
-    fn into_octets(self) -> &'a [AsciiChar] {
-        &self.octets
-    }
-}
-
-impl<'a> Display for CaseInsensitiveRefLabel<'a> {
+impl Eq for CaseInsensitiveLabelRef {}
+impl PartialEq for CaseInsensitiveLabelRef {
     #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_case_sensitive())
-    }
-}
-
-impl<'a> Debug for CaseInsensitiveRefLabel<'a> {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CaseInsensitiveRefLabel: {self}")
-    }
-}
-
-impl<'a> Eq for CaseInsensitiveRefLabel<'a> {}
-impl<'a> PartialEq for CaseInsensitiveRefLabel<'a> {
     fn eq(&self, other: &Self) -> bool {
         eq_case_insensitive(self, other)
     }
 }
-impl<'a> Hash for CaseInsensitiveRefLabel<'a> {
+impl<T: Label> PartialEq<T> for CaseInsensitiveLabelRef {
+    #[inline]
+    fn eq(&self, other: &T) -> bool {
+        eq_case_insensitive(self, other)
+    }
+}
+impl Hash for CaseInsensitiveLabelRef {
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         hash_case_insensitive(self, state)
     }
 }
 
-#[derive(Clone, Default)]
-pub struct CaseSensitiveOwnedLabel {
-    // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
-    pub(super) octets: TinyVec<[u8; 14]>,
-}
-
-impl CaseSensitiveOwnedLabel {
-    #[inline]
+impl CaseSensitiveLabel {
     pub fn new_root() -> Self {
         Self { octets: tiny_vec![] }
     }
-}
 
-impl Label for CaseSensitiveOwnedLabel {
-    fn octets(&self) -> &[AsciiChar] {
-        &self.octets
+    pub(super) fn from_octets(octets: TinyVec<[AsciiChar; 14]>) -> Self {
+        CaseSensitiveLabel { octets }
     }
 }
 
-impl LabelOwned for CaseSensitiveOwnedLabel {
-    fn into_octets(self) -> TinyVec<[AsciiChar; 14]> {
-        self.octets
-    }
-}
-
-impl Display for CaseSensitiveOwnedLabel {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_case_sensitive())
-    }
-}
-
-impl Debug for CaseSensitiveOwnedLabel {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CaseSensitiveOwnedLabel: {self}")
-    }
-}
-
-impl Eq for CaseSensitiveOwnedLabel {}
-impl PartialEq for CaseSensitiveOwnedLabel {
-    fn eq(&self, other: &Self) -> bool {
-        eq_case_sensitive(self, other)
-    }
-}
-impl Hash for CaseSensitiveOwnedLabel {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_case_sensitive(self, state)
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct CaseInsensitiveOwnedLabel {
-    // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
-    pub(super) octets: TinyVec<[u8; 14]>,
-}
-
-impl CaseInsensitiveOwnedLabel {
-    #[inline]
+impl CaseInsensitiveLabel {
     pub fn new_root() -> Self {
         Self { octets: tiny_vec![] }
     }
-}
 
-impl Label for CaseInsensitiveOwnedLabel {
-    fn octets(&self) -> &[AsciiChar] {
-        &self.octets
+    pub(super) fn from_octets(octets: TinyVec<[AsciiChar; 14]>) -> Self {
+        CaseInsensitiveLabel { octets }
     }
 }
 
-impl LabelOwned for CaseInsensitiveOwnedLabel {
-    fn into_octets(self) -> TinyVec<[AsciiChar; 14]> {
-        self.octets
+static ROOT_LABEL: &'static [AsciiChar] = &[];
+
+// TODO: The unsafe blocks for the ref labels are based on code in the standard library. Need to go through and make sure I am upholding the safety guarantees in this particular case.
+
+impl CaseSensitiveLabelRef {
+    pub fn new_root() -> &'static Self {
+        Self::from_octets(&ROOT_LABEL)
+    }
+
+    pub(super) fn from_octets(octets: &[AsciiChar]) -> &Self {
+        unsafe { &*(octets as *const [AsciiChar] as *const CaseSensitiveLabelRef) }
     }
 }
 
-impl Display for CaseInsensitiveOwnedLabel {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_case_sensitive())
+impl CaseInsensitiveLabelRef {
+    pub fn new_root() -> &'static Self {
+        Self::from_octets(&ROOT_LABEL)
     }
-}
 
-impl Debug for CaseInsensitiveOwnedLabel {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CaseInsensitiveOwnedLabel: {self}")
-    }
-}
-
-impl Eq for CaseInsensitiveOwnedLabel {}
-impl PartialEq for CaseInsensitiveOwnedLabel {
-    fn eq(&self, other: &Self) -> bool {
-        eq_case_insensitive(self, other)
-    }
-}
-impl Hash for CaseInsensitiveOwnedLabel {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_case_insensitive(self, state)
+    pub(super) fn from_octets(octets: &[AsciiChar]) -> &Self {
+        unsafe { &*(octets as *const [AsciiChar] as *const CaseInsensitiveLabelRef) }
     }
 }

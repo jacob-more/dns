@@ -4,7 +4,7 @@ use dns_macros::ToPresentation;
 
 use crate::serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
 
-use super::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, CmpDomainName}, label::{CaseInsensitiveRefLabel, CaseSensitiveRefLabel, LabelOwned, LabelRef}};
+use super::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, CmpDomainName}, label::{CaseInsensitiveLabelRef, CaseSensitiveLabelRef, Label, OwnedLabel}};
 
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -51,12 +51,12 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn from_ref_labels<'a, T: LabelRef<'a>>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
-        Ok(Self { domain_name: CDomainName::from_ref_labels(labels)? })
+    pub fn from_labels<'a, T: Label>(labels: Vec<T>) -> Result<Self, DomainNameError> {
+        Ok(Self { domain_name: CDomainName::from_labels(labels)? })
     }
 
     #[inline]
-    pub fn from_owned_labels<T: LabelOwned>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
+    pub fn from_owned_labels<T: OwnedLabel>(labels: Vec<T>) -> Result<Self, DomainNameError> {
         Ok(Self { domain_name: CDomainName::from_owned_labels(labels)? })
     }
 
@@ -111,12 +111,12 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn case_sensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = CaseSensitiveRefLabel<'a>> + ExactSizeIterator<Item = CaseSensitiveRefLabel<'a>> {
+    pub fn case_sensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = &'a CaseSensitiveLabelRef> + ExactSizeIterator<Item = &'a CaseSensitiveLabelRef> {
         self.domain_name.case_sensitive_labels()
     }
 
     #[inline]
-    pub fn case_insensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = CaseInsensitiveRefLabel<'a>> + ExactSizeIterator<Item = CaseInsensitiveRefLabel<'a>> {
+    pub fn case_insensitive_labels<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = &'a CaseInsensitiveLabelRef> + ExactSizeIterator<Item = &'a CaseInsensitiveLabelRef> {
         self.domain_name.case_insensitive_labels()
     }
 

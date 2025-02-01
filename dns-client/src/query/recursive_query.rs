@@ -214,7 +214,7 @@ async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
                     qname: context.qname().clone()
                 }.into();
             }
-            let dname = CDomainName::from_ref_labels(
+            let dname = CDomainName::from_labels(
                 context.qname()
                     .case_sensitive_labels()
                     .take(record.get_name().label_count())
