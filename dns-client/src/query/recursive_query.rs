@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use dns_lib::{interface::{cache::{cache::AsyncCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{resource_record::{RecordData, ResourceRecord}, rtype::RType, types::ns::NS}, types::c_domain_name::{CDomainName, CmpDomainName}};
+use dns_lib::{interface::{cache::{cache::AsyncCache, CacheQuery, CacheResponse}, client::Context}, query::question::Question, resource_record::{resource_record::{RecordData, ResourceRecord}, rtype::RType, types::ns::NS}, types::{c_domain_name::{CDomainName, CmpDomainName}, label::CaseSensitive}};
 use log::{debug, trace};
 use rand::{thread_rng, seq::SliceRandom};
 
@@ -216,9 +216,9 @@ async fn handle_dname<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCa
             }
             let dname = CDomainName::from_labels(
                 context.qname()
-                    .case_sensitive_labels()
+                    .labels::<CaseSensitive>()
                     .take(record.get_name().label_count())
-                    .chain(dname_rdata.target_name().case_sensitive_labels())
+                    .chain(dname_rdata.target_name().labels())
                     .collect()
             );
 

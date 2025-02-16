@@ -1,6 +1,6 @@
 use std::{collections::{hash_map::Entry, HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitiveLabel, Label}}};
+use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitive, Label, OwnedLabel}}};
 use futures::StreamExt;
 use tokio::sync::{Mutex, RwLock};
 
@@ -24,7 +24,7 @@ pub struct AsyncTreeCache<Records> {
     root_nodes: RwLock<HashMap<RClass, Arc<TreeNode<Records>>>>
 }
 
-type ChildNodes<Records> = RwLock<HashMap<CaseInsensitiveLabel, Arc<TreeNode<Records>>>>;
+type ChildNodes<Records> = RwLock<HashMap<OwnedLabel<CaseInsensitive>, Arc<TreeNode<Records>>>>;
 pub type MappedRecords<Records> = RwLock<HashMap<RType, Records>>;
 
 #[derive(Debug)]
@@ -83,7 +83,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().case_insensitive_labels().rev().skip(1) {
+        for label in question.qname().labels().rev().skip(1) {
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
             let read_current_node_children = current_node.children.read().await;
@@ -98,7 +98,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                     let mut write_current_node_children = current_node.children.write().await;
                     // Need to check again since the read lock was dropped before the write lock was
                     // obtained. The state could have changed in that time.
-                    match write_current_node_children.entry(label.as_owned_case_insensitive()) {
+                    match write_current_node_children.entry(label.as_owned()) {
                         Entry::Occupied(entry) => {
                             let child_node = entry.get().clone();
                             drop(write_current_node_children);
@@ -141,7 +141,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().case_insensitive_labels().rev().skip(1) {
+        for label in question.qname().labels().rev().skip(1) {
             let read_current_node_children = current_node.children.read().await;
             if let Some(child_node) = read_current_node_children.get(label) {
                 let child_node = child_node.clone();
@@ -182,7 +182,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
             return Ok(None);
         }
 
-        let qlabels = qname.case_insensitive_labels();
+        let qlabels = qname.labels();
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels.skip(1).rev().skip(1) {
@@ -197,7 +197,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
             }
         }
 
-        let last_label = match qname.case_insensitive_labels().next() {
+        let last_label = match qname.labels().next() {
             Some(last_label) => last_label,
             None => return Err(AsyncTreeCacheError::InconsistentState(format!("Could not determine the last label in the qname '{qname}'"))),
         };
@@ -207,7 +207,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         return Ok(result);
     }
 
-    async fn get_subdomains(node: Arc<TreeNode<Records>>) -> HashSet<Vec<CaseInsensitiveLabel>> {
+    async fn get_subdomains(node: Arc<TreeNode<Records>>) -> HashSet<Vec<OwnedLabel<CaseInsensitive>>> {
         let read_node_children = node.children.read().await;
         let node_children = read_node_children.clone();
         drop(read_node_children);
@@ -245,7 +245,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                 let mut write_domains = domains.lock().await;
                 write_domains.extend(
                     subdomain_names.into_iter()
-                        .map(|mut subdomain_name| {subdomain_name.push(CaseInsensitiveLabel::new_root()); subdomain_name})
+                        .map(|mut subdomain_name| {subdomain_name.push(OwnedLabel::new_root()); subdomain_name})
                         .filter_map(|domain_name| match CDomainName::from_owned_labels(domain_name) {
                             Ok(domain_name) => Some(domain_name),
                             Err(_) => None,
