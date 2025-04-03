@@ -300,3 +300,12 @@ ux_to_token_impl!(i127);
 std_to_token_impl!(Ipv4Addr);
 std_to_token_impl!(Ipv6Addr);
 std_to_token_impl!(MacAddress);
+
+impl<T: ToPresentation> ToPresentation for Vec<T> {
+    #[inline]
+    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
+        for x in self {
+            x.to_presentation_format(out_buffer);
+        }
+    }
+}

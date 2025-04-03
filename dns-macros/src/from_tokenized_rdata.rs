@@ -12,37 +12,15 @@ pub fn impl_from_tokenized_rdata_macro(ast: &DeriveInput) -> proc_macro::TokenSt
 
 fn impl_from_tokenized_rdata_struct_macro(data: &DataStruct, ast: &DeriveInput) -> proc_macro::TokenStream {
     let name = &ast.ident;
-
-    let mut from_token_calls = quote!{};
-    let mut pattern_match = quote!{};
-    let mut ignored_pattern_match = quote!{};
-    let mut struct_declaration_builder = quote!{};
     let field_count = data.fields.len();
-    for field in data.fields.iter() {
-        let field_name = &field.ident;
-        let field_type = &field.ty;
+    let pattern_match = data.fields.iter().map(|f| &f.ident);
+    let ignored_pattern_match = data.fields.iter().map(|_| quote! { _ });
+    let field_name = data.fields.iter().map(|f| &f.ident);
+    let field_type = data.fields.iter().map(|f| &f.ty);
 
-        pattern_match.extend(quote! {
-            #field_name,
-        });
-
-        ignored_pattern_match.extend(quote! {
-            _,
-        });
-
-        from_token_calls.extend(quote! {
-            let (#field_name, _) = <#field_type as crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(&[#field_name])?;
-        });
-
-        struct_declaration_builder.extend(quote!(
-            #field_name: #field_name,
-        ))
-    }
-
-    let gen;
-    if struct_declaration_builder.is_empty() {
+    if data.fields.is_empty() {
         // Case 1: Struct has no fields.
-        gen = quote! {
+        quote! {
             impl crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData for #name {
                 #[inline]
                 fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
@@ -52,26 +30,24 @@ fn impl_from_tokenized_rdata_struct_macro(data: &DataStruct, ast: &DeriveInput) 
                     }
                 }
             }
-        };
+        }.into()
     } else {
         // Case 2: Struct has 1+ fields.
-        gen = quote! {
+        quote! {
             impl crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData for #name {
                 #[inline]
                 fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
                     match rdata.as_slice() {
-                        &[#pattern_match] => {
-                            #from_token_calls
+                        &[ #( #pattern_match),* ] => {
                             Ok(Self {
-                                #struct_declaration_builder
+                                #( #field_name: <#field_type as crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(&[#field_name])?.0 ),*
                             })
                         },
-                        &[#ignored_pattern_match ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: #field_count, received: rdata.len()}),
+                        &[ #( #ignored_pattern_match, )* ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: #field_count, received: rdata.len()}),
                         &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: #field_count, received: rdata.len()}),
                     }
                 }
             }
-        };
+        }.into()
     }
-    gen.into()
 }
