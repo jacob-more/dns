@@ -243,10 +243,10 @@ impl PartialEq<RefLabel<CaseInsensitive>> for RefLabel<CaseInsensitive> {
     }
 }
 
-impl<C: CaseSensitivity> Hash for OwnedLabel<C> {
+impl<C: CaseSensitivity> Hash for OwnedLabel<C> where <OwnedLabel<C> as Deref>::Target: Hash {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (&self).hash(state)
+        self.deref().hash(state);
     }
 }
 impl Hash for RefLabel<CaseInsensitive> {
