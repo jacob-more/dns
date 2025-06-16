@@ -8,4 +8,4 @@ members = [
     "dns-client",
     "dns-experimental",
 ]
-resolver = "2"
+resolver = "3"

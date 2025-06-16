@@ -404,6 +404,11 @@ impl AsciiString {
     }
 
     #[inline]
+    pub fn into_vec(self) -> Vec<AsciiChar> {
+        self.string.into_vec()
+    }
+
+    #[inline]
     pub fn as_lowercase(&self) -> Self {
         let mut string = self.string.clone();
         string.make_ascii_lowercase();

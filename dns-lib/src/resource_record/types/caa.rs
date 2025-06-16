@@ -136,7 +136,7 @@ impl FromTokenizedRData for CAA {
                     return Err(TokenizedRecordError::ValueError("Expected CAA tag to contain only ASCII characters a-z (lowercase only) and 0-9".to_string()));
                 }
 
-                let value = AsciiString::from_token_format(&[value])?.0.to_vec();
+                let value = AsciiString::from_token_format(&[value])?.0.into_vec();
 
                 Ok(Self { flags, tag, value })
             },
@@ -178,10 +178,10 @@ mod circular_serde_sanity_test {
     );
 
     lazy_static!(
-        static ref OK_VALUE: Vec<u8> = AsciiString::from_utf8("shortvalue123SHORTVALUE").unwrap().to_vec();
-        static ref OK_VALUE_EMPTY: Vec<u8> = AsciiString::from_utf8("").unwrap().to_vec();
-        static ref OK_VALUE_LONGER_THAN_255: Vec<u8> = AsciiString::from_utf8(&repeat('a').take(256).collect::<String>()).unwrap().to_vec();
-        static ref OK_VALUE_NON_ALPHANUMERIC: Vec<u8> = AsciiString::from_utf8("has a space").unwrap().to_vec();
+        static ref OK_VALUE: Vec<u8> = AsciiString::from_utf8("shortvalue123SHORTVALUE").unwrap().into_vec();
+        static ref OK_VALUE_EMPTY: Vec<u8> = AsciiString::from_utf8("").unwrap().into_vec();
+        static ref OK_VALUE_LONGER_THAN_255: Vec<u8> = AsciiString::from_utf8(&repeat('a').take(256).collect::<String>()).unwrap().into_vec();
+        static ref OK_VALUE_NON_ALPHANUMERIC: Vec<u8> = AsciiString::from_utf8("has a space").unwrap().into_vec();
     );
 
     gen_test_circular_serde_sanity_test!(
@@ -277,10 +277,10 @@ mod tokenizer_tests {
         static ref STR_OK_VALUE_LONGER_THAN_255: String = repeat('a').take(256).collect::<String>();
         static ref STR_OK_VALUE_NON_ALPHANUMERIC: &'static str = "has a space";
 
-        static ref OK_VALUE: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE).unwrap().to_vec();
-        static ref OK_VALUE_EMPTY: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE_EMPTY).unwrap().to_vec();
-        static ref OK_VALUE_LONGER_THAN_255: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE_LONGER_THAN_255).unwrap().to_vec();
-        static ref OK_VALUE_NON_ALPHANUMERIC: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE_NON_ALPHANUMERIC).unwrap().to_vec();
+        static ref OK_VALUE: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE).unwrap().into_vec();
+        static ref OK_VALUE_EMPTY: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE_EMPTY).unwrap().into_vec();
+        static ref OK_VALUE_LONGER_THAN_255: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE_LONGER_THAN_255).unwrap().into_vec();
+        static ref OK_VALUE_NON_ALPHANUMERIC: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE_NON_ALPHANUMERIC).unwrap().into_vec();
     );
 
     // VARIOUS FLAGS, VARIOUS TAGS, OK VALUE

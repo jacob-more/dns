@@ -1,7 +1,7 @@
 [package]
 name = "dns-experimental"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 description = """
 A place to test ideas and verify that current implementations are working as intended.
@@ -19,4 +19,4 @@ dns-server = { path = "../dns-server" }
 env_logger = "0.11"
 futures = "0.3"
 rustls = "0.23"
-tokio = { version = "1.43", features = ["full", "tracing"] }
+tokio = { version = "1.45", features = ["full", "tracing"] }

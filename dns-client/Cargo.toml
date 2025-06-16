@@ -1,7 +1,7 @@
 [package]
 name = "dns-client"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,15 +13,15 @@ dns-cache = { path = "../dns-cache" }
 async-recursion = "1.1"
 async-trait = "0.1"
 atomic = { version = "0.6", features = ["std"] }
-bytemuck = { version = "1.21", features = ["derive"]}
+bytemuck = { version = "1.23", features = ["derive"]}
 futures = "0.3"
 log = { version = "0.4", features = ["std", "kv"] }
 pin-project = "1.1"
 quinn = "0.11"
 rand = "0.8"
 rustls = "0.23"
-tokio = { version = "1.43", features = ["full"] }
+tokio = { version = "1.45", features = ["full"] }
 tokio-rustls = "0.26"
-tinyvec = { version = "1.8", features = ["alloc"] }
+tinyvec = { version = "1.9", features = ["alloc"] }
 ux = "0.1"
 webpki-roots = "0.26"
