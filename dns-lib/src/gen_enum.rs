@@ -303,7 +303,14 @@ macro_rules! impl_enum_to_wire {
     ($enum_name:ident, $int_ty:ty) => {
         impl $crate::serde::wire::to_wire::ToWire for $enum_name {
             #[inline]
-            fn to_wire_format<'a, 'b>(&self, wire: &'b mut $crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<$crate::types::c_domain_name::CompressionMap>) -> std::result::Result<(), $crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+            fn to_wire_format<'a, 'b>(
+                &self,
+                wire: &'b mut $crate::serde::wire::write_wire::WriteWire<'a>,
+                compression: &mut Option<$crate::types::c_domain_name::CompressionMap>,
+            ) -> std::result::Result<(), $crate::serde::wire::write_wire::WriteWireError>
+            where
+                'a: 'b,
+            {
                 self.code().to_wire_format(wire, compression)
             }
 
@@ -319,10 +326,14 @@ macro_rules! impl_enum_from_wire {
     ($enum_name:ident, $int_ty:ty) => {
         impl $crate::serde::wire::from_wire::FromWire for $enum_name {
             #[inline]
-            fn from_wire_format<'a, 'b>(wire: &'b mut $crate::serde::wire::read_wire::ReadWire<'a>) -> std::result::Result<Self, $crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
-                std::result::Result::Ok(Self::from_code(
-                    <$int_ty>::from_wire_format(wire)?
-                ))
+            fn from_wire_format<'a, 'b>(
+                wire: &'b mut $crate::serde::wire::read_wire::ReadWire<'a>,
+            ) -> std::result::Result<Self, $crate::serde::wire::read_wire::ReadWireError>
+            where
+                Self: Sized,
+                'a: 'b,
+            {
+                std::result::Result::Ok(Self::from_code(<$int_ty>::from_wire_format(wire)?))
             }
         }
     };
@@ -351,7 +362,18 @@ macro_rules! impl_enum_from_presentation {
     ($enum_name:ident, $int_ty:ty, code_presentation) => {
         impl $crate::serde::presentation::from_presentation::FromPresentation for $enum_name {
             #[inline]
-            fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> std::result::Result<(Self, &'d [&'a str]), $crate::serde::presentation::errors::TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+            fn from_token_format<'a, 'b, 'c, 'd>(
+                tokens: &'c [&'a str],
+            ) -> std::result::Result<
+                (Self, &'d [&'a str]),
+                $crate::serde::presentation::errors::TokenError,
+            >
+            where
+                Self: Sized,
+                'a: 'b,
+                'c: 'd,
+                'c: 'd,
+            {
                 let (code, tokens) = <$int_ty>::from_token_format(tokens)?;
                 std::result::Result::Ok((Self::from_code(code), tokens))
             }
@@ -360,9 +382,22 @@ macro_rules! impl_enum_from_presentation {
     ($enum_name:ident, $int_ty:ty, mnemonic_presentation) => {
         impl $crate::serde::presentation::from_presentation::FromPresentation for $enum_name {
             #[inline]
-            fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> std::result::Result<(Self, &'d [&'a str]), $crate::serde::presentation::errors::TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+            fn from_token_format<'a, 'b, 'c, 'd>(
+                tokens: &'c [&'a str],
+            ) -> std::result::Result<
+                (Self, &'d [&'a str]),
+                $crate::serde::presentation::errors::TokenError,
+            >
+            where
+                Self: Sized,
+                'a: 'b,
+                'c: 'd,
+                'c: 'd,
+            {
                 match tokens {
-                    &[] => std::result::Result::Err($crate::serde::presentation::errors::TokenError::OutOfTokens),
+                    &[] => std::result::Result::Err(
+                        $crate::serde::presentation::errors::TokenError::OutOfTokens,
+                    ),
                     &[token, ..] => std::result::Result::Ok((Self::from_str(token)?, &tokens[1..])),
                 }
             }
@@ -372,16 +407,16 @@ macro_rules! impl_enum_from_presentation {
 
 pub(crate) use enum_encoding;
 pub(crate) use gen_enum;
+pub(crate) use impl_enum_cmp;
 pub(crate) use impl_enum_code;
-pub(crate) use impl_enum_from_code;
-pub(crate) use impl_enum_mnemonic;
-pub(crate) use impl_enum_mnemonic_into_string;
 pub(crate) use impl_enum_display;
+pub(crate) use impl_enum_from_code;
+pub(crate) use impl_enum_from_presentation;
 pub(crate) use impl_enum_from_str;
 pub(crate) use impl_enum_from_string;
-pub(crate) use impl_enum_cmp;
-pub(crate) use impl_enum_hash;
-pub(crate) use impl_enum_to_wire;
 pub(crate) use impl_enum_from_wire;
+pub(crate) use impl_enum_hash;
+pub(crate) use impl_enum_mnemonic;
+pub(crate) use impl_enum_mnemonic_into_string;
 pub(crate) use impl_enum_to_presentation;
-pub(crate) use impl_enum_from_presentation;
+pub(crate) use impl_enum_to_wire;

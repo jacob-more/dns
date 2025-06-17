@@ -1,6 +1,15 @@
-use std::{ops::{Deref, DerefMut}, time::Instant};
+use std::{
+    ops::{Deref, DerefMut},
+    time::Instant,
+};
 
-use crate::{query::question::Question, resource_record::{rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType}, types::c_domain_name::CDomainName};
+use crate::{
+    query::question::Question,
+    resource_record::{
+        rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType,
+    },
+    types::c_domain_name::CDomainName,
+};
 
 pub mod cache;
 
@@ -17,13 +26,19 @@ pub struct CacheQuery<'a> {
 
 impl<'a> CacheQuery<'a> {
     #[inline]
-    pub const fn qname(&self) -> &CDomainName { &self.question.qname() }
+    pub const fn qname(&self) -> &CDomainName {
+        &self.question.qname()
+    }
 
     #[inline]
-    pub const fn qtype(&self) -> RType { self.question.qtype() }
+    pub const fn qtype(&self) -> RType {
+        self.question.qtype()
+    }
 
     #[inline]
-    pub const fn qclass(&self) -> RClass { self.question.qclass() }
+    pub const fn qclass(&self) -> RClass {
+        self.question.qclass()
+    }
 }
 
 #[derive(Clone, PartialEq, Hash, Debug)]

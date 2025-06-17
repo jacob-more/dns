@@ -1,13 +1,17 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::{resource_record::{dnssec_alg::DnsSecAlgorithm, rtype::RType, time::Time}, types::{base64::Base64, domain_name::DomainName}};
-
+use crate::{
+    resource_record::{dnssec_alg::DnsSecAlgorithm, rtype::RType, time::Time},
+    types::{base64::Base64, domain_name::DomainName},
+};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc4034#section-3
 /// (Update) https://datatracker.ietf.org/doc/html/rfc3225
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6840
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6944
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
+#[derive(
+    Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData,
+)]
 pub struct RRSIG {
     type_covered: RType,
     algorithm: DnsSecAlgorithm,
@@ -20,10 +24,13 @@ pub struct RRSIG {
     signature: Base64,
 }
 
-
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::{resource_record::{dnssec_alg::DnsSecAlgorithm, rtype::RType, time::Time}, serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::{base64::Base64, domain_name::DomainName}};
+    use crate::{
+        resource_record::{dnssec_alg::DnsSecAlgorithm, rtype::RType, time::Time},
+        serde::wire::circular_test::gen_test_circular_serde_sanity_test,
+        types::{base64::Base64, domain_name::DomainName},
+    };
 
     use super::RRSIG;
 

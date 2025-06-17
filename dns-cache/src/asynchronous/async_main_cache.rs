@@ -1,36 +1,51 @@
-use std::{collections::{hash_map::Entry, HashSet}, time::Instant};
+use std::{
+    collections::{HashSet, hash_map::Entry},
+    time::Instant,
+};
 
 use async_trait::async_trait;
-use dns_lib::{interface::cache::{main_cache::AsyncMainCache, CacheQuery, CacheRecord, CacheResponse}, query::question::Question, resource_record::{rcode::RCode, rtype::RType}, types::c_domain_name::CDomainName};
+use dns_lib::{
+    interface::cache::{CacheQuery, CacheRecord, CacheResponse, main_cache::AsyncMainCache},
+    query::question::Question,
+    resource_record::{rcode::RCode, rtype::RType},
+    types::c_domain_name::CDomainName,
+};
 
 use super::async_tree_cache::{AsyncTreeCache, AsyncTreeCacheError};
 
 pub struct AsyncMainTreeCache {
-    cache: AsyncTreeCache<Vec<CacheRecord>>
+    cache: AsyncTreeCache<Vec<CacheRecord>>,
 }
 
 impl AsyncMainTreeCache {
     #[inline]
     pub fn new() -> Self {
-        Self { cache: AsyncTreeCache::new() }
+        Self {
+            cache: AsyncTreeCache::new(),
+        }
     }
 
     #[inline]
-    async fn get_records(&self, query: &CacheQuery<'_>) -> Result<Vec<CacheRecord>, AsyncTreeCacheError> {
+    async fn get_records(
+        &self,
+        query: &CacheQuery<'_>,
+    ) -> Result<Vec<CacheRecord>, AsyncTreeCacheError> {
         match query.qtype() {
             RType::ANY => {
                 if let Some(node) = self.cache.get_node(&query.question).await? {
                     let read_records = node.records.read().await;
                     let result;
                     if query.authoritative {
-                        result = read_records.values()
+                        result = read_records
+                            .values()
                             .flatten()
                             .filter(|record| record.is_authoritative())
                             .filter(|record| !record.is_expired())
                             .map(|cache_record| cache_record.clone())
                             .collect();
                     } else {
-                        result = read_records.values()
+                        result = read_records
+                            .values()
                             .flatten()
                             .filter(|record| !record.is_expired())
                             .map(|cache_record| cache_record.clone())
@@ -39,20 +54,22 @@ impl AsyncMainTreeCache {
                     drop(read_records);
                     return Ok(result);
                 }
-            },
+            }
             _ => {
                 if let Some(node) = self.cache.get_node(&query.question).await? {
                     let read_records = node.records.read().await;
                     if let Some(records) = read_records.get(&query.qtype()) {
                         let result;
                         if query.authoritative {
-                            result = records.iter()
+                            result = records
+                                .iter()
                                 .filter(|record| record.is_authoritative())
                                 .filter(|record| !record.is_expired())
                                 .map(|cache_record| cache_record.clone())
                                 .collect();
                         } else {
-                            result = records.iter()
+                            result = records
+                                .iter()
                                 .filter(|record| !record.is_expired())
                                 .map(|cache_record| cache_record.clone())
                                 .collect();
@@ -62,18 +79,22 @@ impl AsyncMainTreeCache {
                     }
                     drop(read_records);
                 }
-            },
+            }
         }
 
         return Ok(vec![]);
     }
 
     #[inline]
-    async fn insert_record(&self, record: CacheRecord, received_time: Instant) -> Result<(), AsyncTreeCacheError> {
+    async fn insert_record(
+        &self,
+        record: CacheRecord,
+        received_time: Instant,
+    ) -> Result<(), AsyncTreeCacheError> {
         let question = Question::new(
             record.get_name().clone(),
             record.get_rtype(),
-            record.get_rclass()
+            record.get_rclass(),
         );
         let node = self.cache.get_or_create_node(&question).await?;
         let mut write_records = node.records.write().await;
@@ -93,21 +114,23 @@ impl AsyncMainTreeCache {
                             (true, true) => {
                                 cached_record.set_ttl(*record.get_ttl());
                                 cached_record.meta.insertion_time = received_time;
-                            },
+                            }
                             (false, false) => {
                                 cached_record.set_ttl(*record.get_ttl());
                                 cached_record.meta.insertion_time = received_time;
-                            },
+                            }
                             // Non-authoritative records can be replaced with authoritative versions.
                             (true, false) => {
                                 *cached_record = record.clone();
                                 cached_record.meta.insertion_time = received_time;
-                            },
+                            }
                             // Authoritative records cannot be updated by non-authoritative versions.
                             (false, true) => (),
                         }
                     }
-                    if cached_record.meta.insertion_time.elapsed().as_secs() >= cached_record.get_ttl().as_secs() as u64 {
+                    if cached_record.meta.insertion_time.elapsed().as_secs()
+                        >= cached_record.get_ttl().as_secs() as u64
+                    {
                         indexes_to_remove.push(index);
                     }
                 }
@@ -124,16 +147,18 @@ impl AsyncMainTreeCache {
                 if !record_matched {
                     cached_records.push(record);
                 }
-            },
+            }
             Entry::Vacant(entry) => {
                 entry.insert(vec![record]);
-            },
+            }
         }
         drop(write_records);
         Ok(())
     }
 
-    pub async fn get_domains(&self) -> HashSet<CDomainName> { self.cache.get_domains().await }
+    pub async fn get_domains(&self) -> HashSet<CDomainName> {
+        self.cache.get_domains().await
+    }
 }
 
 #[async_trait]

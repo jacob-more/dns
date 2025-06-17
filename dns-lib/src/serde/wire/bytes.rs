@@ -1,12 +1,25 @@
-use std::{ops::{Bound, RangeBounds}, rc::Rc};
+use std::{
+    ops::{Bound, RangeBounds},
+    rc::Rc,
+};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum InternalBytes {
     Empty,
     Vec(Rc<Vec<u8>>),
-    Front { data: Rc<Vec<u8>>, end: usize },
-    Tail { data: Rc<Vec<u8>>, start: usize },
-    Slice { data: Rc<Vec<u8>>, start: usize, end: usize },
+    Front {
+        data: Rc<Vec<u8>>,
+        end: usize,
+    },
+    Tail {
+        data: Rc<Vec<u8>>,
+        start: usize,
+    },
+    Slice {
+        data: Rc<Vec<u8>>,
+        start: usize,
+        end: usize,
+    },
 }
 
 impl InternalBytes {
@@ -18,7 +31,11 @@ impl InternalBytes {
             Self::Vec(bytes) => bytes.len(),
             Self::Front { data: _, end } => *end,
             Self::Tail { data, start } => data.len() - start,
-            Self::Slice { data: _, start, end } => end - start,
+            Self::Slice {
+                data: _,
+                start,
+                end,
+            } => end - start,
         }
     }
 
@@ -43,65 +60,131 @@ impl InternalBytes {
     fn split_at_checked(&self, at: usize) -> Option<(Self, Self)> {
         let len = self.len();
         match (at, &self) {
-            (0,   Self::Empty) => Some((Self::Empty, Self::Empty)),
+            (0, Self::Empty) => Some((Self::Empty, Self::Empty)),
             (1.., Self::Empty) => None,
 
-            (0,   Self::Vec(bytes)) => Some((Self::Empty, Self::Vec(bytes.clone()))),
+            (0, Self::Vec(bytes)) => Some((Self::Empty, Self::Vec(bytes.clone()))),
             (1.., Self::Vec(bytes)) => {
                 if at == len {
                     Some((self.clone(), Self::Empty))
                 } else if at < len {
                     Some((
-                        Self::Front { data: bytes.clone(), end: at },
-                        Self::Tail { data: bytes.clone(), start: at },
+                        Self::Front {
+                            data: bytes.clone(),
+                            end: at,
+                        },
+                        Self::Tail {
+                            data: bytes.clone(),
+                            start: at,
+                        },
                     ))
                 } else {
                     None
                 }
-            },
+            }
 
-            (0,   Self::Front { data, end }) => Some((Self::Empty, Self::Front { data: data.clone(), end: *end })),
+            (0, Self::Front { data, end }) => Some((
+                Self::Empty,
+                Self::Front {
+                    data: data.clone(),
+                    end: *end,
+                },
+            )),
             (1.., Self::Front { data, end }) => {
                 if at == len {
-                    Some((Self::Front { data: data.clone(), end: *end }, Self::Empty))
+                    Some((
+                        Self::Front {
+                            data: data.clone(),
+                            end: *end,
+                        },
+                        Self::Empty,
+                    ))
                 } else if at < len {
                     Some((
-                        Self::Front { data: data.clone(), end: at },
-                        Self::Slice { data: data.clone(), start: at, end: *end },
+                        Self::Front {
+                            data: data.clone(),
+                            end: at,
+                        },
+                        Self::Slice {
+                            data: data.clone(),
+                            start: at,
+                            end: *end,
+                        },
                     ))
                 } else {
                     None
                 }
-            },
+            }
 
-            (0,   Self::Tail { data, start }) => Some((Self::Empty, Self::Tail { data: data.clone(), start: *start })),
+            (0, Self::Tail { data, start }) => Some((
+                Self::Empty,
+                Self::Tail {
+                    data: data.clone(),
+                    start: *start,
+                },
+            )),
             (1.., Self::Tail { data, start }) => {
                 if at == len {
-                    Some((Self::Tail { data: data.clone(), start: *start }, Self::Empty))
+                    Some((
+                        Self::Tail {
+                            data: data.clone(),
+                            start: *start,
+                        },
+                        Self::Empty,
+                    ))
                 } else if at < len {
                     Some((
-                        Self::Slice { data: data.clone(), start: *start, end: start + at },
-                        Self::Tail { data: data.clone(), start: start + at },
+                        Self::Slice {
+                            data: data.clone(),
+                            start: *start,
+                            end: start + at,
+                        },
+                        Self::Tail {
+                            data: data.clone(),
+                            start: start + at,
+                        },
                     ))
                 } else {
                     None
                 }
-            },
+            }
 
-            (0,   Self::Slice { data, start, end }) => Some((Self::Empty, Self::Slice { data: data.clone(), start: *start, end: *end })),
+            (0, Self::Slice { data, start, end }) => Some((
+                Self::Empty,
+                Self::Slice {
+                    data: data.clone(),
+                    start: *start,
+                    end: *end,
+                },
+            )),
             (1.., Self::Slice { data, start, end }) => {
                 if at == len {
-                    Some((Self::Slice { data: data.clone(), start: *start, end: *end }, Self::Empty))
+                    Some((
+                        Self::Slice {
+                            data: data.clone(),
+                            start: *start,
+                            end: *end,
+                        },
+                        Self::Empty,
+                    ))
                 } else if at < len {
                     let mid = start + at;
                     Some((
-                        Self::Slice { data: data.clone(), start: *start, end: mid },
-                        Self::Slice { data: data.clone(), start: mid, end: *end },
+                        Self::Slice {
+                            data: data.clone(),
+                            start: *start,
+                            end: mid,
+                        },
+                        Self::Slice {
+                            data: data.clone(),
+                            start: mid,
+                            end: *end,
+                        },
                     ))
                 } else {
                     None
                 }
-            },
+            }
         }
     }
 
@@ -126,7 +209,10 @@ impl InternalBytes {
             Bound::Unbounded => self.len(),
         };
         if end < start {
-            panic!("range start must not be greater than end: {:?} <= {:?}", start, end);
+            panic!(
+                "range start must not be greater than end: {:?} <= {:?}",
+                start, end
+            );
         }
         if len < end {
             panic!("range end out of bounds: {:?} <= {:?}", end, len);
@@ -144,28 +230,63 @@ impl InternalBytes {
             Self::Empty => Self::Empty,
             Self::Vec(bytes) => {
                 if start == 0 {
-                    Self::Front { data: bytes.clone(), end }
+                    Self::Front {
+                        data: bytes.clone(),
+                        end,
+                    }
                 } else if end == len {
-                    Self::Tail { data: bytes.clone(), start: start }
+                    Self::Tail {
+                        data: bytes.clone(),
+                        start: start,
+                    }
                 } else {
-                    Self::Slice { data: bytes.clone(), start, end }
+                    Self::Slice {
+                        data: bytes.clone(),
+                        start,
+                        end,
+                    }
                 }
-            },
-            Self::Front { data, end: _} => {
+            }
+            Self::Front { data, end: _ } => {
                 if start == 0 {
-                    Self::Front { data: data.clone(), end }
+                    Self::Front {
+                        data: data.clone(),
+                        end,
+                    }
                 } else {
-                    Self::Slice { data: data.clone(), start, end }
+                    Self::Slice {
+                        data: data.clone(),
+                        start,
+                        end,
+                    }
                 }
-            },
-            Self::Tail { data, start: tail_start } => {
+            }
+            Self::Tail {
+                data,
+                start: tail_start,
+            } => {
                 if end == len {
-                    Self::Tail { data: data.clone(), start: tail_start + start }
+                    Self::Tail {
+                        data: data.clone(),
+                        start: tail_start + start,
+                    }
                 } else {
-                    Self::Slice { data: data.clone(), start: tail_start + start, end: tail_start + end }
+                    Self::Slice {
+                        data: data.clone(),
+                        start: tail_start + start,
+                        end: tail_start + end,
+                    }
                 }
+            }
+            Self::Slice {
+                data,
+                start: vstart,
+                end: _,
+            } => Self::Slice {
+                data: data.clone(),
+                start: vstart + start,
+                end: vstart + end,
             },
-            Self::Slice { data, start: vstart, end: _ } => Self::Slice { data: data.clone(), start: vstart + start, end: vstart + end },
         }
     }
 
@@ -184,17 +305,21 @@ impl InternalBytes {
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Bytes {
-    bytes: InternalBytes
+    bytes: InternalBytes,
 }
 
 impl Bytes {
     /// Returns the number of bytes contained in `self`.
     #[inline]
-    pub fn len(&self) -> usize { self.bytes.len() }
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
 
     /// Returns `true` if `self` has a length of 0. Returns 'false' otherwise.
     #[inline]
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Splits the bytes at the index, returning the two halves. The first `Bytes` will contain
     /// elements from `[0, at)`. The second `Bytes` will contain elements from `[0, at)`.
@@ -245,7 +370,9 @@ impl Bytes {
 
     /// Gets the byte at the index 'at' or `None` if the index is out of bounds.
     #[inline]
-    pub fn get(&self, at: usize) -> Option<u8> { self.bytes.get(at) }
+    pub fn get(&self, at: usize) -> Option<u8> {
+        self.bytes.get(at)
+    }
 
     /// Gets the byte at the index 'at' or `None`.
     ///
@@ -262,7 +389,9 @@ impl Bytes {
 
     /// Gets the first byte or `None` if `self` is empty (`self.is_empty()`).
     #[inline]
-    pub fn first(&self) -> Option<u8> { self.get(0) }
+    pub fn first(&self) -> Option<u8> {
+        self.get(0)
+    }
 
     /// Gets the first byte.
     ///
@@ -270,11 +399,15 @@ impl Bytes {
     ///
     /// Panics if `self.is_empty()`.
     #[inline]
-    pub fn first_unchecked(&self) -> u8 { self.get_unchecked(0) }
+    pub fn first_unchecked(&self) -> u8 {
+        self.get_unchecked(0)
+    }
 
     /// Gets the last byte or `None` if `self` is empty (`self.is_empty()`).
     #[inline]
-    pub fn last(&self) -> Option<u8> { self.get(self.len() - 1) }
+    pub fn last(&self) -> Option<u8> {
+        self.get(self.len() - 1)
+    }
 
     /// Gets the last byte.
     ///
@@ -282,28 +415,42 @@ impl Bytes {
     ///
     /// Panics if `self.is_empty()`.
     #[inline]
-    pub fn last_unchecked(&self) -> u8 { self.get_unchecked(self.len() - 1) }
+    pub fn last_unchecked(&self) -> u8 {
+        self.get_unchecked(self.len() - 1)
+    }
 
     /// Gets a slice of `self` for the given range.
     #[inline]
-    pub fn slice(&self, range: impl RangeBounds<usize>) -> Self { Self { bytes: self.bytes.slice(range) } }
+    pub fn slice(&self, range: impl RangeBounds<usize>) -> Self {
+        Self {
+            bytes: self.bytes.slice(range),
+        }
+    }
 
     /// Returns `self` as a slice of type `&[u8]`.
     #[inline]
-    pub fn as_slice(&self) -> &[u8] { self.bytes.as_slice() }
+    pub fn as_slice(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
 
     /// Returns `self` as a vector of type `Vec<u8>`.
     #[inline]
-    pub fn to_vec(&self) -> Vec<u8> { self.as_slice().to_vec() }
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.as_slice().to_vec()
+    }
 }
 
 impl From<Rc<Vec<u8>>> for Bytes {
     #[inline]
     fn from(value: Rc<Vec<u8>>) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(value) }
+            Self {
+                bytes: InternalBytes::Vec(value),
+            }
         }
     }
 }
@@ -312,9 +459,13 @@ impl From<&Rc<Vec<u8>>> for Bytes {
     #[inline]
     fn from(value: &Rc<Vec<u8>>) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(value.clone()) }
+            Self {
+                bytes: InternalBytes::Vec(value.clone()),
+            }
         }
     }
 }
@@ -323,9 +474,13 @@ impl From<Vec<u8>> for Bytes {
     #[inline]
     fn from(value: Vec<u8>) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value)) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value)),
+            }
         }
     }
 }
@@ -334,9 +489,13 @@ impl From<&Vec<u8>> for Bytes {
     #[inline]
     fn from(value: &Vec<u8>) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.clone())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.clone())),
+            }
         }
     }
 }
@@ -345,9 +504,13 @@ impl From<Vec<&u8>> for Bytes {
     #[inline]
     fn from(value: Vec<&u8>) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())),
+            }
         }
     }
 }
@@ -356,9 +519,13 @@ impl From<&Vec<&u8>> for Bytes {
     #[inline]
     fn from(value: &Vec<&u8>) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())),
+            }
         }
     }
 }
@@ -367,9 +534,13 @@ impl From<&[u8]> for Bytes {
     #[inline]
     fn from(value: &[u8]) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.to_vec())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.to_vec())),
+            }
         }
     }
 }
@@ -378,9 +549,13 @@ impl From<&[&u8]> for Bytes {
     #[inline]
     fn from(value: &[&u8]) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())),
+            }
         }
     }
 }
@@ -389,9 +564,13 @@ impl<const N: usize> From<&[u8; N]> for Bytes {
     #[inline]
     fn from(value: &[u8; N]) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.to_vec())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.to_vec())),
+            }
         }
     }
 }
@@ -400,9 +579,13 @@ impl<const N: usize> From<&[&u8; N]> for Bytes {
     #[inline]
     fn from(value: &[&u8; N]) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())),
+            }
         }
     }
 }
@@ -411,9 +594,13 @@ impl<const N: usize> From<[u8; N]> for Bytes {
     #[inline]
     fn from(value: [u8; N]) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.to_vec())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.to_vec())),
+            }
         }
     }
 }
@@ -422,9 +609,13 @@ impl<const N: usize> From<[&u8; N]> for Bytes {
     #[inline]
     fn from(value: [&u8; N]) -> Self {
         if value.len() == 0 {
-            Self { bytes: InternalBytes::Empty }
+            Self {
+                bytes: InternalBytes::Empty,
+            }
         } else {
-            Self { bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())) }
+            Self {
+                bytes: InternalBytes::Vec(Rc::new(value.iter().map(|byte| **byte).collect())),
+            }
         }
     }
 }
@@ -447,31 +638,43 @@ mod test_bytes_spits {
 
     use super::{Bytes, InternalBytes};
 
-    fn new_rc_vec(data: &[u8]) -> Rc<Vec<u8>> { Rc::new(Vec::from(data)) }
+    fn new_rc_vec(data: &[u8]) -> Rc<Vec<u8>> {
+        Rc::new(Vec::from(data))
+    }
     fn new_empty() -> Bytes {
-        Bytes { bytes: InternalBytes::Empty }
+        Bytes {
+            bytes: InternalBytes::Empty,
+        }
     }
     fn new_vec(data: &[u8]) -> Bytes {
-        Bytes { bytes: InternalBytes::Vec(new_rc_vec(data)) }
+        Bytes {
+            bytes: InternalBytes::Vec(new_rc_vec(data)),
+        }
     }
     fn new_front(data: &[u8], end: usize) -> Bytes {
-        Bytes { bytes: InternalBytes::Front {
-            data: new_rc_vec(data),
-            end
-        } }
+        Bytes {
+            bytes: InternalBytes::Front {
+                data: new_rc_vec(data),
+                end,
+            },
+        }
     }
     fn new_tail(data: &[u8], start: usize) -> Bytes {
-        Bytes { bytes: InternalBytes::Tail {
-            data: new_rc_vec(data),
-            start
-        } }
+        Bytes {
+            bytes: InternalBytes::Tail {
+                data: new_rc_vec(data),
+                start,
+            },
+        }
     }
     fn new_slice(data: &[u8], start: usize, end: usize) -> Bytes {
-        Bytes { bytes: InternalBytes::Slice {
-            data: new_rc_vec(data),
-            start,
-            end
-        } }
+        Bytes {
+            bytes: InternalBytes::Slice {
+                data: new_rc_vec(data),
+                start,
+                end,
+            },
+        }
     }
 
     macro_rules! ok_split_test {
@@ -493,14 +696,19 @@ mod test_bytes_spits {
                 assert_eq!(left.len() + right.len(), init_data.len());
 
                 // Verify that the indexes all line up.
-                for (index, value) in expected_left.as_slice().iter().chain(expected_right.as_slice().iter()).enumerate() {
+                for (index, value) in expected_left
+                    .as_slice()
+                    .iter()
+                    .chain(expected_right.as_slice().iter())
+                    .enumerate()
+                {
                     let result = init_data.get(index);
                     assert!(result.is_some());
                     let result = result.unwrap();
                     assert_eq!(result, *value);
                 }
             }
-        }
+        };
     }
 
     macro_rules! err_split_test {
@@ -512,21 +720,11 @@ mod test_bytes_spits {
                 let result = init_data.split_at_checked($split_at);
                 assert!(result.is_none());
             }
-        }
+        };
     }
 
-    ok_split_test!(
-        empty_split_at_0,
-        new_empty(),
-        0,
-        new_empty(),
-        new_empty()
-    );
-    err_split_test!(
-        empty_split_at_1,
-        new_empty(),
-        1
-    );
+    ok_split_test!(empty_split_at_0, new_empty(), 0, new_empty(), new_empty());
+    err_split_test!(empty_split_at_1, new_empty(), 1);
 
     ok_split_test!(
         vec_split_at_0,
@@ -556,11 +754,7 @@ mod test_bytes_spits {
         new_vec(&[0, 1, 2]),
         new_empty()
     );
-    err_split_test!(
-        vec_split_at_4,
-        new_vec(&[0, 1, 2]),
-        4
-    );
+    err_split_test!(vec_split_at_4, new_vec(&[0, 1, 2]), 4);
 
     ok_split_test!(
         front_split_at_0,
@@ -583,11 +777,7 @@ mod test_bytes_spits {
         new_front(&[0, 1, 2], 2),
         new_empty()
     );
-    err_split_test!(
-        front_split_at_3,
-        new_front(&[0, 1, 2], 2),
-        3
-    );
+    err_split_test!(front_split_at_3, new_front(&[0, 1, 2], 2), 3);
 
     ok_split_test!(
         tail_split_at_0,
@@ -610,11 +800,7 @@ mod test_bytes_spits {
         new_tail(&[0, 1, 2], 1),
         new_empty()
     );
-    err_split_test!(
-        tail_split_at_3,
-        new_tail(&[0, 1, 2], 1),
-        3
-    );
+    err_split_test!(tail_split_at_3, new_tail(&[0, 1, 2], 1), 3);
 
     ok_split_test!(
         slice_split_at_0,
@@ -644,11 +830,7 @@ mod test_bytes_spits {
         new_slice(&[0, 1, 2, 3, 4, 5], 1, 4),
         new_empty()
     );
-    err_split_test!(
-        slice_split_at_4,
-        new_slice(&[0, 1, 2, 3, 4, 5], 1, 4),
-        4
-    );
+    err_split_test!(slice_split_at_4, new_slice(&[0, 1, 2, 3, 4, 5], 1, 4), 4);
 
     macro_rules! ok_as_slice_test {
         ($test_name:ident, $init:expr, $slice:expr) => {
@@ -677,7 +859,7 @@ mod test_bytes_spits {
                 let result = init_data.get(len);
                 assert!(result.is_none());
             }
-        }
+        };
     }
 
     ok_as_slice_test! {
@@ -719,7 +901,7 @@ mod test_bytes_spits {
                 // Verify that the correct data is being represented.
                 assert_eq!(result.as_slice(), &init_data.as_slice()[$range])
             }
-        }
+        };
     }
 
     macro_rules! err_slice_test {
@@ -731,7 +913,7 @@ mod test_bytes_spits {
 
                 let _ = init_data.slice($range);
             }
-        }
+        };
     }
 
     ok_slice_test! {

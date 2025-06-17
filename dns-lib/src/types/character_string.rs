@@ -1,8 +1,28 @@
-use std::{error::Error, fmt::Display, iter::Rev, slice::{Iter, IterMut}};
+use std::{
+    error::Error,
+    fmt::Display,
+    iter::Rev,
+    slice::{Iter, IterMut},
+};
 
 use lazy_static::lazy_static;
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{constants::{ASCII_BACKSLASH, ASCII_CLOSE_PARENTHESIS, ASCII_OPEN_PARENTHESIS, ASCII_SEMICOLON, ASCII_SPACE}, AsciiChar, AsciiError, AsciiString}};
+use crate::{
+    serde::{
+        presentation::{
+            errors::TokenError, from_presentation::FromPresentation,
+            to_presentation::ToPresentation,
+        },
+        wire::{from_wire::FromWire, to_wire::ToWire},
+    },
+    types::ascii::{
+        AsciiChar, AsciiError, AsciiString,
+        constants::{
+            ASCII_BACKSLASH, ASCII_CLOSE_PARENTHESIS, ASCII_OPEN_PARENTHESIS, ASCII_SEMICOLON,
+            ASCII_SPACE,
+        },
+    },
+};
 
 use super::ascii::constants::ASCII_HORIZONTAL_TAB;
 
@@ -52,19 +72,19 @@ impl CharacterString {
             return Err(CharacterStringError::ExceededMaxString);
         }
 
-        Ok(Self { ascii: string, })
+        Ok(Self { ascii: string })
     }
 
     #[inline]
     pub fn new_empty() -> Self {
-        Self { ascii: AsciiString::new_empty() }
+        Self {
+            ascii: AsciiString::new_empty(),
+        }
     }
 
     #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, CharacterStringError> {
-        Self::new(
-            AsciiString::from_utf8(string)?
-        )
+        Self::new(AsciiString::from_utf8(string)?)
     }
 
     #[inline]
@@ -120,7 +140,11 @@ impl CharacterString {
     }
 
     #[inline]
-    pub fn insert(&mut self, index: usize, character: AsciiChar) -> Result<(), CharacterStringError> {
+    pub fn insert(
+        &mut self,
+        index: usize,
+        character: AsciiChar,
+    ) -> Result<(), CharacterStringError> {
         // Bound checking needs to be done to make sure it will still be
         // a legal character string.
         if self.ascii.len() + 1 > Self::MAX_OCTETS {
@@ -178,7 +202,9 @@ impl CharacterString {
 
     #[inline]
     pub fn as_lower(&self) -> Self {
-        Self { ascii: self.ascii.as_lowercase(), }
+        Self {
+            ascii: self.ascii.as_lowercase(),
+        }
     }
 
     #[inline]
@@ -188,7 +214,9 @@ impl CharacterString {
 
     #[inline]
     pub fn as_uppercase(&self) -> Self {
-        Self { ascii: self.ascii.as_uppercase(), }
+        Self {
+            ascii: self.ascii.as_uppercase(),
+        }
     }
 
     #[inline]
@@ -246,7 +274,14 @@ impl Display for CharacterString {
 
 impl ToWire for CharacterString {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(
+        &self,
+        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
+        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
+    where
+        'a: 'b,
+    {
         (self.ascii.len() as u8).to_wire_format(wire, compression)?;
         self.ascii.to_wire_format(wire, compression)
     }
@@ -260,20 +295,27 @@ impl ToWire for CharacterString {
 
 impl FromWire for CharacterString {
     #[inline]
-    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+    fn from_wire_format<'a, 'b>(
+        wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>,
+    ) -> Result<Self, crate::serde::wire::read_wire::ReadWireError>
+    where
+        Self: Sized,
+        'a: 'b,
+    {
         let length = u8::from_wire_format(wire)?;
 
         if (length as usize) > Self::MAX_OCTETS {
-            return Err(crate::serde::wire::read_wire::ReadWireError::OutOfBoundsError(
-                format!("character strings must be at most {} bytes (including the length byte)", Self::MAX_OCTETS + 1)
-            ));
+            return Err(
+                crate::serde::wire::read_wire::ReadWireError::OutOfBoundsError(format!(
+                    "character strings must be at most {} bytes (including the length byte)",
+                    Self::MAX_OCTETS + 1
+                )),
+            );
         }
 
         // Since the AsciiString deserializer will consume the entire buffer,
         // we only feed it the section we want it to read.
-        let string = AsciiString::from_wire_format(
-            &mut wire.take_as_read_wire(length as usize)?
-        )?;
+        let string = AsciiString::from_wire_format(&mut wire.take_as_read_wire(length as usize)?)?;
 
         Ok(Self { ascii: string })
     }
@@ -281,7 +323,15 @@ impl FromWire for CharacterString {
 
 impl FromPresentation for CharacterString {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+        'c: 'd,
+    {
         match tokens {
             &[] => Err(TokenError::OutOfTokens),
             &[token, ..] => Ok((Self::from_utf8(token)?, &tokens[1..])),
@@ -291,7 +341,7 @@ impl FromPresentation for CharacterString {
 
 impl ToPresentation for CharacterString {
     fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        lazy_static!{
+        lazy_static! {
             static ref AT_SIGN: AsciiString = AsciiString::from_utf8(r"@").unwrap();
         }
 
@@ -300,11 +350,18 @@ impl ToPresentation for CharacterString {
             return;
         }
 
-        let out_string = self.ascii.iter()
+        let out_string = self
+            .ascii
+            .iter()
             .flat_map(|character| match *character {
-                ASCII_SPACE | ASCII_HORIZONTAL_TAB | ASCII_SEMICOLON | ASCII_OPEN_PARENTHESIS | ASCII_CLOSE_PARENTHESIS => vec![ASCII_BACKSLASH as char, *character as char],
-                _ => vec![*character as char]
-            }).collect::<String>();
+                ASCII_SPACE
+                | ASCII_HORIZONTAL_TAB
+                | ASCII_SEMICOLON
+                | ASCII_OPEN_PARENTHESIS
+                | ASCII_CLOSE_PARENTHESIS => vec![ASCII_BACKSLASH as char, *character as char],
+                _ => vec![*character as char],
+            })
+            .collect::<String>();
 
         out_buffer.push(out_string)
     }
@@ -312,8 +369,8 @@ impl ToPresentation for CharacterString {
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
     use super::CharacterString;
+    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,

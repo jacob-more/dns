@@ -4,7 +4,10 @@ mod built_in_primitives_test {
         ($test_name:ident, $integer:ident, $integer_byte_count:ident) => {
             #[cfg(test)]
             mod $test_name {
-                use crate::serde::{wire::{from_wire::FromWire, read_wire::ReadWire}, const_byte_counts::*};
+                use crate::serde::{
+                    const_byte_counts::*,
+                    wire::{from_wire::FromWire, read_wire::ReadWire},
+                };
 
                 #[test]
                 fn per_byte_test() {
@@ -67,7 +70,7 @@ mod built_in_primitives_test {
                     assert!(read_wire.is_end_reached());
                 }
             }
-        }
+        };
     }
 
     test_int_from_wire!(from_wire_u8, u8, U8_BYTE_COUNT);
@@ -91,7 +94,10 @@ mod ux_primitives_test {
             mod $test_name {
                 use ux::$integer;
 
-                use crate::serde::{wire::{from_wire::FromWire, read_wire::ReadWire}, const_byte_counts::*};
+                use crate::serde::{
+                    const_byte_counts::*,
+                    wire::{from_wire::FromWire, read_wire::ReadWire},
+                };
 
                 #[test]
                 fn per_byte_test() {
@@ -154,7 +160,7 @@ mod ux_primitives_test {
                     assert!(read_wire.is_end_reached());
                 }
             }
-        }
+        };
     }
 
     macro_rules! test_ix_from_wire {
@@ -163,7 +169,10 @@ mod ux_primitives_test {
             mod $test_name {
                 use ux::$integer;
 
-                use crate::serde::{wire::{from_wire::FromWire, read_wire::ReadWire}, const_byte_counts::*};
+                use crate::serde::{
+                    const_byte_counts::*,
+                    wire::{from_wire::FromWire, read_wire::ReadWire},
+                };
 
                 #[test]
                 fn per_byte_test() {
@@ -228,7 +237,7 @@ mod ux_primitives_test {
                     assert!(read_wire.is_end_reached());
                 }
             }
-        }
+        };
     }
 
     test_ux_from_wire!(from_wire_u24, u24, U24_BYTE_COUNT, u32);

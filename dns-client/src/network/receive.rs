@@ -1,11 +1,15 @@
-use dns_lib::{query::message::Message, serde::wire::{from_wire::FromWire, read_wire::ReadWire}};
+use dns_lib::{
+    query::message::Message,
+    serde::wire::{from_wire::FromWire, read_wire::ReadWire},
+};
 use tokio::{io::AsyncReadExt, net::UdpSocket};
 
 use crate::network::errors::{self, SocketType};
 
-
 #[inline]
-pub async fn read_udp_message<const BUFFER_SIZE: usize>(udp_socket: &UdpSocket) -> Result<Message, errors::ReceiveError> {
+pub async fn read_udp_message<const BUFFER_SIZE: usize>(
+    udp_socket: &UdpSocket,
+) -> Result<Message, errors::ReceiveError> {
     debug_assert!(u16::MAX as usize >= BUFFER_SIZE);
 
     // Step 1: Setup buffer. Make sure it is within the configured size.
@@ -22,7 +26,7 @@ pub async fn read_udp_message<const BUFFER_SIZE: usize>(udp_socket: &UdpSocket) 
                 error: io_error,
             };
             return Err(receive_error);
-        },
+        }
     };
 
     // Step 3: Deserialize the Message received on UDP socket.
@@ -32,17 +36,20 @@ pub async fn read_udp_message<const BUFFER_SIZE: usize>(udp_socket: &UdpSocket) 
         Err(error) => {
             let receive_error = errors::ReceiveError::Deserialization {
                 protocol: errors::SocketType::Udp,
-                error
+                error,
             };
             return Err(receive_error);
-        },
+        }
     };
 
     return Ok(message);
 }
 
 #[inline]
-pub async fn read_stream_message<const BUFFER_SIZE: usize>(tcp_stream: &mut (impl AsyncReadExt + Unpin), protocol: SocketType) -> Result<Message, errors::ReceiveError> {
+pub async fn read_stream_message<const BUFFER_SIZE: usize>(
+    tcp_stream: &mut (impl AsyncReadExt + Unpin),
+    protocol: SocketType,
+) -> Result<Message, errors::ReceiveError> {
     debug_assert!(u16::MAX as usize >= BUFFER_SIZE);
 
     // Step 1: Deserialize the u16 representing the size of the rest of the data. This is the first
@@ -57,13 +64,13 @@ pub async fn read_stream_message<const BUFFER_SIZE: usize>(tcp_stream: &mut (imp
                     received: bytes_read,
                 });
             }
-        },
+        }
         Err(io_error) => {
             return Err(errors::ReceiveError::Io {
                 protocol: errors::SocketType::Tcp,
                 error: io_error.into(),
             });
-        },
+        }
     };
 
     let expected_message_size = u16::from_be_bytes(wire_size);
@@ -79,7 +86,10 @@ pub async fn read_stream_message<const BUFFER_SIZE: usize>(tcp_stream: &mut (imp
     // Note: It MUST be the size of the previous u16 (expected_message_size).
     let mut tcp_buffer = [0; BUFFER_SIZE];
     // TODO: bound tcp_buffer based on configuration
-    match tcp_stream.read_exact(&mut tcp_buffer[..expected_message_size as usize]).await {
+    match tcp_stream
+        .read_exact(&mut tcp_buffer[..expected_message_size as usize])
+        .await
+    {
         Ok(bytes_read) => {
             if bytes_read != (expected_message_size as usize) {
                 return Err(errors::ReceiveError::IncorrectNumberBytes {
@@ -88,13 +98,13 @@ pub async fn read_stream_message<const BUFFER_SIZE: usize>(tcp_stream: &mut (imp
                     received: bytes_read,
                 });
             }
-        },
+        }
         Err(io_error) => {
             return Err(errors::ReceiveError::Io {
                 protocol,
                 error: io_error.into(),
             });
-        },
+        }
     }
 
     // Step 3: Deserialize the Message from the buffer.

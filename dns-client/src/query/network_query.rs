@@ -1,15 +1,32 @@
 use std::{net::IpAddr, sync::Arc};
 
-use dns_lib::{interface::cache::cache::AsyncCache, query::{message::Message, question::Question}};
+use dns_lib::{
+    interface::cache::cache::AsyncCache,
+    query::{message::Message, question::Question},
+};
 use log::trace;
 
-use crate::{network::{async_query::QueryOpt, errors::QueryError, mixed_tcp_udp::MixedSocket}, DNSAsyncClient};
+use crate::{
+    DNSAsyncClient,
+    network::{async_query::QueryOpt, errors::QueryError, mixed_tcp_udp::MixedSocket},
+};
 
-pub async fn query_network<CCache>(client: &DNSAsyncClient, cache: Arc<CCache>, question: &Question, name_server_address: &IpAddr) -> Result<Message, QueryError> where CCache: AsyncCache + Sync {
+pub async fn query_network<CCache>(
+    client: &DNSAsyncClient,
+    cache: Arc<CCache>,
+    question: &Question,
+    name_server_address: &IpAddr,
+) -> Result<Message, QueryError>
+where
+    CCache: AsyncCache + Sync,
+{
     let mut message_question = Message::from(question);
     trace!(question:?; "Querying network '{name_server_address}' (UDP/TCP) with query '{message_question:?}'");
 
-    let socket = client.socket_manager.get_udp_tcp(*name_server_address).await;
+    let socket = client
+        .socket_manager
+        .get_udp_tcp(*name_server_address)
+        .await;
     let message = MixedSocket::query(&socket, &mut message_question, QueryOpt::UdpTcp).await?;
 
     // If the truncation flag is set, we need to try again with TCP

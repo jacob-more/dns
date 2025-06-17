@@ -1,17 +1,23 @@
 use std::{collections::hash_map::Entry, time::Instant};
 
-use dns_lib::{interface::cache::{main_cache::MainCache, CacheQuery, CacheRecord, CacheResponse}, query::question::Question, resource_record::{rcode::RCode, rtype::RType}};
+use dns_lib::{
+    interface::cache::{CacheQuery, CacheRecord, CacheResponse, main_cache::MainCache},
+    query::question::Question,
+    resource_record::{rcode::RCode, rtype::RType},
+};
 
 use super::tree_cache::{TreeCache, TreeCacheError};
 
 pub struct MainTreeCache {
-    cache: TreeCache<Vec<CacheRecord>>
+    cache: TreeCache<Vec<CacheRecord>>,
 }
 
 impl MainTreeCache {
     #[inline]
     pub fn new() -> Self {
-        Self { cache: TreeCache::new() }
+        Self {
+            cache: TreeCache::new(),
+        }
     }
 
     #[inline]
@@ -20,50 +26,60 @@ impl MainTreeCache {
             RType::ANY => {
                 if let Some(node) = self.cache.get_node(&query.question)? {
                     if query.authoritative {
-                        return Ok(node.records.values()
+                        return Ok(node
+                            .records
+                            .values()
                             .flatten()
                             .filter(|record| record.is_authoritative())
                             .filter(|record| !record.is_expired())
                             .map(|cache_record| cache_record.clone())
                             .collect());
                     } else {
-                        return Ok(node.records.values()
+                        return Ok(node
+                            .records
+                            .values()
                             .flatten()
                             .filter(|record| !record.is_expired())
                             .map(|cache_record| cache_record.clone())
                             .collect());
                     }
                 }
-            },
+            }
             _ => {
                 if let Some(node) = self.cache.get_node(&query.question)? {
                     if let Some(records) = node.records.get(&query.qtype()) {
                         if query.authoritative {
-                            return Ok(records.iter()
+                            return Ok(records
+                                .iter()
                                 .filter(|record| record.is_authoritative())
                                 .filter(|record| !record.is_expired())
                                 .map(|cache_record| cache_record.clone())
                                 .collect());
                         } else {
-                            return Ok(records.iter()
+                            return Ok(records
+                                .iter()
                                 .filter(|record| !record.is_expired())
                                 .map(|cache_record| cache_record.clone())
                                 .collect());
                         }
                     }
                 }
-            },
+            }
         }
 
         return Ok(vec![]);
     }
 
     #[inline]
-    fn insert_record(&mut self, record: CacheRecord, received_time: Instant) -> Result<(), TreeCacheError> {
+    fn insert_record(
+        &mut self,
+        record: CacheRecord,
+        received_time: Instant,
+    ) -> Result<(), TreeCacheError> {
         let question = Question::new(
             record.get_name().clone(),
             record.get_rtype(),
-            record.get_rclass()
+            record.get_rclass(),
         );
         let node = self.cache.get_or_create_node(&question)?;
         match node.records.entry(question.qtype()) {
@@ -86,7 +102,9 @@ impl MainTreeCache {
                             cached_record.meta.insertion_time = received_time;
                         }
                     }
-                    if cached_record.meta.insertion_time.elapsed().as_secs() >= cached_record.get_ttl().as_secs() as u64 {
+                    if cached_record.meta.insertion_time.elapsed().as_secs()
+                        >= cached_record.get_ttl().as_secs() as u64
+                    {
                         indexes_to_remove.push(index);
                     }
                 }
@@ -103,10 +121,10 @@ impl MainTreeCache {
                 if !record_matched {
                     cached_records.push(record);
                 }
-            },
+            }
             Entry::Vacant(entry) => {
                 entry.insert(vec![record]);
-            },
+            }
         }
         Ok(())
     }

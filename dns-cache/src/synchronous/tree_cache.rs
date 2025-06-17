@@ -1,6 +1,20 @@
-use std::{collections::{hash_map::{Entry, Values}, HashMap}, error::Error, fmt::Display};
+use std::{
+    collections::{
+        HashMap,
+        hash_map::{Entry, Values},
+    },
+    error::Error,
+    fmt::Display,
+};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitive, Label, OwnedLabel}}};
+use dns_lib::{
+    query::question::Question,
+    resource_record::{rclass::RClass, rtype::RType},
+    types::{
+        c_domain_name::CDomainName,
+        label::{CaseInsensitive, Label, OwnedLabel},
+    },
+};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TreeCacheError {
@@ -11,7 +25,9 @@ impl Error for TreeCacheError {}
 impl Display for TreeCacheError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NonFullyQualifiedDomainName(name) => write!(f, "The domain names '{name}' must be fully qualified"),
+            Self::NonFullyQualifiedDomainName(name) => {
+                write!(f, "The domain names '{name}' must be fully qualified")
+            }
             Self::InconsistentState(message) => write!(f, "Inconsistent State: {message}"),
         }
     }
@@ -34,16 +50,23 @@ pub struct TreeNode<Records> {
 impl<Records> TreeCache<Records> {
     #[inline]
     pub fn new() -> Self {
-        Self { root_nodes: HashMap::new() }
+        Self {
+            root_nodes: HashMap::new(),
+        }
     }
 
     #[inline]
-    pub fn get_or_create_node(&mut self, question: &Question) -> Result<&mut TreeNode<Records>, TreeCacheError> {
+    pub fn get_or_create_node(
+        &mut self,
+        question: &Question,
+    ) -> Result<&mut TreeNode<Records>, TreeCacheError> {
         // Checks if domain name ends in root node.
         // The root node of the cache is the root label so if the domain name is not
         // fully qualified, then it is not possible for the domain to be in the cache.
         if !question.qname().is_fully_qualified() {
-            return Err(TreeCacheError::NonFullyQualifiedDomainName(question.qname().clone()));
+            return Err(TreeCacheError::NonFullyQualifiedDomainName(
+                question.qname().clone(),
+            ));
         }
 
         // If the node does not exist, create it. Then, we can get a shared reference back out of
@@ -56,7 +79,7 @@ impl<Records> TreeCache<Records> {
                     records: MappedRecords::new(),
                 };
                 entry.insert(new_node)
-            },
+            }
         };
 
         // Note: Skipping first label (root label) because it was already checked.
@@ -71,20 +94,25 @@ impl<Records> TreeCache<Records> {
                         records: HashMap::new(),
                     };
                     entry.insert(child_node)
-                },
+                }
             }
         }
 
-        return Ok(current_node)
+        return Ok(current_node);
     }
 
     #[inline]
-    pub fn get_node(&self, question: &Question) -> Result<Option<&TreeNode<Records>>, TreeCacheError> {
+    pub fn get_node(
+        &self,
+        question: &Question,
+    ) -> Result<Option<&TreeNode<Records>>, TreeCacheError> {
         // Checks if domain name ends in root node.
         // The root node of the cache is the root label so if the domain name is not
         // fully qualified, then it is not possible for the domain to be in the cache.
         if !question.qname().is_fully_qualified() {
-            return Err(TreeCacheError::NonFullyQualifiedDomainName(question.qname().clone()));
+            return Err(TreeCacheError::NonFullyQualifiedDomainName(
+                question.qname().clone(),
+            ));
         }
 
         let mut current_node;
@@ -107,7 +135,11 @@ impl<Records> TreeCache<Records> {
     }
 
     #[inline]
-    pub fn remove_node(&mut self, qname: &CDomainName, qclass: &RClass) -> Result<Option<TreeNode<Records>>, TreeCacheError> {
+    pub fn remove_node(
+        &mut self,
+        qname: &CDomainName,
+        qclass: &RClass,
+    ) -> Result<Option<TreeNode<Records>>, TreeCacheError> {
         // Checks if domain name ends in root node.
         // The root node of the cache is the root label so if the domain name is not
         // fully qualified, then it is not possible for the domain to be in the cache.
@@ -139,7 +171,11 @@ impl<Records> TreeCache<Records> {
 
         match qname.labels().next() {
             Some(last_label) => return Ok(parent_node.children.remove(last_label)),
-            None => return Err(TreeCacheError::InconsistentState(format!("Could not determine the last label in the qname '{qname}'"))),
+            None => {
+                return Err(TreeCacheError::InconsistentState(format!(
+                    "Could not determine the last label in the qname '{qname}'"
+                )));
+            }
         };
     }
 
@@ -193,7 +229,7 @@ impl<'a, Records: 'a> Iterator for TreeRootIterator<'a, Records> {
                 self.current_child_iter = Some(TreeChildIterator::new(next_child));
                 self.current_child = Some(next_child);
                 return self.next();
-            },
+            }
             None => return None,
         }
     }
@@ -235,12 +271,12 @@ impl<'a, Records: 'a> Iterator for TreeChildIterator<'a, Records> {
             (Some(next_child), _) => {
                 self.current_child_iter = Some(Box::new(TreeChildIterator::new(next_child)));
                 self.next()
-            },
+            }
             (None, Some(_)) => {
                 let self_node = self.self_node;
                 self.self_node = None;
                 self_node
-            },
+            }
             (None, None) => None,
         }
     }

@@ -1,4 +1,7 @@
-use std::{net::{Ipv4Addr, Ipv6Addr}, str::FromStr};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr},
+    str::FromStr,
+};
 
 use mac_address::MacAddress;
 
@@ -6,7 +9,14 @@ use super::errors::TokenError;
 
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-5
 pub trait FromPresentation {
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd;
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+        'c: 'd;
 }
 
 // #################### BUILT-IN PRIMITIVE TYPES ####################
@@ -15,14 +25,22 @@ macro_rules! int_from_token_impl {
     ($int_type:ty) => {
         impl FromPresentation for $int_type {
             #[inline]
-            fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+            fn from_token_format<'a, 'b, 'c, 'd>(
+                tokens: &'c [&'a str],
+            ) -> Result<(Self, &'d [&'a str]), TokenError>
+            where
+                Self: Sized,
+                'a: 'b,
+                'c: 'd,
+                'c: 'd,
+            {
                 match tokens {
                     &[] => Err(TokenError::OutOfTokens),
                     &[token, ..] => Ok((<$int_type>::from_str_radix(token, 10)?, &tokens[1..])),
                 }
             }
         }
-    }
+    };
 }
 
 int_from_token_impl!(u8);
@@ -43,15 +61,17 @@ mod builtin_primitive_int_test {
         ($test_name:ident, $type:ty) => {
             #[cfg(test)]
             mod $test_name {
+                use crate::serde::presentation::test_from_presentation::{
+                    gen_fail_token_test, gen_ok_token_test,
+                };
                 use lazy_static::lazy_static;
                 use num_bigint::ToBigInt;
-                use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
 
                 lazy_static! {
                     pub static ref MAX_STR: String = <$type>::MAX.to_string();
                     pub static ref MIN_STR: String = <$type>::MIN.to_string();
-
-                    pub static ref TOO_BIG_STR: String = (<$type>::MAX.to_bigint().unwrap() + 1.to_bigint().unwrap()).to_string();
+                    pub static ref TOO_BIG_STR: String =
+                        (<$type>::MAX.to_bigint().unwrap() + 1.to_bigint().unwrap()).to_string();
                 }
 
                 gen_ok_token_test!(test_ok_1, $type, 1, &["1"]);
@@ -65,7 +85,7 @@ mod builtin_primitive_int_test {
                 gen_fail_token_test!(test_fail_not_an_integer, $type, &["not_an_integer"]);
                 gen_fail_token_test!(test_fail_empty_str, $type, &[""]);
             }
-        }
+        };
     }
 
     gen_unsigned_integer_test!(test_u8, u8);
@@ -78,16 +98,19 @@ mod builtin_primitive_int_test {
         ($test_name:ident, $type:ty) => {
             #[cfg(test)]
             mod $test_name {
+                use crate::serde::presentation::test_from_presentation::{
+                    gen_fail_token_test, gen_ok_token_test,
+                };
                 use lazy_static::lazy_static;
                 use num_bigint::ToBigInt;
-                use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
 
                 lazy_static! {
                     pub static ref MAX_STR: String = <$type>::MAX.to_string();
                     pub static ref MIN_STR: String = <$type>::MIN.to_string();
-
-                    pub static ref TOO_SMALL_STR: String = (<$type>::MAX.to_bigint().unwrap() + 1.to_bigint().unwrap()).to_string();
-                    pub static ref TOO_BIG_STR: String = (<$type>::MIN.to_bigint().unwrap() - 1.to_bigint().unwrap()).to_string();
+                    pub static ref TOO_SMALL_STR: String =
+                        (<$type>::MAX.to_bigint().unwrap() + 1.to_bigint().unwrap()).to_string();
+                    pub static ref TOO_BIG_STR: String =
+                        (<$type>::MIN.to_bigint().unwrap() - 1.to_bigint().unwrap()).to_string();
                 }
 
                 gen_ok_token_test!(test_ok_neg_1, $type, -1, &["-1"]);
@@ -103,7 +126,7 @@ mod builtin_primitive_int_test {
                 gen_fail_token_test!(test_fail_not_an_integer, $type, &["not_an_integer"]);
                 gen_fail_token_test!(test_fail_empty_str, $type, &[""]);
             }
-        }
+        };
     }
 
     gen_signed_integer_test!(test_i8, i8);
@@ -121,7 +144,14 @@ macro_rules! ux_from_token_impl {
 
         impl FromPresentation for $int_type {
             #[inline]
-            fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd {
+            fn from_token_format<'a, 'b, 'c, 'd>(
+                tokens: &'c [&'a str],
+            ) -> Result<(Self, &'d [&'a str]), TokenError>
+            where
+                Self: Sized,
+                'a: 'b,
+                'c: 'd,
+            {
                 match tokens {
                     &[] => Err(TokenError::OutOfTokens),
                     &[token, ..] => {
@@ -133,17 +163,24 @@ macro_rules! ux_from_token_impl {
                 }
             }
         }
-    }
+    };
 }
 
 // u1 and i1 don't have TryFrom<u8> implementations. Since their implementation is trivial, this can
 // be done easily.
 
-use ux::{u1, i1};
+use ux::{i1, u1};
 
 impl FromPresentation for u1 {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+    {
         match tokens {
             &[] => Err(TokenError::OutOfTokens),
             &["0", ..] => Ok((u1::new(0), &tokens[1..])),
@@ -155,7 +192,14 @@ impl FromPresentation for u1 {
 
 impl FromPresentation for i1 {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+    {
         match tokens {
             &[] => Err(TokenError::OutOfTokens),
             &["0", ..] => Ok((i1::new(0), &tokens[1..])),
@@ -419,16 +463,20 @@ mod ux_primitive_int_test {
         ($test_name:ident, $ux_type:ident, $super_type:ty) => {
             #[cfg(test)]
             mod $test_name {
+                use crate::serde::presentation::test_from_presentation::{
+                    gen_fail_token_test, gen_ok_token_test,
+                };
                 use lazy_static::lazy_static;
                 use num_bigint::ToBigInt;
                 use ux::$ux_type;
-                use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
 
                 lazy_static! {
                     pub static ref MAX_STR: String = <$ux_type>::MAX.to_string();
                     pub static ref MIN_STR: String = <$ux_type>::MIN.to_string();
-
-                    pub static ref TOO_BIG_STR: String = (<$super_type>::from(<$ux_type>::MAX).to_bigint().unwrap() + 1.to_bigint().unwrap()).to_string();
+                    pub static ref TOO_BIG_STR: String =
+                        (<$super_type>::from(<$ux_type>::MAX).to_bigint().unwrap()
+                            + 1.to_bigint().unwrap())
+                        .to_string();
                 }
 
                 gen_ok_token_test!(test_ok_1, $ux_type, <$ux_type>::new(1), &["1"]);
@@ -442,14 +490,16 @@ mod ux_primitive_int_test {
                 gen_fail_token_test!(test_fail_not_an_integer, $ux_type, &["not_an_integer"]);
                 gen_fail_token_test!(test_fail_empty_str, $ux_type, &[""]);
             }
-        }
+        };
     }
 
     #[cfg(test)]
     mod test_u1 {
+        use crate::serde::presentation::test_from_presentation::{
+            gen_fail_token_test, gen_ok_token_test,
+        };
         use lazy_static::lazy_static;
         use ux::u1;
-        use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
 
         lazy_static! {
             pub static ref MAX_STR: String = u1::MAX.to_string();
@@ -594,17 +644,24 @@ mod ux_primitive_int_test {
         ($test_name:ident, $ux_type:ident, $super_type:ty) => {
             #[cfg(test)]
             mod $test_name {
+                use crate::serde::presentation::test_from_presentation::{
+                    gen_fail_token_test, gen_ok_token_test,
+                };
                 use lazy_static::lazy_static;
                 use num_bigint::ToBigInt;
                 use ux::$ux_type;
-                use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
 
                 lazy_static! {
                     pub static ref MAX_STR: String = <$ux_type>::MAX.to_string();
                     pub static ref MIN_STR: String = <$ux_type>::MIN.to_string();
-
-                    pub static ref TOO_SMALL_STR: String = (<$super_type>::from(<$ux_type>::MAX).to_bigint().unwrap() + 1.to_bigint().unwrap()).to_string();
-                    pub static ref TOO_BIG_STR: String = (<$super_type>::from(<$ux_type>::MIN).to_bigint().unwrap() - 1.to_bigint().unwrap()).to_string();
+                    pub static ref TOO_SMALL_STR: String =
+                        (<$super_type>::from(<$ux_type>::MAX).to_bigint().unwrap()
+                            + 1.to_bigint().unwrap())
+                        .to_string();
+                    pub static ref TOO_BIG_STR: String =
+                        (<$super_type>::from(<$ux_type>::MIN).to_bigint().unwrap()
+                            - 1.to_bigint().unwrap())
+                        .to_string();
                 }
 
                 gen_ok_token_test!(test_ok_neg_1, $ux_type, <$ux_type>::new(-1), &["-1"]);
@@ -620,14 +677,16 @@ mod ux_primitive_int_test {
                 gen_fail_token_test!(test_fail_not_an_integer, $ux_type, &["not_an_integer"]);
                 gen_fail_token_test!(test_fail_empty_str, $ux_type, &[""]);
             }
-        }
+        };
     }
 
     #[cfg(test)]
     mod test_i1 {
-        use ux::i1;
+        use crate::serde::presentation::test_from_presentation::{
+            gen_fail_token_test, gen_ok_token_test,
+        };
         use lazy_static::lazy_static;
-        use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
+        use ux::i1;
 
         lazy_static! {
             pub static ref MAX_STR: String = i1::MAX.to_string();
@@ -775,14 +834,21 @@ macro_rules! address_from_token_impl {
     ($addr_type:ty) => {
         impl FromPresentation for $addr_type {
             #[inline]
-            fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd {
+            fn from_token_format<'a, 'b, 'c, 'd>(
+                tokens: &'c [&'a str],
+            ) -> Result<(Self, &'d [&'a str]), TokenError>
+            where
+                Self: Sized,
+                'a: 'b,
+                'c: 'd,
+            {
                 match tokens {
                     &[] => Err(TokenError::OutOfTokens),
-                    &[token, ..] => Ok((<$addr_type>::from_str(token)?, &tokens[1..]))
+                    &[token, ..] => Ok((<$addr_type>::from_str(token)?, &tokens[1..])),
                 }
             }
         }
-    }
+    };
 }
 
 address_from_token_impl!(Ipv4Addr);
@@ -793,13 +859,20 @@ address_from_token_impl!(MacAddress);
 mod test_ipv4_address {
     use std::net::Ipv4Addr;
 
-    use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
+    use crate::serde::presentation::test_from_presentation::{
+        gen_fail_token_test, gen_ok_token_test,
+    };
 
     const GOOD_IPV4: &str = "192.168.86.1";
     const BAD_IPV4: &str = "192.168.86.1.3";
     const EMPTY_STR: &str = "";
 
-    gen_ok_token_test!(test_ipv4_ok, Ipv4Addr, Ipv4Addr::new(192, 168, 86, 1), &[GOOD_IPV4]);
+    gen_ok_token_test!(
+        test_ipv4_ok,
+        Ipv4Addr,
+        Ipv4Addr::new(192, 168, 86, 1),
+        &[GOOD_IPV4]
+    );
     gen_fail_token_test!(test_ipv4_fail, Ipv4Addr, &[BAD_IPV4]);
     gen_fail_token_test!(test_ipv4_fail_blank, Ipv4Addr, &[EMPTY_STR]);
 }
@@ -808,13 +881,20 @@ mod test_ipv4_address {
 mod test_ipv6_address {
     use std::net::Ipv6Addr;
 
-    use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
+    use crate::serde::presentation::test_from_presentation::{
+        gen_fail_token_test, gen_ok_token_test,
+    };
 
     const GOOD_IPV6: &str = "a:9:8:7:6:5:4:3";
     const BAD_IPV6: &str = "a:9:8:7:6:5:4:3:2:1";
     const EMPTY_STR: &str = "";
 
-    gen_ok_token_test!(test_ipv6_ok, Ipv6Addr, Ipv6Addr::new(10, 9, 8, 7, 6, 5, 4, 3), &[GOOD_IPV6]);
+    gen_ok_token_test!(
+        test_ipv6_ok,
+        Ipv6Addr,
+        Ipv6Addr::new(10, 9, 8, 7, 6, 5, 4, 3),
+        &[GOOD_IPV6]
+    );
     gen_fail_token_test!(test_ipv6_fail, Ipv6Addr, &[BAD_IPV6]);
     gen_fail_token_test!(test_ipv6_fail_blank, Ipv6Addr, &[EMPTY_STR]);
 }
@@ -823,13 +903,20 @@ mod test_ipv6_address {
 mod test_mac_address {
     use mac_address::MacAddress;
 
-    use crate::serde::presentation::test_from_presentation::{gen_ok_token_test, gen_fail_token_test};
+    use crate::serde::presentation::test_from_presentation::{
+        gen_fail_token_test, gen_ok_token_test,
+    };
 
     const GOOD_MAC: &str = "0a:09:08:07:06:05";
     const BAD_MAC: &str = "0a:09:08:07:06:05:04:03";
     const EMPTY_STR: &str = "";
 
-    gen_ok_token_test!(test_mac_address_ok, MacAddress, MacAddress::new([10, 9, 8, 7, 6, 5]), &[GOOD_MAC]);
+    gen_ok_token_test!(
+        test_mac_address_ok,
+        MacAddress,
+        MacAddress::new([10, 9, 8, 7, 6, 5]),
+        &[GOOD_MAC]
+    );
     gen_fail_token_test!(test_mac_address_fail, MacAddress, &[BAD_MAC]);
     gen_fail_token_test!(test_mac_address_fail_blank, MacAddress, &[EMPTY_STR]);
 }

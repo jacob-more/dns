@@ -4,7 +4,6 @@ use dns_lib::serde::wire::{read_wire::ReadWireError, write_wire::WriteWireError}
 use rustls::pki_types::InvalidDnsNameError;
 use tokio::task::JoinError;
 
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SocketType {
     Udp,
@@ -15,9 +14,9 @@ pub enum SocketType {
 impl Display for SocketType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Udp  => write!(f, "UDP"),
-            Self::Tcp  => write!(f, "TCP"),
-            Self::Tls  => write!(f, "TLS"),
+            Self::Udp => write!(f, "UDP"),
+            Self::Tcp => write!(f, "TCP"),
+            Self::Tls => write!(f, "TLS"),
             Self::Quic => write!(f, "QUIC"),
         }
     }
@@ -81,7 +80,7 @@ pub enum SendError {
     },
     Io {
         socket_type: SocketType,
-        error: IoError
+        error: IoError,
     },
     QuicWriteError(quinn::WriteError),
 }
@@ -89,8 +88,17 @@ impl Display for SendError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Self::Serialization(write_wire_error) => write!(f, "{write_wire_error}"),
-            Self::IncorrectNumberBytes { socket_type, expected, sent } => write!(f, "expected to send {expected} bytes but sent {sent} on {socket_type} socket"),
-            Self::Io { socket_type, error } => write!(f, "{error} when sending on {socket_type} socket"),
+            Self::IncorrectNumberBytes {
+                socket_type,
+                expected,
+                sent,
+            } => write!(
+                f,
+                "expected to send {expected} bytes but sent {sent} on {socket_type} socket"
+            ),
+            Self::Io { socket_type, error } => {
+                write!(f, "{error} when sending on {socket_type} socket")
+            }
             Self::QuicWriteError(error) => write!(f, "{error} when sending on QUIC socket"),
         }
     }
@@ -116,20 +124,38 @@ pub enum ReceiveError {
     },
     Deserialization {
         protocol: SocketType,
-        error: ReadWireError
+        error: ReadWireError,
     },
     Io {
         protocol: SocketType,
-        error: IoError
+        error: IoError,
     },
 }
 impl Display for ReceiveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Self::IncorrectNumberBytes { protocol, expected, received } => write!(f, "expected to receive {expected} bytes but received {received} on {protocol} socket"),
-            Self::IncorrectLengthByte { protocol, limit, received } => write!(f, "expected to receive at most {limit} bytes but the length byte is {received} on {protocol} socket"),
-            Self::Deserialization{ protocol, error } => write!(f, "{error} when receiving on {protocol} socket"),
-            Self::Io{ protocol, error } => write!(f, "{error} when receiving on {protocol} socket"),
+            Self::IncorrectNumberBytes {
+                protocol,
+                expected,
+                received,
+            } => write!(
+                f,
+                "expected to receive {expected} bytes but received {received} on {protocol} socket"
+            ),
+            Self::IncorrectLengthByte {
+                protocol,
+                limit,
+                received,
+            } => write!(
+                f,
+                "expected to receive at most {limit} bytes but the length byte is {received} on {protocol} socket"
+            ),
+            Self::Deserialization { protocol, error } => {
+                write!(f, "{error} when receiving on {protocol} socket")
+            }
+            Self::Io { protocol, error } => {
+                write!(f, "{error} when receiving on {protocol} socket")
+            }
         }
     }
 }
@@ -160,56 +186,137 @@ pub enum SocketError {
         socket_stage: SocketStage,
         error: quinn::ConnectError,
     },
-    Multiple(Vec<SocketError>)
+    Multiple(Vec<SocketError>),
 }
 impl Clone for SocketError {
     fn clone(&self) -> Self {
         match self {
-            Self::Disabled(socket_type, socket_stage) => Self::Disabled(*socket_type, *socket_stage),
-            Self::Shutdown(socket_type, socket_stage) => Self::Shutdown(*socket_type, *socket_stage),
+            Self::Disabled(socket_type, socket_stage) => {
+                Self::Disabled(*socket_type, *socket_stage)
+            }
+            Self::Shutdown(socket_type, socket_stage) => {
+                Self::Shutdown(*socket_type, *socket_stage)
+            }
             Self::Timeout(socket_type, socket_stage) => Self::Timeout(*socket_type, *socket_stage),
-            Self::JoinErrorPanic(socket_type, socket_stage) => Self::JoinErrorPanic(*socket_type, *socket_stage),
-            Self::JoinErrorCancelled(socket_type, socket_stage) => Self::JoinErrorCancelled(*socket_type, *socket_stage),
-            Self::InvalidName { socket_type, socket_stage, error: _ } => Self::InvalidName { socket_type: *socket_type, socket_stage: *socket_stage, error: InvalidDnsNameError },
-            Self::Io { socket_type, socket_stage, error } => Self::Io { socket_type: *socket_type, socket_stage: *socket_stage, error: error.clone() },
-            Self::QuicConnection { socket_stage, error } => Self::QuicConnection { socket_stage: *socket_stage, error: error.clone() },
-            Self::QuicConnect { socket_stage, error } => Self::QuicConnect { socket_stage: *socket_stage, error: error.clone() },
+            Self::JoinErrorPanic(socket_type, socket_stage) => {
+                Self::JoinErrorPanic(*socket_type, *socket_stage)
+            }
+            Self::JoinErrorCancelled(socket_type, socket_stage) => {
+                Self::JoinErrorCancelled(*socket_type, *socket_stage)
+            }
+            Self::InvalidName {
+                socket_type,
+                socket_stage,
+                error: _,
+            } => Self::InvalidName {
+                socket_type: *socket_type,
+                socket_stage: *socket_stage,
+                error: InvalidDnsNameError,
+            },
+            Self::Io {
+                socket_type,
+                socket_stage,
+                error,
+            } => Self::Io {
+                socket_type: *socket_type,
+                socket_stage: *socket_stage,
+                error: error.clone(),
+            },
+            Self::QuicConnection {
+                socket_stage,
+                error,
+            } => Self::QuicConnection {
+                socket_stage: *socket_stage,
+                error: error.clone(),
+            },
+            Self::QuicConnect {
+                socket_stage,
+                error,
+            } => Self::QuicConnect {
+                socket_stage: *socket_stage,
+                error: error.clone(),
+            },
             Self::Multiple(errors) => Self::Multiple(errors.clone()),
-
         }
     }
 }
 impl PartialEq for SocketError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Disabled(self_socket_type, self_socket_stage), Self::Disabled(other_socket_type, other_socket_stage))
-          | (Self::Shutdown(self_socket_type, self_socket_stage), Self::Shutdown(other_socket_type, other_socket_stage))
-          | (Self::Timeout(self_socket_type, self_socket_stage), Self::Timeout(other_socket_type, other_socket_stage))
-          | (Self::JoinErrorPanic(self_socket_type, self_socket_stage), Self::JoinErrorPanic(other_socket_type, other_socket_stage))
-          | (Self::JoinErrorCancelled(self_socket_type, self_socket_stage), Self::JoinErrorCancelled(other_socket_type, other_socket_stage))
-          | (Self::InvalidName { socket_type: self_socket_type, socket_stage: self_socket_stage, error: _ }, Self::InvalidName { socket_type: other_socket_type, socket_stage: other_socket_stage, error: _ }) => {
-                (self_socket_type == other_socket_type)
-                && (self_socket_stage == other_socket_stage)
-            },
-            (Self::Io { socket_type: self_socket_type, socket_stage: self_socket_stage, error: self_error }, Self::Io { socket_type: other_socket_type, socket_stage: other_socket_stage, error: other_error }) => {
-                (self_socket_type == other_socket_type)
-                && (self_socket_stage == other_socket_stage)
-                && (self_error == other_error)
-            },
-            (Self::QuicConnection { socket_stage: self_socket_stage, error: self_error }, Self::QuicConnection { socket_stage: other_socket_stage, error: other_error }) => {
-                (self_socket_stage == other_socket_stage)
-                && (self_error == other_error)
+            (
+                Self::Disabled(self_socket_type, self_socket_stage),
+                Self::Disabled(other_socket_type, other_socket_stage),
+            )
+            | (
+                Self::Shutdown(self_socket_type, self_socket_stage),
+                Self::Shutdown(other_socket_type, other_socket_stage),
+            )
+            | (
+                Self::Timeout(self_socket_type, self_socket_stage),
+                Self::Timeout(other_socket_type, other_socket_stage),
+            )
+            | (
+                Self::JoinErrorPanic(self_socket_type, self_socket_stage),
+                Self::JoinErrorPanic(other_socket_type, other_socket_stage),
+            )
+            | (
+                Self::JoinErrorCancelled(self_socket_type, self_socket_stage),
+                Self::JoinErrorCancelled(other_socket_type, other_socket_stage),
+            )
+            | (
+                Self::InvalidName {
+                    socket_type: self_socket_type,
+                    socket_stage: self_socket_stage,
+                    error: _,
+                },
+                Self::InvalidName {
+                    socket_type: other_socket_type,
+                    socket_stage: other_socket_stage,
+                    error: _,
+                },
+            ) => {
+                (self_socket_type == other_socket_type) && (self_socket_stage == other_socket_stage)
             }
-            (Self::QuicConnect { socket_stage: self_socket_stage, error: self_error }, Self::QuicConnect { socket_stage: other_socket_stage, error: other_error }) => {
-                (self_socket_stage == other_socket_stage)
-                && (self_error == other_error)
+            (
+                Self::Io {
+                    socket_type: self_socket_type,
+                    socket_stage: self_socket_stage,
+                    error: self_error,
+                },
+                Self::Io {
+                    socket_type: other_socket_type,
+                    socket_stage: other_socket_stage,
+                    error: other_error,
+                },
+            ) => {
+                (self_socket_type == other_socket_type)
+                    && (self_socket_stage == other_socket_stage)
+                    && (self_error == other_error)
             }
+            (
+                Self::QuicConnection {
+                    socket_stage: self_socket_stage,
+                    error: self_error,
+                },
+                Self::QuicConnection {
+                    socket_stage: other_socket_stage,
+                    error: other_error,
+                },
+            ) => (self_socket_stage == other_socket_stage) && (self_error == other_error),
+            (
+                Self::QuicConnect {
+                    socket_stage: self_socket_stage,
+                    error: self_error,
+                },
+                Self::QuicConnect {
+                    socket_stage: other_socket_stage,
+                    error: other_error,
+                },
+            ) => (self_socket_stage == other_socket_stage) && (self_error == other_error),
             (Self::Multiple(self_errors), Self::Multiple(other_errors)) => {
                 self_errors == other_errors
-            },
-            _ => {
-                core::mem::discriminant(self) == core::mem::discriminant(other)
-            },
+            }
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
         }
     }
 }
@@ -217,15 +324,41 @@ impl Eq for SocketError {}
 impl Display for SocketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            Self::Disabled(socket_type, socket_stage) => write!(f, "{socket_type} socket is disabled during {socket_stage}"),
-            Self::Shutdown(socket_type, socket_stage) => write!(f, "{socket_type} socket is disabled during {socket_stage}"),
-            Self::Timeout(socket_type, socket_stage) => write!(f, "{socket_type} socket timed out during {socket_stage}"),
-            Self::JoinErrorPanic(socket_type, socket_stage) => write!(f, "{socket_type} socket task panicked during {socket_stage}"),
-            Self::JoinErrorCancelled(socket_type, socket_stage) => write!(f, "{socket_type} socket task cancelled during {socket_stage}"),
-            Self::InvalidName { socket_type, socket_stage, error } => write!(f, "{error} during {socket_type} {socket_stage}"),
-            Self::Io { socket_type, socket_stage, error } => write!(f, "{error} during {socket_type} {socket_stage}"),
-            Self::QuicConnection { socket_stage, error } => write!(f, "{error} during QUIC {socket_stage}"),
-            Self::QuicConnect { socket_stage, error } => write!(f, "{error} during QUIC {socket_stage}"),
+            Self::Disabled(socket_type, socket_stage) => {
+                write!(f, "{socket_type} socket is disabled during {socket_stage}")
+            }
+            Self::Shutdown(socket_type, socket_stage) => {
+                write!(f, "{socket_type} socket is disabled during {socket_stage}")
+            }
+            Self::Timeout(socket_type, socket_stage) => {
+                write!(f, "{socket_type} socket timed out during {socket_stage}")
+            }
+            Self::JoinErrorPanic(socket_type, socket_stage) => write!(
+                f,
+                "{socket_type} socket task panicked during {socket_stage}"
+            ),
+            Self::JoinErrorCancelled(socket_type, socket_stage) => write!(
+                f,
+                "{socket_type} socket task cancelled during {socket_stage}"
+            ),
+            Self::InvalidName {
+                socket_type,
+                socket_stage,
+                error,
+            } => write!(f, "{error} during {socket_type} {socket_stage}"),
+            Self::Io {
+                socket_type,
+                socket_stage,
+                error,
+            } => write!(f, "{error} during {socket_type} {socket_stage}"),
+            Self::QuicConnection {
+                socket_stage,
+                error,
+            } => write!(f, "{error} during QUIC {socket_stage}"),
+            Self::QuicConnect {
+                socket_stage,
+                error,
+            } => write!(f, "{error} during QUIC {socket_stage}"),
             Self::Multiple(errors) => {
                 let mut errors_iter = errors.iter();
                 if let Some(error) = errors_iter.next() {
@@ -235,7 +368,7 @@ impl Display for SocketError {
                     write!(f, "and {error}")?;
                 }
                 Ok(())
-            },
+            }
         }
     }
 }

@@ -1,4 +1,14 @@
-use std::{error::Error, fmt::Display, future::Future, hash::Hash, sync::{atomic::{AtomicUsize, Ordering}, Arc, RwLock}, task::Poll};
+use std::{
+    error::Error,
+    fmt::Display,
+    future::Future,
+    hash::Hash,
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::Poll,
+};
 
 use pin_project::{pin_project, pinned_drop};
 
@@ -6,8 +16,12 @@ use crate::shared_awake_token::{SharedAwakeToken, SharedAwokenToken};
 
 pub fn channel<T: Clone>() -> (Sender<T>, Receiver<T>) {
     let awake_token = Arc::new(SharedAwakeToken::new(SendCell::new_fresh(1, 1)));
-    let sender = Sender { awake_token: awake_token.clone() };
-    let receiver = Receiver { awoken_token: awake_token.awoken() };
+    let sender = Sender {
+        awake_token: awake_token.clone(),
+    };
+    let receiver = Receiver {
+        awoken_token: awake_token.awoken(),
+    };
 
     (sender, receiver)
 }
@@ -23,7 +37,6 @@ pub trait OnceWatchSubscribe<T> {
 pub trait OnceWatchSend<T> {
     fn send(&self, value: T) -> Result<(), SendError>;
 }
-
 
 #[derive(Debug)]
 struct SendCell<T> {
@@ -69,7 +82,7 @@ impl<T> SendCellData<T> {
 
 #[derive(Debug)]
 pub enum RecvError {
-    Closed
+    Closed,
 }
 
 impl Display for RecvError {
@@ -101,7 +114,7 @@ impl Error for TryRecvError {}
 
 #[derive(Debug)]
 pub enum SendError {
-    Closed
+    Closed,
 }
 
 impl Display for SendError {
@@ -155,7 +168,7 @@ impl<T> OnceWatchSubscribe<T> for &Sender<T> {
     fn subscribe(self) -> Receiver<T> {
         self.shared().receivers.fetch_add(1, Ordering::Relaxed);
         Receiver {
-            awoken_token: self.awake_token.clone().awoken()
+            awoken_token: self.awake_token.clone().awoken(),
         }
     }
 }
@@ -214,16 +227,14 @@ impl<T> SameChannel<&Receiver<T>> for Sender<T> {
     fn same_channel(&self, other: &Receiver<T>) -> bool {
         Arc::ptr_eq(
             &self.awake_token,
-            other.awoken_token.get_shared_awake_token()
+            other.awoken_token.get_shared_awake_token(),
         )
     }
 }
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        self.shared()
-            .senders
-            .fetch_sub(1, Ordering::Relaxed);
+        self.shared().senders.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -241,7 +252,7 @@ impl<T> Receiver<T> {
 
     pub fn new() -> Self {
         Self {
-            awoken_token: Arc::new(SharedAwakeToken::new(SendCell::new_fresh(0, 1))).awoken()
+            awoken_token: Arc::new(SharedAwakeToken::new(SendCell::new_fresh(0, 1))).awoken(),
         }
     }
 
@@ -260,7 +271,7 @@ impl<T> Receiver<T> {
     pub fn get_sender(&self) -> Sender<T> {
         self.shared().senders.fetch_add(1, Ordering::Relaxed);
         Sender {
-            awake_token: self.awoken_token.get_shared_awake_token().clone()
+            awake_token: self.awoken_token.get_shared_awake_token().clone(),
         }
     }
 
@@ -276,10 +287,7 @@ impl<T> Receiver<T> {
 impl<T: Clone> Receiver<T> {
     pub fn try_recv(&self) -> Result<T, TryRecvError> {
         if self.awoken_token.get_shared_awake_token().try_awoken() {
-            let r_send_cell = self.shared()
-                .data
-                .read()
-                .unwrap();
+            let r_send_cell = self.shared().data.read().unwrap();
 
             match &*r_send_cell {
                 SendCellData::Fresh => Err(TryRecvError::Empty),
@@ -303,9 +311,7 @@ impl<T> Clone for Receiver<T> {
     fn clone(&self) -> Self {
         self.shared().receivers.fetch_add(1, Ordering::Relaxed);
         Self {
-            awoken_token: self.awoken_token.get_shared_awake_token()
-                .clone()
-                .awoken()
+            awoken_token: self.awoken_token.get_shared_awake_token().clone().awoken(),
         }
     }
 }
@@ -314,7 +320,7 @@ impl<T> PartialEq for Receiver<T> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(
             &self.awoken_token.get_shared_awake_token(),
-            &other.awoken_token.get_shared_awake_token()
+            &other.awoken_token.get_shared_awake_token(),
         )
     }
 }
@@ -331,7 +337,7 @@ impl<T> SameChannel<&Sender<T>> for Receiver<T> {
     fn same_channel(&self, other: &Sender<T>) -> bool {
         Arc::ptr_eq(
             self.awoken_token.get_shared_awake_token(),
-            &other.awake_token
+            &other.awake_token,
         )
     }
 }
@@ -345,20 +351,20 @@ impl<T> SameChannel<&Receiver<T>> for Receiver<T> {
 impl<T: Clone> Future for Receiver<T> {
     type Output = Result<T, RecvError>;
 
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         match self.as_mut().project().awoken_token.poll(cx) {
             Poll::Ready(()) => {
-                let r_send_cell = self.shared()
-                    .data
-                    .read()
-                    .unwrap();
+                let r_send_cell = self.shared().data.read().unwrap();
 
                 match &*r_send_cell {
                     SendCellData::Fresh => panic!("No assignment has been made to the send cell"),
                     SendCellData::EmptyClosed => Poll::Ready(Err(RecvError::Closed)),
                     SendCellData::Closed(value) => Poll::Ready(Ok(value.clone())),
                 }
-            },
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -367,8 +373,6 @@ impl<T: Clone> Future for Receiver<T> {
 #[pinned_drop]
 impl<T> PinnedDrop for Receiver<T> {
     fn drop(self: std::pin::Pin<&mut Self>) {
-        self.shared()
-            .receivers
-            .fetch_sub(1, Ordering::Relaxed);
+        self.shared().receivers.fetch_sub(1, Ordering::Relaxed);
     }
 }

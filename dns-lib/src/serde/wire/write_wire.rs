@@ -1,6 +1,10 @@
 use std::{error::Error, fmt::Display};
 
-use crate::types::{c_domain_name::CDomainNameError, domain_name::DomainNameError, ascii::AsciiError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, base64::Base64Error};
+use crate::types::{
+    ascii::AsciiError, base16::Base16Error, base32::Base32Error, base64::Base64Error,
+    c_domain_name::CDomainNameError, domain_name::DomainNameError,
+    extended_base32::ExtendedBase32Error,
+};
 
 use super::read_wire::ReadWire;
 
@@ -22,7 +26,7 @@ pub enum WriteWireError {
 }
 impl Error for WriteWireError {}
 impl Display for WriteWireError {
-     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::FormatError(error) => write!(f, "Write Wire Format Error: {error}"),
             Self::OverflowError(error) => write!(f, "Write Wire Overflow Error: {error}"),
@@ -31,13 +35,19 @@ impl Display for WriteWireError {
             Self::ValueError(error) => write!(f, "Write Wire Value Error: {error}"),
             Self::VersionError(error) => write!(f, "Write Wire Version Error: {error}"),
 
-            Self::CDomainNameError(error) => write!(f, "Write Wire Compressible Domain Name Error: {error}"),
-            Self::DomainNameError(error) => write!(f, "Write Wire Incompressible Domain Name Error: {error}"),
+            Self::CDomainNameError(error) => {
+                write!(f, "Write Wire Compressible Domain Name Error: {error}")
+            }
+            Self::DomainNameError(error) => {
+                write!(f, "Write Wire Incompressible Domain Name Error: {error}")
+            }
             Self::AsciiError(error) => write!(f, "Write Wire Ascii Error: {error}"),
 
             Self::Base16Error(error) => write!(f, "Write Wire Base16 Error: {error}"),
             Self::Base32Error(error) => write!(f, "Write Wire Bsse32 Error: {error}"),
-            Self::ExtendedBase32Error(error) => write!(f, "Write Wire Extended Base32 Error: {error}"),
+            Self::ExtendedBase32Error(error) => {
+                write!(f, "Write Wire Extended Base32 Error: {error}")
+            }
             Self::Base64Error(error) => write!(f, "Write Wire Base64 Error: {error}"),
         }
     }
@@ -91,7 +101,9 @@ impl<'a> WriteWire<'a> {
     }
 
     #[inline]
-    pub fn current_len(&self) -> usize { self.offset }
+    pub fn current_len(&self) -> usize {
+        self.offset
+    }
 
     #[inline]
     pub fn remaining_len(&self) -> usize {
@@ -102,7 +114,7 @@ impl<'a> WriteWire<'a> {
     pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), WriteWireError> {
         if bytes.len() > self.remaining_len() {
             return Err(WriteWireError::OverflowError(
-                "tried to write bytes past the end of the WriteWire buffer".to_string()
+                "tried to write bytes past the end of the WriteWire buffer".to_string(),
             ));
         }
 
@@ -116,7 +128,7 @@ impl<'a> WriteWire<'a> {
     pub fn write_byte(&mut self, byte: u8) -> Result<(), WriteWireError> {
         if 1 > self.remaining_len() {
             return Err(WriteWireError::OverflowError(
-                "tried to write a byte past the end of the WriteWire buffer".to_string()
+                "tried to write a byte past the end of the WriteWire buffer".to_string(),
             ));
         }
 
@@ -131,7 +143,7 @@ impl<'a> WriteWire<'a> {
         let new_len = (index + bytes.len()).max(self.offset);
         if new_len > self.wire.len() {
             return Err(WriteWireError::OverflowError(
-                "tried to write bytes past the end of the WriteWire buffer".to_string()
+                "tried to write bytes past the end of the WriteWire buffer".to_string(),
             ));
         }
 
@@ -146,7 +158,7 @@ impl<'a> WriteWire<'a> {
         let new_len = (index + 1).max(self.offset);
         if new_len > self.wire.len() {
             return Err(WriteWireError::OverflowError(
-                "tried to write a byte past the end of the WriteWire buffer".to_string()
+                "tried to write a byte past the end of the WriteWire buffer".to_string(),
             ));
         }
 

@@ -1,9 +1,15 @@
-use std::{fmt::{Debug, Display}, hash::Hash};
+use std::{
+    fmt::{Debug, Display},
+    hash::Hash,
+};
 
-use dns_lib::{interface::client::ContextErr, resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::ns::NS}, types::c_domain_name::{CDomainName, CDomainNameError}};
+use dns_lib::{
+    interface::client::ContextErr,
+    resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::ns::NS},
+    types::c_domain_name::{CDomainName, CDomainNameError},
+};
 
 use crate::network::errors::QueryError;
-
 
 #[derive(Clone, PartialEq, Hash, Debug)]
 pub(crate) struct QOk {
@@ -43,9 +49,17 @@ impl Display for QError {
             QError::CDomainNameErr(cdomain_name_err) => write!(f, "{cdomain_name_err}"),
             QError::NetworkQueryErr(query_err) => write!(f, "{query_err}"),
             QError::CacheFailure(rcode) => write!(f, "the cache returned an error code '{rcode}'"),
-            QError::NoClosestNameServerFound(domain) => write!(f, "could not find a closest name server for '{domain}'"),
-            QError::MissingRecord(rtype) => write!(f, "could not find a {rtype} record in the set but one was expected"),
-            QError::QNameIsNotChildOfDName { dname, qname } => write!(f, "the qname '{qname}' is not a child of the dname's owner '{dname}'"),
+            QError::NoClosestNameServerFound(domain) => {
+                write!(f, "could not find a closest name server for '{domain}'")
+            }
+            QError::MissingRecord(rtype) => write!(
+                f,
+                "could not find a {rtype} record in the set but one was expected"
+            ),
+            QError::QNameIsNotChildOfDName { dname, qname } => write!(
+                f,
+                "the qname '{qname}' is not a child of the dname's owner '{dname}'"
+            ),
         }
     }
 }
@@ -71,8 +85,8 @@ impl From<QueryError> for QError {
 #[derive(Clone, PartialEq, Hash, Debug)]
 pub(crate) enum QResult<
     TOk: Clone + PartialEq + Hash + Debug + Display = QOk,
-    TErr: Clone + PartialEq + Debug + Display = QError>
-{
+    TErr: Clone + PartialEq + Debug + Display = QError,
+> {
     Err(TErr),
     Fail(RCode),
     Ok(TOk),
@@ -81,7 +95,7 @@ pub(crate) enum QResult<
 impl<TOk, TErr> Display for QResult<TOk, TErr>
 where
     TOk: Clone + PartialEq + Hash + Debug + Display,
-    TErr: Clone + PartialEq + Debug + Display
+    TErr: Clone + PartialEq + Debug + Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -94,7 +108,7 @@ where
 
 impl<TOk> From<QError> for QResult<TOk, QError>
 where
-    TOk: Clone + PartialEq + Hash + Debug + Display
+    TOk: Clone + PartialEq + Hash + Debug + Display,
 {
     fn from(value: QError) -> Self {
         QResult::Err(value)
@@ -104,7 +118,7 @@ where
 impl<TOk, TErr> From<RCode> for QResult<TOk, TErr>
 where
     TOk: Clone + PartialEq + Hash + Debug + Display,
-    TErr: Clone + PartialEq + Debug + Display
+    TErr: Clone + PartialEq + Debug + Display,
 {
     fn from(value: RCode) -> Self {
         QResult::Fail(value)
@@ -113,7 +127,7 @@ where
 
 impl<TErr> From<QOk> for QResult<QOk, TErr>
 where
-    TErr: Clone + PartialEq + Debug + Display
+    TErr: Clone + PartialEq + Debug + Display,
 {
     fn from(value: QOk) -> Self {
         QResult::Ok(value)
@@ -123,7 +137,7 @@ where
 impl<TOk, TErr> From<Result<TOk, TErr>> for QResult<TOk, TErr>
 where
     TOk: Clone + PartialEq + Hash + Debug + Display,
-    TErr: Clone + PartialEq + Debug + Display
+    TErr: Clone + PartialEq + Debug + Display,
 {
     fn from(value: Result<TOk, TErr>) -> Self {
         match value {

@@ -1,6 +1,6 @@
 use proc_macro;
-use syn::{DeriveInput, Data, DataStruct};
 use quote::quote;
+use syn::{Data, DataStruct, DeriveInput};
 
 pub fn impl_from_wire_macro(ast: &DeriveInput) -> proc_macro::TokenStream {
     match &ast.data {

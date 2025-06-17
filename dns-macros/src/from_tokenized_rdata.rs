@@ -1,6 +1,6 @@
 use proc_macro;
-use syn::{DeriveInput, Data, DataStruct};
 use quote::quote;
+use syn::{Data, DataStruct, DeriveInput};
 
 pub fn impl_from_tokenized_rdata_macro(ast: &DeriveInput) -> proc_macro::TokenStream {
     match &ast.data {
@@ -10,7 +10,10 @@ pub fn impl_from_tokenized_rdata_macro(ast: &DeriveInput) -> proc_macro::TokenSt
     }
 }
 
-fn impl_from_tokenized_rdata_struct_macro(data: &DataStruct, ast: &DeriveInput) -> proc_macro::TokenStream {
+fn impl_from_tokenized_rdata_struct_macro(
+    data: &DataStruct,
+    ast: &DeriveInput,
+) -> proc_macro::TokenStream {
     let name = &ast.ident;
     let field_count = data.fields.len();
     let pattern_match = data.fields.iter().map(|f| &f.ident);

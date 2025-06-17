@@ -6,7 +6,9 @@ use crate::{gen_enum::enum_encoding, types::base16::Base16};
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc8749#name-moving-dlv-to-historic-stat
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc7218
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc7671
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
+#[derive(
+    Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData,
+)]
 pub struct TLSA {
     certificate_usage: CertificateUsage,
     selector: Selector,
@@ -23,7 +25,6 @@ enum_encoding!(
         (PkixEe, "PKIX-EE", 1),
         (DaneTa, "DANE-TA", 2),
         (DaneEe, "DANE-EE", 3),
-
         (PrivCert, "PrivCert", 255),
     ),
     code_presentation,
@@ -36,7 +37,6 @@ enum_encoding!(
     (
         (Cert, "Cert", 0),
         (Spki, "SPKI", 1),
-
         (PrivSel, "PrivSel", 255),
     ),
     code_presentation,
@@ -47,10 +47,9 @@ enum_encoding!(
     MatchingType,
     u8,
     (
-        (Full,     "Full",     0),
+        (Full, "Full", 0),
         (Sha2_256, "SHA2-256", 1),
         (Sha2_512, "SHA2-512", 2),
-
         (PrivMatch, "PrivMatch", 255),
     ),
     code_presentation,
@@ -59,8 +58,10 @@ enum_encoding!(
 
 #[cfg(test)]
 mod tlsa_circular_serde_sanity_test {
-    use crate::{serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::base16::Base16};
     use super::{CertificateUsage, MatchingType, Selector, TLSA};
+    use crate::{
+        serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::base16::Base16,
+    };
 
     gen_test_circular_serde_sanity_test!(
         rfc_6698_example_1_record_circular_serde_sanity_test,
@@ -68,7 +69,10 @@ mod tlsa_circular_serde_sanity_test {
             certificate_usage: CertificateUsage::from_code(0),
             selector: Selector::from_code(0),
             matching_type: MatchingType::from_code(1),
-            certificate: Base16::from_case_insensitive_utf8("d2abde240d7cd3ee6b4b28c54df034b97983a1d16e8a410e4561cb106618e971").unwrap()
+            certificate: Base16::from_case_insensitive_utf8(
+                "d2abde240d7cd3ee6b4b28c54df034b97983a1d16e8a410e4561cb106618e971"
+            )
+            .unwrap()
         }
     );
     gen_test_circular_serde_sanity_test!(

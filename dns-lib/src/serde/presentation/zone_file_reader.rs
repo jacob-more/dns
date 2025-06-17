@@ -2,22 +2,31 @@ use std::path::Path;
 
 use crate::{resource_record::resource_record::ResourceRecord, types::c_domain_name::CDomainName};
 
-use super::{tokenizer::tokenizer::{Tokenizer, Token}, errors::TokenizedRecordError, from_presentation::FromPresentation};
+use super::{
+    errors::TokenizedRecordError,
+    from_presentation::FromPresentation,
+    tokenizer::tokenizer::{Token, Tokenizer},
+};
 
 #[derive(Clone, PartialEq, Hash, Debug)]
 pub enum ZoneToken<'a> {
     ResourceRecord(ResourceRecord),
-    Include{ file_path: &'a Path, domain_name: Option<CDomainName> }
+    Include {
+        file_path: &'a Path,
+        domain_name: Option<CDomainName>,
+    },
 }
 
 pub struct ZoneFileReader<'a> {
-    tokenizer: Tokenizer<'a>
+    tokenizer: Tokenizer<'a>,
 }
 
 impl<'a> ZoneFileReader<'a> {
     #[inline]
     pub fn new(feed: &'a str) -> Self {
-        Self { tokenizer: Tokenizer::new(feed) }
+        Self {
+            tokenizer: Tokenizer::new(feed),
+        }
     }
 
     #[inline]
@@ -41,21 +50,27 @@ impl<'a> Iterator for ZoneFileReader<'a> {
                 Ok(record) => Some(Ok(ZoneToken::ResourceRecord(record))),
                 Err(error) => Some(Err(error)),
             },
-            Token::Include { file_name, domain_name } => {
+            Token::Include {
+                file_name,
+                domain_name,
+            } => {
                 let domain_name = match domain_name {
-                    Some(domain_name_str) => match CDomainName::from_token_format(&[domain_name_str]) {
-                        Ok((domain_name, _)) => Some(domain_name),
-                        Err(error) => return Some(Err(TokenizedRecordError::TokenError(error))),
-                    },
+                    Some(domain_name_str) => {
+                        match CDomainName::from_token_format(&[domain_name_str]) {
+                            Ok((domain_name, _)) => Some(domain_name),
+                            Err(error) => {
+                                return Some(Err(TokenizedRecordError::TokenError(error)));
+                            }
+                        }
+                    }
                     None => None,
                 };
 
                 Some(Ok(ZoneToken::Include {
                     file_path: Path::new(file_name),
-                    domain_name
+                    domain_name,
                 }))
-            },
+            }
         }
-
     }
 }

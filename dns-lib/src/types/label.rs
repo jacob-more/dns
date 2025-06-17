@@ -1,12 +1,20 @@
-use std::{borrow::Borrow, fmt::{Debug, Display}, hash::{Hash, Hasher}, marker::PhantomData, ops::Deref};
+use std::{
+    borrow::Borrow,
+    fmt::{Debug, Display},
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    ops::Deref,
+};
 
 use case_sensitivity::CaseSensitivity;
-use tinyvec::{tiny_vec, TinyVec};
+use tinyvec::{TinyVec, tiny_vec};
 
-use crate::{serde::presentation::parse_chars::{char_token::EscapableChar, non_escaped_to_escaped}, types::ascii::AsciiChar};
+use crate::{
+    serde::presentation::parse_chars::{char_token::EscapableChar, non_escaped_to_escaped},
+    types::ascii::AsciiChar,
+};
 
 use super::ascii::constants::ASCII_PERIOD;
-
 
 #[derive(Default)]
 pub struct CaseSensitive;
@@ -38,7 +46,6 @@ pub(crate) mod case_sensitivity {
     impl CaseSensitivity for CaseInsensitive {}
 }
 
-
 pub struct OwnedLabel<C: CaseSensitivity> {
     case: PhantomData<C>,
     // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
@@ -48,7 +55,7 @@ pub struct OwnedLabel<C: CaseSensitivity> {
 #[repr(transparent)]
 pub struct RefLabel<C: CaseSensitivity> {
     case: PhantomData<C>,
-    octets: [AsciiChar]
+    octets: [AsciiChar],
 }
 
 pub trait Label<C: CaseSensitivity> {
@@ -84,19 +91,24 @@ pub trait Label<C: CaseSensitivity> {
 
     #[inline]
     fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
-        non_escaped_to_escaped::NonEscapedIntoEscapedIter::from(self.octets().iter().map(|character| *character))
-            .map(|character| match character {
-                EscapableChar::Ascii(ASCII_PERIOD) => EscapableChar::EscapedAscii(ASCII_PERIOD),
-                EscapableChar::Ascii(character) => EscapableChar::Ascii(character),
-                _ => character,
-            })
+        non_escaped_to_escaped::NonEscapedIntoEscapedIter::from(
+            self.octets().iter().map(|character| *character),
+        )
+        .map(|character| match character {
+            EscapableChar::Ascii(ASCII_PERIOD) => EscapableChar::EscapedAscii(ASCII_PERIOD),
+            EscapableChar::Ascii(character) => EscapableChar::Ascii(character),
+            _ => character,
+        })
     }
 }
 
 impl<C: CaseSensitivity> Clone for OwnedLabel<C> {
     #[inline]
     fn clone(&self) -> Self {
-        Self { case: self.case.clone(), octets: self.octets.clone() }
+        Self {
+            case: self.case.clone(),
+            octets: self.octets.clone(),
+        }
     }
 }
 
@@ -137,7 +149,7 @@ impl<C: CaseSensitivity> Deref for OwnedLabel<C> {
 
 impl<T, C: CaseSensitivity> AsRef<T> for OwnedLabel<C>
 where
-    <OwnedLabel<C> as Deref>::Target: AsRef<T>
+    <OwnedLabel<C> as Deref>::Target: AsRef<T>,
 {
     fn as_ref(&self) -> &T {
         self.deref().as_ref()
@@ -243,7 +255,10 @@ impl PartialEq<RefLabel<CaseInsensitive>> for RefLabel<CaseInsensitive> {
     }
 }
 
-impl<C: CaseSensitivity> Hash for OwnedLabel<C> where <OwnedLabel<C> as Deref>::Target: Hash {
+impl<C: CaseSensitivity> Hash for OwnedLabel<C>
+where
+    <OwnedLabel<C> as Deref>::Target: Hash,
+{
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.deref().hash(state);
@@ -268,11 +283,17 @@ impl Hash for RefLabel<CaseSensitive> {
 
 impl<C: CaseSensitivity> OwnedLabel<C> {
     pub fn new_root() -> Self {
-        Self { case: PhantomData, octets: tiny_vec![] }
+        Self {
+            case: PhantomData,
+            octets: tiny_vec![],
+        }
     }
 
     pub(super) fn from_octets(octets: TinyVec<[AsciiChar; 14]>) -> Self {
-        OwnedLabel { case: PhantomData, octets }
+        OwnedLabel {
+            case: PhantomData,
+            octets,
+        }
     }
 }
 

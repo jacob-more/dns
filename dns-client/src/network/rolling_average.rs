@@ -1,8 +1,12 @@
-use std::{hint::spin_loop, num::NonZeroU8, ops::{Add, Div}, sync::atomic::Ordering};
+use std::{
+    hint::spin_loop,
+    num::NonZeroU8,
+    ops::{Add, Div},
+    sync::atomic::Ordering,
+};
 
 use atomic::Atomic;
 use bytemuck::{NoUninit, Pod, Zeroable};
-
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
@@ -53,11 +57,11 @@ impl RollingAverage {
             Ok(total) => {
                 self.total = total;
                 return self;
-            },
+            }
             Err(_) => {
                 self.total = u32::MAX;
                 return self;
-            },
+            }
         }
     }
 
@@ -74,19 +78,17 @@ impl RollingAverage {
 pub fn fetch_update<T, F>(atomic: &Atomic<T>, success: Ordering, failure: Ordering, f: F) -> T
 where
     T: NoUninit + Clone,
-    F: Fn(T) -> T
+    F: Fn(T) -> T,
 {
     let mut prev = atomic.load(Ordering::Relaxed);
     loop {
         let next = f(prev);
         match atomic.compare_exchange_weak(prev, next.clone(), success, failure) {
-            Ok(_) => {
-                return next
-            },
+            Ok(_) => return next,
             Err(next_prev) => {
                 prev = next_prev;
                 spin_loop();
-            },
+            }
         }
     }
 }

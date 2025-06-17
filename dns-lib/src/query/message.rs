@@ -1,17 +1,20 @@
 use std::fmt::Display;
 
 use tinyvec::TinyVec;
-use ux::{u3, u1, u4};
+use ux::{u1, u3, u4};
 
-use crate::{resource_record::{resource_record::ResourceRecord, rcode::RCode, opcode::OpCode}, serde::wire::{to_wire::ToWire, from_wire::FromWire, write_wire::WriteWireError, read_wire::ReadWireError}};
+use crate::{
+    resource_record::{opcode::OpCode, rcode::RCode, resource_record::ResourceRecord},
+    serde::wire::{
+        from_wire::FromWire, read_wire::ReadWireError, to_wire::ToWire, write_wire::WriteWireError,
+    },
+};
 
 use super::{qr::QR, question::Question};
-
 
 /// The theoretical minimum number of bytes that a Message requires. This
 /// message would include ONLY header bytes.
 const MIN_MESSAGE_BYTE_LEN: u16 = 96;
-
 
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-4
 #[derive(Clone, PartialEq, Hash, Debug)]
@@ -160,7 +163,7 @@ impl From<Question> for Message {
     #[inline]
     fn from(question: Question) -> Self {
         Self {
-            id: 0,  //< An ID will be assigned when the message is sent over the network
+            id: 0, //< An ID will be assigned when the message is sent over the network
             qr: QR::Query,
             opcode: OpCode::Query,
             authoritative_answer: false,
@@ -202,7 +205,14 @@ fn u1_to_bool(integer: u1) -> bool {
 
 impl Message {
     #[inline]
-    pub fn to_wire_format_with_two_octet_length<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    pub fn to_wire_format_with_two_octet_length<'a, 'b>(
+        &self,
+        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
+        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
+    where
+        'a: 'b,
+    {
         // Push two bytes onto the wire. These will be replaced with the u16 that indicates the wire
         // length.
         let two_octet_length_offset = wire.current_len();
@@ -214,7 +224,11 @@ impl Message {
 
         let wire_length = wire_end_offset - wire_start_offset;
         if wire_length > u16::MAX as usize {
-            return Err(WriteWireError::OverflowError(format!("Tried to write {} bytes but the length octet can be at most {}", wire_length, u16::MAX)));
+            return Err(WriteWireError::OverflowError(format!(
+                "Tried to write {} bytes but the length octet can be at most {}",
+                wire_length,
+                u16::MAX
+            )));
         }
         wire.write_bytes_at(&(wire_length as u16).to_be_bytes(), two_octet_length_offset)
     }
@@ -222,7 +236,14 @@ impl Message {
 
 impl ToWire for Message {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(
+        &self,
+        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
+        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
+    where
+        'a: 'b,
+    {
         self.id.to_wire_format(wire, compression)?;
 
         let qr = match self.qr {
@@ -239,7 +260,11 @@ impl ToWire for Message {
         let z = self.z;
         let rcode = match self.rcode.code() {
             rcode @ 0..=255 => u4::new(rcode as u8),
-            rcode @ 256.. => return Err(WriteWireError::OutOfBoundsError(format!("The Message RCode must be within the range 0 to 255 but it was {rcode}"))),
+            rcode @ 256.. => {
+                return Err(WriteWireError::OutOfBoundsError(format!(
+                    "The Message RCode must be within the range 0 to 255 but it was {rcode}"
+                )));
+            }
         };
         (ra, z, rcode).to_wire_format(wire, compression)?;
 
@@ -248,7 +273,9 @@ impl ToWire for Message {
         (self.authority.len() as u16).to_wire_format(wire, compression)?;
         (self.additional.len() as u16).to_wire_format(wire, compression)?;
 
-        self.question.iter().try_for_each(|question| question.to_wire_format(wire, compression))?;
+        self.question
+            .iter()
+            .try_for_each(|question| question.to_wire_format(wire, compression))?;
         self.answer.to_wire_format(wire, compression)?;
         self.authority.to_wire_format(wire, compression)?;
         self.additional.to_wire_format(wire, compression)
@@ -277,16 +304,24 @@ impl ToWire for Message {
 
 impl FromWire for Message {
     #[inline]
-    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+    fn from_wire_format<'a, 'b>(
+        wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>,
+    ) -> Result<Self, crate::serde::wire::read_wire::ReadWireError>
+    where
+        Self: Sized,
+        'a: 'b,
+    {
         let id = u16::from_wire_format(wire)?;
         let (qr, opcode, aa, tc, rd) = <(u1, u4, u1, u1, u1)>::from_wire_format(wire)?;
 
         let qr = match u16::from(qr) {
             0 => QR::Query,
             1 => QR::Response,
-            _ => return Err(ReadWireError::ValueError(
-                String::from("incorrect query response value. Only allowed to be 0 (query) or 1 (response)"),
-            ))
+            _ => {
+                return Err(ReadWireError::ValueError(String::from(
+                    "incorrect query response value. Only allowed to be 0 (query) or 1 (response)",
+                )));
+            }
         };
 
         let opcode = OpCode::from_code(opcode);

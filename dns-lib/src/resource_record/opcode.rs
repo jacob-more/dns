@@ -25,12 +25,12 @@ impl OpCode {
         return match self {
             Self::Unknown(x) => *x,
 
-            Self::Query  => u4::new(0),
+            Self::Query => u4::new(0),
             Self::IQuery => u4::new(1),
             Self::Status => u4::new(2),
 
-            Self::Notify                => u4::new(4),
-            Self::Update                => u4::new(5),
+            Self::Notify => u4::new(4),
+            Self::Update => u4::new(5),
             Self::DNSStatefulOperations => u4::new(6),
         };
     }
@@ -40,12 +40,12 @@ impl OpCode {
         return match self {
             Self::Unknown(_) => "Unknown",
 
-            Self::Query  => "Query",
+            Self::Query => "Query",
             Self::IQuery => "Inverse Query",
             Self::Status => "Status",
 
-            Self::Notify                => "Notify",
-            Self::Update                => "Update",
+            Self::Notify => "Notify",
+            Self::Update => "Update",
             Self::DNSStatefulOperations => "DNS Stateful Operations",
         };
     }
@@ -53,16 +53,18 @@ impl OpCode {
     #[inline]
     pub fn from_code(value: u4) -> Self {
         return match u8::from(value) {
-            0 =>      Self::Query,
-            1 =>      Self::IQuery,
-            2 =>      Self::Status,
-            3 =>      Self::Unknown(value),
-            4 =>      Self::Notify,
-            5 =>      Self::Update,
-            6 =>      Self::DNSStatefulOperations,
+            0 => Self::Query,
+            1 => Self::IQuery,
+            2 => Self::Status,
+            3 => Self::Unknown(value),
+            4 => Self::Notify,
+            5 => Self::Update,
+            6 => Self::DNSStatefulOperations,
             7..=15 => Self::Unknown(value),
 
-            _ => unreachable!("codes greater than 15 are invalid options for OpCodes and cannot be represented by a u4")
+            _ => unreachable!(
+                "codes greater than 15 are invalid options for OpCodes and cannot be represented by a u4"
+            ),
         };
     }
 }

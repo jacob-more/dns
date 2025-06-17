@@ -26,5 +26,5 @@ macro_rules! gen_fail_token_test {
     }
 }
 
-pub(crate) use gen_ok_token_test;
 pub(crate) use gen_fail_token_test;
+pub(crate) use gen_ok_token_test;

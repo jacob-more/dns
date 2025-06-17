@@ -2,7 +2,10 @@ use std::fmt::Display;
 
 use crate::serde::presentation::tokenizer::token_entries::Entry;
 
-use super::{token_entries::{EntryIter, StringLiteral}, errors::TokenizerError};
+use super::{
+    errors::TokenizerError,
+    token_entries::{EntryIter, StringLiteral},
+};
 
 const DEFAULT_DOMAIN_NAME: Option<&str> = None;
 const DEFAULT_TTL: Option<&str> = Some("86400");
@@ -11,21 +14,27 @@ const DEFAULT_CLASS: Option<&str> = Some("IN");
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Token<'a> {
     ResourceRecord(ResourceRecordToken<'a>),
-    Include { file_name: &'a str, domain_name: Option<&'a str> }
+    Include {
+        file_name: &'a str,
+        domain_name: Option<&'a str>,
+    },
 }
 
 impl<'a> Display for Token<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ResourceRecord(record) => write!(f, "{record}"),
-            Self::Include{ file_name, domain_name } => {
+            Self::Include {
+                file_name,
+                domain_name,
+            } => {
                 write!(f, "Include")?;
                 write!(f, "\tFile Name: '{file_name}'")?;
                 match domain_name {
                     Some(domain_name) => write!(f, "Origin: '{domain_name}'"),
                     None => Ok(()),
                 }
-            },
+            }
         }
     }
 }
@@ -119,39 +128,53 @@ impl<'a> Iterator for Tokenizer<'a> {
                 Some(Err(error)) => return Some(Err(error)),
 
                 // Replace any free-standing `@` with the domain name defined by the $ORIGIN token
-                Some(Ok(Entry::Origin{origin})) => match (origin, self.origin) {
+                Some(Ok(Entry::Origin { origin })) => match (origin, self.origin) {
                     (StringLiteral::Raw(origin), _) => self.origin = Some(origin),
                     (StringLiteral::Quoted(origin), _) => self.origin = Some(origin),
-                    (StringLiteral::Origin, Some(_)) => (),  //< Origin remains unchanged
-                    (StringLiteral::Origin, None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
+                    (StringLiteral::Origin, Some(_)) => (), //< Origin remains unchanged
+                    (StringLiteral::Origin, None) => {
+                        return Some(Err(TokenizerError::OriginUsedBeforeDefined));
+                    }
                 },
-                Some(Ok(Entry::TTL{ttl})) => {
-                    self.ttl_directive = Some(ttl)
-                },
-                Some(Ok(Entry::RClass{rclass})) => {
-                    self.rclass_directive = Some(rclass)
-                },
-                Some(Ok(Entry::Include{ file_name, domain_name })) => {
+                Some(Ok(Entry::TTL { ttl })) => self.ttl_directive = Some(ttl),
+                Some(Ok(Entry::RClass { rclass })) => self.rclass_directive = Some(rclass),
+                Some(Ok(Entry::Include {
+                    file_name,
+                    domain_name,
+                })) => {
                     // Replace any free-standing `@` with the domain name defined by the $ORIGIN token
                     let domain_name = match (domain_name, self.origin) {
                         (Some(StringLiteral::Raw(domain_name)), _) => Some(domain_name),
                         (Some(StringLiteral::Quoted(domain_name)), _) => Some(domain_name),
                         (Some(StringLiteral::Origin), Some(origin)) => Some(origin),
-                        (Some(StringLiteral::Origin), None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
+                        (Some(StringLiteral::Origin), None) => {
+                            return Some(Err(TokenizerError::OriginUsedBeforeDefined));
+                        }
                         // The included file inherits the parent file's origin if one is not given
                         (None, Some(origin)) => Some(origin),
                         (None, None) => None,
                     };
 
-                    return Some(Ok(Token::Include { file_name, domain_name }));
-                },
-                Some(Ok(Entry::ResourceRecord{domain_name, ttl, rclass, rtype, rdata})) => {
+                    return Some(Ok(Token::Include {
+                        file_name,
+                        domain_name,
+                    }));
+                }
+                Some(Ok(Entry::ResourceRecord {
+                    domain_name,
+                    ttl,
+                    rclass,
+                    rtype,
+                    rdata,
+                })) => {
                     // Replace any free-standing `@` with the domain name defined by the $ORIGIN token
                     let domain_name = match (domain_name, self.origin) {
                         (Some(StringLiteral::Raw(domain_name)), _) => Some(domain_name),
                         (Some(StringLiteral::Quoted(domain_name)), _) => Some(domain_name),
                         (Some(StringLiteral::Origin), Some(origin)) => Some(origin),
-                        (Some(StringLiteral::Origin), None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
+                        (Some(StringLiteral::Origin), None) => {
+                            return Some(Err(TokenizerError::OriginUsedBeforeDefined));
+                        }
                         (None, _) => None,
                     };
 
@@ -161,7 +184,9 @@ impl<'a> Iterator for Tokenizer<'a> {
                             (StringLiteral::Raw(literal), _) => raw_rdata.push(*literal),
                             (StringLiteral::Quoted(literal), _) => raw_rdata.push(*literal),
                             (StringLiteral::Origin, Some(origin)) => raw_rdata.push(origin),
-                            (StringLiteral::Origin, None) => return Some(Err(TokenizerError::OriginUsedBeforeDefined)),
+                            (StringLiteral::Origin, None) => {
+                                return Some(Err(TokenizerError::OriginUsedBeforeDefined));
+                            }
                         }
                     }
                     let rdata = raw_rdata;
@@ -172,9 +197,11 @@ impl<'a> Iterator for Tokenizer<'a> {
                         (Some(this_domain_name), _) => {
                             self.last_domain_name = Some(this_domain_name);
                             this_domain_name
-                        },
+                        }
                         (None, Some(default_domain_name)) => default_domain_name,
-                        (None, None) => return Some(Err(TokenizerError::BlankDomainUsedBeforeDefined)),
+                        (None, None) => {
+                            return Some(Err(TokenizerError::BlankDomainUsedBeforeDefined));
+                        }
                     };
 
                     // Fill in any blank ttl's. If one is already defined, record it as being
@@ -183,9 +210,11 @@ impl<'a> Iterator for Tokenizer<'a> {
                         (Some(this_ttl), _) => {
                             self.last_ttl = Some(this_ttl);
                             this_ttl
-                        },
+                        }
                         (None, Some(default_ttl)) => default_ttl,
-                        (None, None) => return Some(Err(TokenizerError::BlankTTLUsedBeforeDefined)),
+                        (None, None) => {
+                            return Some(Err(TokenizerError::BlankTTLUsedBeforeDefined));
+                        }
                     };
 
                     // Fill in any blank classes. If one is already defined, record it as being
@@ -194,12 +223,20 @@ impl<'a> Iterator for Tokenizer<'a> {
                         (Some(this_rclass), _) => {
                             self.last_rclass = Some(this_rclass);
                             this_rclass
-                        },
+                        }
                         (None, Some(default_rclass)) => default_rclass,
-                        (None, None) => return Some(Err(TokenizerError::BlankClassUsedBeforeDefined)),
+                        (None, None) => {
+                            return Some(Err(TokenizerError::BlankClassUsedBeforeDefined));
+                        }
                     };
 
-                    return Some(Ok(Token::ResourceRecord(ResourceRecordToken { domain_name, ttl, rclass, rtype, rdata })));
+                    return Some(Ok(Token::ResourceRecord(ResourceRecordToken {
+                        domain_name,
+                        ttl,
+                        rclass,
+                        rtype,
+                        rdata,
+                    })));
                 }
             }
         }

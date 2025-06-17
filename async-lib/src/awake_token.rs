@@ -9,13 +9,15 @@ pub trait SameAwakeToken<T> {
 }
 
 #[derive(Debug)]
-pub struct AwakeToken { shared: Arc<SharedAwakeToken<()>> }
+pub struct AwakeToken {
+    shared: Arc<SharedAwakeToken<()>>,
+}
 
 impl AwakeToken {
     #[inline]
     pub fn new() -> Self {
         Self {
-            shared: Arc::new(SharedAwakeToken::new(()))
+            shared: Arc::new(SharedAwakeToken::new(())),
         }
     }
 
@@ -26,7 +28,9 @@ impl AwakeToken {
 
     #[inline]
     pub fn awoken(&self) -> AwokenToken {
-        AwokenToken { shared: self.shared.clone().awoken() }
+        AwokenToken {
+            shared: self.shared.clone().awoken(),
+        }
     }
 
     #[inline]
@@ -38,7 +42,7 @@ impl AwakeToken {
 impl Clone for AwakeToken {
     fn clone(&self) -> Self {
         Self {
-            shared: self.shared.clone()
+            shared: self.shared.clone(),
         }
     }
 }
@@ -65,10 +69,7 @@ impl SameAwakeToken<&AwakeToken> for AwakeToken {
 
 impl SameAwakeToken<&AwokenToken> for AwakeToken {
     fn same_awake_token(&self, other: &AwokenToken) -> bool {
-        Arc::ptr_eq(
-            &self.shared,
-            &other.shared.get_shared_awake_token()
-        )
+        Arc::ptr_eq(&self.shared, &other.shared.get_shared_awake_token())
     }
 }
 
@@ -76,16 +77,14 @@ impl SameAwakeToken<&AwokenToken> for AwakeToken {
 #[derive(Debug)]
 pub struct AwokenToken {
     #[pin]
-    shared: SharedAwokenToken<()>
+    shared: SharedAwokenToken<()>,
 }
 
 impl AwokenToken {
     #[inline]
     pub fn awoken(&self) -> AwokenToken {
         AwokenToken {
-            shared: self.shared.get_shared_awake_token()
-                .clone()
-                .awoken()
+            shared: self.shared.get_shared_awake_token().clone().awoken(),
         }
     }
 
@@ -96,7 +95,9 @@ impl AwokenToken {
 
     #[inline]
     pub fn get_awake_token(&self) -> AwakeToken {
-        AwakeToken { shared: self.shared.get_shared_awake_token().clone() }
+        AwakeToken {
+            shared: self.shared.get_shared_awake_token().clone(),
+        }
     }
 
     #[inline]
@@ -109,17 +110,17 @@ impl<'a> Future for AwokenToken {
     type Output = ();
 
     #[inline]
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Self::Output> {
         self.as_mut().project().shared.poll(cx)
     }
 }
 
 impl SameAwakeToken<&AwakeToken> for AwokenToken {
     fn same_awake_token(&self, other: &AwakeToken) -> bool {
-        Arc::ptr_eq(
-            &self.shared.get_shared_awake_token(),
-            &other.shared
-        )
+        Arc::ptr_eq(&self.shared.get_shared_awake_token(), &other.shared)
     }
 }
 
@@ -127,7 +128,7 @@ impl SameAwakeToken<&AwokenToken> for AwokenToken {
     fn same_awake_token(&self, other: &AwokenToken) -> bool {
         Arc::ptr_eq(
             &self.shared.get_shared_awake_token(),
-            &other.shared.get_shared_awake_token()
+            &other.shared.get_shared_awake_token(),
         )
     }
 }

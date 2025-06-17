@@ -1,6 +1,20 @@
-use dns_macros::{ToWire, RData, ToPresentation};
+use dns_macros::{RData, ToPresentation, ToWire};
 
-use crate::{serde::{presentation::{errors::{TokenError, TokenizedRecordError}, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData}, wire::{from_wire::FromWire, read_wire::ReadWireError}}, types::{c_domain_name::CDomainNameError, character_string::CharacterString, domain_name::{DomainName, DomainNameError}}};
+use crate::{
+    serde::{
+        presentation::{
+            errors::{TokenError, TokenizedRecordError},
+            from_presentation::FromPresentation,
+            from_tokenized_rdata::FromTokenizedRData,
+        },
+        wire::{from_wire::FromWire, read_wire::ReadWireError},
+    },
+    types::{
+        c_domain_name::CDomainNameError,
+        character_string::CharacterString,
+        domain_name::{DomainName, DomainNameError},
+    },
+};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc3403#section-4
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, ToPresentation, RData)]
@@ -15,39 +29,72 @@ pub struct NAPTR {
 
 impl NAPTR {
     #[inline]
-    pub fn new(order: u16, preference: u16, flags: CharacterString, service: CharacterString, regexp: CharacterString, replacement: DomainName) -> Self {
-        Self { order, preference, flags, service, regexp, replacement }
+    pub fn new(
+        order: u16,
+        preference: u16,
+        flags: CharacterString,
+        service: CharacterString,
+        regexp: CharacterString,
+        replacement: DomainName,
+    ) -> Self {
+        Self {
+            order,
+            preference,
+            flags,
+            service,
+            regexp,
+            replacement,
+        }
     }
 
     #[inline]
-    pub fn order(&self) -> u16 { self.order }
+    pub fn order(&self) -> u16 {
+        self.order
+    }
 
     #[inline]
-    pub fn preference(&self) -> u16 { self.preference }
+    pub fn preference(&self) -> u16 {
+        self.preference
+    }
 
     #[inline]
-    pub fn flags(&self) -> &CharacterString { &self.flags }
+    pub fn flags(&self) -> &CharacterString {
+        &self.flags
+    }
 
     #[inline]
-    pub fn service(&self) -> &CharacterString { &self.service }
+    pub fn service(&self) -> &CharacterString {
+        &self.service
+    }
 
     #[inline]
-    pub fn regexp(&self) -> &CharacterString { &self.regexp }
+    pub fn regexp(&self) -> &CharacterString {
+        &self.regexp
+    }
 
     #[inline]
-    pub fn replacement(&self) -> &DomainName { &self.replacement }
-
+    pub fn replacement(&self) -> &DomainName {
+        &self.replacement
+    }
 }
 
 impl FromWire for NAPTR {
     #[inline]
-    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+    fn from_wire_format<'a, 'b>(
+        wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>,
+    ) -> Result<Self, crate::serde::wire::read_wire::ReadWireError>
+    where
+        Self: Sized,
+        'a: 'b,
+    {
         let order = u16::from_wire_format(wire)?;
         let preference = u16::from_wire_format(wire)?;
 
         let flags = CharacterString::from_wire_format(wire)?;
         if !flags.is_alphanumeric_or_empty() {
-            return Err(ReadWireError::FormatError(format!("The 'flags' field is required to be alphanumeric")));
+            return Err(ReadWireError::FormatError(format!(
+                "The 'flags' field is required to be alphanumeric"
+            )));
         }
 
         let service = CharacterString::from_wire_format(wire)?;
@@ -55,20 +102,36 @@ impl FromWire for NAPTR {
 
         let replacement = DomainName::from_wire_format(wire)?;
         if !replacement.is_fully_qualified() {
-            return Err(ReadWireError::DomainNameError(DomainNameError::CDomainNameError(CDomainNameError::Fqdn)));
+            return Err(ReadWireError::DomainNameError(
+                DomainNameError::CDomainNameError(CDomainNameError::Fqdn),
+            ));
         }
 
         if (regexp.len() > 0) && (!replacement.is_root()) {
-            return Err(ReadWireError::FormatError(format!("The 'regexp' and 'replacement' fields are mutually exclusive but both were non-empty")));
+            return Err(ReadWireError::FormatError(format!(
+                "The 'regexp' and 'replacement' fields are mutually exclusive but both were non-empty"
+            )));
         }
 
-        Ok(Self { order, preference, flags, service, regexp, replacement })
+        Ok(Self {
+            order,
+            preference,
+            flags,
+            service,
+            regexp,
+            replacement,
+        })
     }
 }
 
 impl FromTokenizedRData for NAPTR {
     #[inline]
-    fn from_tokenized_rdata(record: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
+    fn from_tokenized_rdata(
+        record: &Vec<&str>,
+    ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
+    where
+        Self: Sized,
+    {
         match record.as_slice() {
             &[order, preference, flags, service, replacement, regexp] => {
                 let (order, _) = u16::from_token_format(&[order])?;
@@ -76,7 +139,9 @@ impl FromTokenizedRData for NAPTR {
 
                 let (flags, _) = CharacterString::from_token_format(&[flags])?;
                 if !flags.is_alphanumeric_or_empty() {
-                    return Err(TokenizedRecordError::ValueError(format!("The 'flags' field is required to be alphanumeric")));
+                    return Err(TokenizedRecordError::ValueError(format!(
+                        "The 'flags' field is required to be alphanumeric"
+                    )));
                 }
 
                 let (service, _) = CharacterString::from_token_format(&[service])?;
@@ -84,24 +149,46 @@ impl FromTokenizedRData for NAPTR {
 
                 let (replacement, _) = DomainName::from_token_format(&[replacement])?;
                 if !replacement.is_fully_qualified() {
-                    return Err(TokenizedRecordError::TokenError(TokenError::DomainNameError(DomainNameError::CDomainNameError(CDomainNameError::Fqdn))));
+                    return Err(TokenizedRecordError::TokenError(
+                        TokenError::DomainNameError(DomainNameError::CDomainNameError(
+                            CDomainNameError::Fqdn,
+                        )),
+                    ));
                 }
 
                 if (regexp.len() > 0) && (!replacement.is_root()) {
-                    return Err(TokenizedRecordError::ValueError(format!("The 'regexp' and 'replacement' fields are mutually exclusive but both were non-empty")));
+                    return Err(TokenizedRecordError::ValueError(format!(
+                        "The 'regexp' and 'replacement' fields are mutually exclusive but both were non-empty"
+                    )));
                 }
 
-                Ok(Self { order, preference, flags, service, regexp, replacement })
-            },
-            &[_, _, _, _, _, _, ..] => Err(TokenizedRecordError::TooManyRDataTokensError { expected: 6, received: record.len() }),
-            _ => Err(TokenizedRecordError::TooFewRDataTokensError { expected: 6, received: record.len() }),
+                Ok(Self {
+                    order,
+                    preference,
+                    flags,
+                    service,
+                    regexp,
+                    replacement,
+                })
+            }
+            &[_, _, _, _, _, _, ..] => Err(TokenizedRecordError::TooManyRDataTokensError {
+                expected: 6,
+                received: record.len(),
+            }),
+            _ => Err(TokenizedRecordError::TooFewRDataTokensError {
+                expected: 6,
+                received: record.len(),
+            }),
         }
     }
 }
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::{serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::{character_string::CharacterString, domain_name::DomainName}};
+    use crate::{
+        serde::wire::circular_test::gen_test_circular_serde_sanity_test,
+        types::{character_string::CharacterString, domain_name::DomainName},
+    };
 
     use super::NAPTR;
 

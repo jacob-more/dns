@@ -1,14 +1,25 @@
-use std::{hint::spin_loop, mem::ManuallyDrop, ptr::{addr_of_mut, null_mut, NonNull}, sync::atomic::{AtomicPtr, AtomicUsize, Ordering}};
+use std::{
+    hint::spin_loop,
+    mem::ManuallyDrop,
+    ptr::{NonNull, addr_of_mut, null_mut},
+    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
+};
 
 pub trait ReferenceCounted {
     fn ref_count(&self) -> &AtomicUsize;
 }
 
-pub struct ArcPtr<T> where T: ReferenceCounted {
-    ptr: NonNull<T>
+pub struct ArcPtr<T>
+where
+    T: ReferenceCounted,
+{
+    ptr: NonNull<T>,
 }
 
-impl<T> ArcPtr<T> where T: ReferenceCounted {
+impl<T> ArcPtr<T>
+where
+    T: ReferenceCounted,
+{
     pub fn new(value: &mut T) -> Self {
         value.ref_count().fetch_add(1, Ordering::AcqRel);
         match NonNull::new(addr_of_mut!(*value)) {
@@ -45,38 +56,58 @@ impl<T> ArcPtr<T> where T: ReferenceCounted {
     }
 }
 
-impl<T> Clone for ArcPtr<T> where T: ReferenceCounted {
+impl<T> Clone for ArcPtr<T>
+where
+    T: ReferenceCounted,
+{
     fn clone(&self) -> Self {
         self.ref_count().fetch_add(1, Ordering::Release);
-        Self { ptr: self.ptr.clone() }
+        Self {
+            ptr: self.ptr.clone(),
+        }
     }
 }
 
-impl<T> Drop for ArcPtr<T> where T: ReferenceCounted {
+impl<T> Drop for ArcPtr<T>
+where
+    T: ReferenceCounted,
+{
     fn drop(&mut self) {
         self.ref_count().fetch_sub(1, Ordering::Release);
     }
 }
 
-struct AtomicArcPtr<T> where T: ReferenceCounted {
-    ptr: AtomicPtr<T>
+struct AtomicArcPtr<T>
+where
+    T: ReferenceCounted,
+{
+    ptr: AtomicPtr<T>,
 }
 
-impl<T> AtomicArcPtr<T> where T: ReferenceCounted {
+impl<T> AtomicArcPtr<T>
+where
+    T: ReferenceCounted,
+{
     pub fn new_null() -> Self {
-        Self { ptr: AtomicPtr::new(null_mut()) }
+        Self {
+            ptr: AtomicPtr::new(null_mut()),
+        }
     }
 
     pub fn new(value: ArcPtr<T>) -> Self {
         let value = ManuallyDrop::new(value);
-        Self { ptr: AtomicPtr::new(value.as_ptr()) }
+        Self {
+            ptr: AtomicPtr::new(value.as_ptr()),
+        }
     }
 
     /// The pointer must be associated with a reference count if it is non-null. Calling this with a
     /// non-null pointer passes the responsibility of decrementing the reference count to the
     /// AtomicArcPtr.
     pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
-        Self { ptr: AtomicPtr::new(ptr.as_ptr()) }
+        Self {
+            ptr: AtomicPtr::new(ptr.as_ptr()),
+        }
     }
 
     /// There is no guarantee that the loaded pointer does not point to a dropped value unless an
@@ -104,7 +135,7 @@ impl<T> AtomicArcPtr<T> where T: ReferenceCounted {
                     Some(old_ptr) => Some(unsafe { ArcPtr::from_ptr(old_ptr) }),
                     None => None,
                 }
-            },
+            }
             None => self.take(ordering),
         }
     }
@@ -115,11 +146,20 @@ impl<T> AtomicArcPtr<T> where T: ReferenceCounted {
         let _ = self.swap(new, ordering);
     }
 
-    pub fn compare_exchange(&self, current: *mut T, new: Option<ArcPtr<T>>, success: Ordering, failure: Ordering) -> Result<Option<ArcPtr<T>>, (*mut T, Option<ArcPtr<T>>)> {
+    pub fn compare_exchange(
+        &self,
+        current: *mut T,
+        new: Option<ArcPtr<T>>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Option<ArcPtr<T>>, (*mut T, Option<ArcPtr<T>>)> {
         match new {
             Some(new) => {
                 let new_ptr = new.as_ptr();
-                match self.ptr.compare_exchange(current, new_ptr, success, failure) {
+                match self
+                    .ptr
+                    .compare_exchange(current, new_ptr, success, failure)
+                {
                     // Safety: It is guaranteed that the Ok result is equal to
                     // `current`. So, we will use the value in our local
                     // `current` variable so that the compiler can optimize it
@@ -130,12 +170,15 @@ impl<T> AtomicArcPtr<T> where T: ReferenceCounted {
                             Some(current) => Ok(Some(unsafe { ArcPtr::from_ptr(current) })),
                             None => Ok(None),
                         }
-                    },
+                    }
                     Err(actual) => Err((actual, Some(new))),
                 }
-            },
+            }
             None => {
-                match self.ptr.compare_exchange(current, null_mut(), success, failure) {
+                match self
+                    .ptr
+                    .compare_exchange(current, null_mut(), success, failure)
+                {
                     // Safety: It is guaranteed that the Ok result is equal to
                     // `current`. So, we will use the value in our local
                     // `current` variable so that the compiler can optimize it
@@ -146,12 +189,15 @@ impl<T> AtomicArcPtr<T> where T: ReferenceCounted {
                     },
                     Err(actual) => Err((actual, None)),
                 }
-            },
+            }
         }
     }
 }
 
-impl<T> Drop for AtomicArcPtr<T> where T: ReferenceCounted {
+impl<T> Drop for AtomicArcPtr<T>
+where
+    T: ReferenceCounted,
+{
     fn drop(&mut self) {
         // If we still point to something, load it and drop it. Since it is an `ArcPtr`, the
         // reference count is automatically decremented.
@@ -163,24 +209,36 @@ impl<T> Drop for AtomicArcPtr<T> where T: ReferenceCounted {
 
 /// An atomically reference counted pointer that cannot be read unless it is owned (i.e., replaced
 /// with some other value) or take (replaced with a null value).
-pub struct AtomicArcSwapPtr<T> where T: ReferenceCounted {
-    arc: AtomicArcPtr<T>
+pub struct AtomicArcSwapPtr<T>
+where
+    T: ReferenceCounted,
+{
+    arc: AtomicArcPtr<T>,
 }
 
-impl<T> AtomicArcSwapPtr<T> where T: ReferenceCounted {
+impl<T> AtomicArcSwapPtr<T>
+where
+    T: ReferenceCounted,
+{
     pub fn new_null() -> Self {
-        Self { arc: AtomicArcPtr::new_null() }
+        Self {
+            arc: AtomicArcPtr::new_null(),
+        }
     }
 
     pub fn new(value: ArcPtr<T>) -> Self {
-        Self { arc: AtomicArcPtr::new(value) }
+        Self {
+            arc: AtomicArcPtr::new(value),
+        }
     }
 
     /// The pointer must be associated with a reference count if it is non-null. Calling this with a
     /// non-null pointer passes the responsibility of decrementing the reference count to the
     /// AtomicArcPtr.
     pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
-        Self { arc: AtomicArcPtr::from_ptr(ptr) }
+        Self {
+            arc: AtomicArcPtr::from_ptr(ptr),
+        }
     }
 
     pub fn take(&self, ordering: Ordering) -> Option<ArcPtr<T>> {
@@ -195,17 +253,29 @@ impl<T> AtomicArcSwapPtr<T> where T: ReferenceCounted {
         self.arc.store(new, ordering)
     }
 
-    pub fn compare_exchange(&self, current: *mut T, new: Option<ArcPtr<T>>, success: Ordering, failure: Ordering) -> Result<Option<ArcPtr<T>>, (*mut T, Option<ArcPtr<T>>)> {
+    pub fn compare_exchange(
+        &self,
+        current: *mut T,
+        new: Option<ArcPtr<T>>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Option<ArcPtr<T>>, (*mut T, Option<ArcPtr<T>>)> {
         self.arc.compare_exchange(current, new, success, failure)
     }
 }
 
-pub struct ArcFollowPtr<'a, T> where T: ReferenceCounted {
+pub struct ArcFollowPtr<'a, T>
+where
+    T: ReferenceCounted,
+{
     atomic_arc_follow: &'a AtomicArcFollowPtr<T>,
     arc: ArcPtr<T>,
 }
 
-impl<'a, T> ArcFollowPtr<'a, T> where T: ReferenceCounted {
+impl<'a, T> ArcFollowPtr<'a, T>
+where
+    T: ReferenceCounted,
+{
     pub fn as_non_null(&self) -> NonNull<T> {
         self.arc.as_non_null()
     }
@@ -244,7 +314,10 @@ impl<'a, T> ArcFollowPtr<'a, T> where T: ReferenceCounted {
     }
 }
 
-impl<'a, T> Drop for ArcFollowPtr<'a, T> where T: ReferenceCounted {
+impl<'a, T> Drop for ArcFollowPtr<'a, T>
+where
+    T: ReferenceCounted,
+{
     fn drop(&mut self) {
         while self.atomic_arc_follow.is_followed.load(Ordering::Acquire) > 0 {
             spin_loop();
@@ -254,23 +327,29 @@ impl<'a, T> Drop for ArcFollowPtr<'a, T> where T: ReferenceCounted {
 }
 
 /// An atomically reference counted pointer that can be loaded if done carefully.
-pub struct AtomicArcFollowPtr<T> where T: ReferenceCounted {
+pub struct AtomicArcFollowPtr<T>
+where
+    T: ReferenceCounted,
+{
     arc: AtomicArcPtr<T>,
     is_followed: AtomicUsize,
 }
 
-impl<T> AtomicArcFollowPtr<T> where T: ReferenceCounted {
+impl<T> AtomicArcFollowPtr<T>
+where
+    T: ReferenceCounted,
+{
     pub fn new_null() -> Self {
         Self {
             arc: AtomicArcPtr::new_null(),
-            is_followed: AtomicUsize::new(0)
+            is_followed: AtomicUsize::new(0),
         }
     }
 
     pub fn new(value: ArcPtr<T>) -> Self {
         Self {
             arc: AtomicArcPtr::new(value),
-            is_followed: AtomicUsize::new(0)
+            is_followed: AtomicUsize::new(0),
         }
     }
 
@@ -280,7 +359,7 @@ impl<T> AtomicArcFollowPtr<T> where T: ReferenceCounted {
     pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
         Self {
             arc: AtomicArcPtr::from_ptr(ptr),
-            is_followed: AtomicUsize::new(0)
+            is_followed: AtomicUsize::new(0),
         }
     }
 
@@ -293,14 +372,24 @@ impl<T> AtomicArcFollowPtr<T> where T: ReferenceCounted {
 
     pub fn take<'a>(&'a self, ordering: Ordering) -> Option<ArcFollowPtr<'a, T>> {
         match self.arc.take(ordering) {
-            Some(arc) => Some(ArcFollowPtr { atomic_arc_follow: &self, arc }),
+            Some(arc) => Some(ArcFollowPtr {
+                atomic_arc_follow: &self,
+                arc,
+            }),
             None => None,
         }
     }
 
-    pub fn swap<'a>(&'a self, new: Option<ArcPtr<T>>, ordering: Ordering) -> Option<ArcFollowPtr<'a, T>> {
+    pub fn swap<'a>(
+        &'a self,
+        new: Option<ArcPtr<T>>,
+        ordering: Ordering,
+    ) -> Option<ArcFollowPtr<'a, T>> {
         match self.arc.swap(new, ordering) {
-            Some(arc) => Some(ArcFollowPtr { atomic_arc_follow: &self, arc }),
+            Some(arc) => Some(ArcFollowPtr {
+                atomic_arc_follow: &self,
+                arc,
+            }),
             None => None,
         }
     }
@@ -313,9 +402,18 @@ impl<T> AtomicArcFollowPtr<T> where T: ReferenceCounted {
         self.arc.store(new, ordering)
     }
 
-    pub fn compare_exchange<'a>(&'a self, current: *mut T, new: Option<ArcPtr<T>>, success: Ordering, failure: Ordering) -> Result<Option<ArcFollowPtr<'a, T>>, (*mut T, Option<ArcPtr<T>>)> {
+    pub fn compare_exchange<'a>(
+        &'a self,
+        current: *mut T,
+        new: Option<ArcPtr<T>>,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<Option<ArcFollowPtr<'a, T>>, (*mut T, Option<ArcPtr<T>>)> {
         match self.arc.compare_exchange(current, new, success, failure) {
-            Ok(Some(previous_ptr)) => Ok(Some(ArcFollowPtr { atomic_arc_follow: &self, arc: previous_ptr })),
+            Ok(Some(previous_ptr)) => Ok(Some(ArcFollowPtr {
+                atomic_arc_follow: &self,
+                arc: previous_ptr,
+            })),
             Ok(None) => Ok(None),
             Err((current, new)) => Err((current, new)),
         }

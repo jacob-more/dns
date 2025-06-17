@@ -1,4 +1,7 @@
-use std::{fmt::Debug, ops::{Deref, DerefMut}};
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+};
 
 use dns_macros::{FromWire, RData, ToPresentation, ToWire};
 
@@ -6,11 +9,10 @@ use crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData;
 
 use super::dnskey::DNSKEY;
 
-
 /// (Original) https://datatracker.ietf.org/doc/html/rfc7344#section-3.2
 #[derive(Clone, PartialEq, Eq, Hash, ToWire, FromWire, ToPresentation, RData)]
 pub struct CDNSKEY {
-    key: DNSKEY
+    key: DNSKEY,
 }
 
 impl Debug for CDNSKEY {
@@ -39,14 +41,24 @@ impl DerefMut for CDNSKEY {
 }
 
 impl FromTokenizedRData for CDNSKEY {
-    fn from_tokenized_rdata(record: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
-        Ok(Self { key: DNSKEY::from_tokenized_rdata(record)? })
+    fn from_tokenized_rdata(
+        record: &Vec<&str>,
+    ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
+    where
+        Self: Sized,
+    {
+        Ok(Self {
+            key: DNSKEY::from_tokenized_rdata(record)?,
+        })
     }
 }
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::{resource_record::dnssec_alg::DnsSecAlgorithm, serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::base64::Base64};
+    use crate::{
+        resource_record::dnssec_alg::DnsSecAlgorithm,
+        serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::base64::Base64,
+    };
 
     use super::{CDNSKEY, DNSKEY};
 

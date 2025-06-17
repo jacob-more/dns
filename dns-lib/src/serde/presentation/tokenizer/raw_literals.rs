@@ -1,6 +1,12 @@
 use std::fmt::Display;
 
-use super::{errors::TokenizerError, regex::{REGEX_CHARACTER_STR_UNQUOTED, REGEX_CHARACTER_STR_QUOTED, REGEX_SEPARATOR, REGEX_NEW_LINE, REGEX_COMMENT}};
+use super::{
+    errors::TokenizerError,
+    regex::{
+        REGEX_CHARACTER_STR_QUOTED, REGEX_CHARACTER_STR_UNQUOTED, REGEX_COMMENT, REGEX_NEW_LINE,
+        REGEX_SEPARATOR,
+    },
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum RawLiteral<'a> {
@@ -65,7 +71,7 @@ impl<'a> Into<&'a str> for &RawLiteral<'a> {
 /// explained in the descriptions of the tokens: [RawLiteral::Text], [RawLiteral::QuotedText],
 /// [RawLiteral::Separator], [RawLiteral::NewLine], & [RawLiteral::Comment].
 pub struct RawLiteralIter<'a> {
-    feed: &'a str
+    feed: &'a str,
 }
 
 impl<'a> RawLiteralIter<'a> {
@@ -93,7 +99,7 @@ impl<'a> Iterator for RawLiteralIter<'a> {
         }
         if let Some(next_literal) = REGEX_CHARACTER_STR_QUOTED.find(self.feed) {
             // Exclude quotation marks from actual token string
-            let result = RawLiteral::QuotedText(&self.feed[1..(next_literal.end()-1)]);
+            let result = RawLiteral::QuotedText(&self.feed[1..(next_literal.end() - 1)]);
             self.feed = &self.feed[next_literal.end()..];
             return Some(Ok(result));
         }
@@ -151,44 +157,181 @@ mod test_text_tokens {
     }
 
     // Check the simplest cases
-    gen_ok_test!(test_text_literal, "abcdefghijklmnopqrstuvwxyz", [RawLiteral::Text("abcdefghijklmnopqrstuvwxyz")]);
-    gen_ok_test!(test_text_quoted_literal, "\"abcdefghijklmnopqrstuvwxyz\"", [RawLiteral::QuotedText("abcdefghijklmnopqrstuvwxyz")]);
+    gen_ok_test!(
+        test_text_literal,
+        "abcdefghijklmnopqrstuvwxyz",
+        [RawLiteral::Text("abcdefghijklmnopqrstuvwxyz")]
+    );
+    gen_ok_test!(
+        test_text_quoted_literal,
+        "\"abcdefghijklmnopqrstuvwxyz\"",
+        [RawLiteral::QuotedText("abcdefghijklmnopqrstuvwxyz")]
+    );
     gen_ok_test!(test_text_space, " ", [RawLiteral::Separator(" ")]);
     gen_ok_test!(test_text_tab, "\t", [RawLiteral::Separator("\t")]);
     gen_ok_test!(test_text_new_line, "\n", [RawLiteral::NewLine("\n")]);
-    gen_ok_test!(test_text_comment, ";this is a comment", [RawLiteral::Comment(";this is a comment")]);
+    gen_ok_test!(
+        test_text_comment,
+        ";this is a comment",
+        [RawLiteral::Comment(";this is a comment")]
+    );
 
-    gen_ok_test!(test_text_space_and_comment, " ;this is a comment", [RawLiteral::Separator(" "), RawLiteral::Comment(";this is a comment")]);
-    gen_ok_test!(test_text_tab_and_comment, "\t;this is a comment", [RawLiteral::Separator("\t"), RawLiteral::Comment(";this is a comment")]);
-    gen_ok_test!(test_text_comment_and_newline, ";this is a comment\n", [RawLiteral::Comment(";this is a comment"), RawLiteral::NewLine("\n")]);
+    gen_ok_test!(
+        test_text_space_and_comment,
+        " ;this is a comment",
+        [
+            RawLiteral::Separator(" "),
+            RawLiteral::Comment(";this is a comment")
+        ]
+    );
+    gen_ok_test!(
+        test_text_tab_and_comment,
+        "\t;this is a comment",
+        [
+            RawLiteral::Separator("\t"),
+            RawLiteral::Comment(";this is a comment")
+        ]
+    );
+    gen_ok_test!(
+        test_text_comment_and_newline,
+        ";this is a comment\n",
+        [
+            RawLiteral::Comment(";this is a comment"),
+            RawLiteral::NewLine("\n")
+        ]
+    );
 
-    gen_ok_test!(test_text_newline_separated_tabs, "\t\n\t", [RawLiteral::Separator("\t"), RawLiteral::NewLine("\n"), RawLiteral::Separator("\t")]);
-    gen_ok_test!(test_text_newline_separated_spaces, " \n ", [RawLiteral::Separator(" "), RawLiteral::NewLine("\n"), RawLiteral::Separator(" ")]);
+    gen_ok_test!(
+        test_text_newline_separated_tabs,
+        "\t\n\t",
+        [
+            RawLiteral::Separator("\t"),
+            RawLiteral::NewLine("\n"),
+            RawLiteral::Separator("\t")
+        ]
+    );
+    gen_ok_test!(
+        test_text_newline_separated_spaces,
+        " \n ",
+        [
+            RawLiteral::Separator(" "),
+            RawLiteral::NewLine("\n"),
+            RawLiteral::Separator(" ")
+        ]
+    );
 
-    gen_ok_test!(test_text_literal_escaped_chars, r"\a\b\c\d\e\f\g\h\i\j\k\l\m\n\o\p\q\r\s\t\u\v\w\x\y\z\ \!\@\#\$\%\^\&\*\(\)\{\}\[\]\|\\\:\;\'\~\`", [RawLiteral::Text(r"\a\b\c\d\e\f\g\h\i\j\k\l\m\n\o\p\q\r\s\t\u\v\w\x\y\z\ \!\@\#\$\%\^\&\*\(\)\{\}\[\]\|\\\:\;\'\~\`")]);
-    gen_ok_test!(test_text_literal_octal_chars, r"\000\001\002\003\004\005\006\007\010\011\376\377", [RawLiteral::Text(r"\000\001\002\003\004\005\006\007\010\011\376\377")]);
+    gen_ok_test!(
+        test_text_literal_escaped_chars,
+        r"\a\b\c\d\e\f\g\h\i\j\k\l\m\n\o\p\q\r\s\t\u\v\w\x\y\z\ \!\@\#\$\%\^\&\*\(\)\{\}\[\]\|\\\:\;\'\~\`",
+        [RawLiteral::Text(
+            r"\a\b\c\d\e\f\g\h\i\j\k\l\m\n\o\p\q\r\s\t\u\v\w\x\y\z\ \!\@\#\$\%\^\&\*\(\)\{\}\[\]\|\\\:\;\'\~\`"
+        )]
+    );
+    gen_ok_test!(
+        test_text_literal_octal_chars,
+        r"\000\001\002\003\004\005\006\007\010\011\376\377",
+        [RawLiteral::Text(
+            r"\000\001\002\003\004\005\006\007\010\011\376\377"
+        )]
+    );
 
-    gen_ok_test!(test_text_quoted_literal_escaped_chars, "\"\\a\\b\\c\\d\\e\\f\\g\\h\\i\\j\\k\\l\\m\\n\\o\\p\\q\\r\\s\\t\\u\\v\\w\\x\\y\\z\\ \\!\\@\\#\\$\\%\\^\\&\\*\\(\\)\\{\\}\\[\\]\\|\\\\\\:\\;\\'\\~\\`\"", [RawLiteral::QuotedText(r"\a\b\c\d\e\f\g\h\i\j\k\l\m\n\o\p\q\r\s\t\u\v\w\x\y\z\ \!\@\#\$\%\^\&\*\(\)\{\}\[\]\|\\\:\;\'\~\`")]);
-    gen_ok_test!(test_text_quoted_literal_octal_chars, "\"\\000\\001\\002\\003\\004\\005\\006\\007\\010\\011\\376\\377\"", [RawLiteral::QuotedText(r"\000\001\002\003\004\005\006\007\010\011\376\377")]);
+    gen_ok_test!(
+        test_text_quoted_literal_escaped_chars,
+        "\"\\a\\b\\c\\d\\e\\f\\g\\h\\i\\j\\k\\l\\m\\n\\o\\p\\q\\r\\s\\t\\u\\v\\w\\x\\y\\z\\ \\!\\@\\#\\$\\%\\^\\&\\*\\(\\)\\{\\}\\[\\]\\|\\\\\\:\\;\\'\\~\\`\"",
+        [RawLiteral::QuotedText(
+            r"\a\b\c\d\e\f\g\h\i\j\k\l\m\n\o\p\q\r\s\t\u\v\w\x\y\z\ \!\@\#\$\%\^\&\*\(\)\{\}\[\]\|\\\:\;\'\~\`"
+        )]
+    );
+    gen_ok_test!(
+        test_text_quoted_literal_octal_chars,
+        "\"\\000\\001\\002\\003\\004\\005\\006\\007\\010\\011\\376\\377\"",
+        [RawLiteral::QuotedText(
+            r"\000\001\002\003\004\005\006\007\010\011\376\377"
+        )]
+    );
 
     // Check that parenthesis are parsed as expected
     gen_ok_test!(test_text_open_parenthesis, "(", [RawLiteral::Text("(")]);
     gen_ok_test!(test_text_close_parenthesis, ")", [RawLiteral::Text(")")]);
-    gen_ok_test!(test_text_quoted_open_parenthesis, "\"(\"", [RawLiteral::QuotedText("(")]);
-    gen_ok_test!(test_text_quoted_close_parenthesis, "\")\"", [RawLiteral::QuotedText(")")]);
+    gen_ok_test!(
+        test_text_quoted_open_parenthesis,
+        "\"(\"",
+        [RawLiteral::QuotedText("(")]
+    );
+    gen_ok_test!(
+        test_text_quoted_close_parenthesis,
+        "\")\"",
+        [RawLiteral::QuotedText(")")]
+    );
 
-    gen_ok_test!(test_text_before_open_parenthesis, "preamble(", [RawLiteral::Text("preamble"), RawLiteral::Text("(")]);
-    gen_ok_test!(test_text_before_close_parenthesis, "preamble)", [RawLiteral::Text("preamble"), RawLiteral::Text(")")]);
-    gen_ok_test!(test_text_before_quoted_open_parenthesis, "\"preamble(\"", [RawLiteral::QuotedText("preamble(")]);
-    gen_ok_test!(test_text_before_quoted_close_parenthesis, "\"preamble)\"", [RawLiteral::QuotedText("preamble)")]);
+    gen_ok_test!(
+        test_text_before_open_parenthesis,
+        "preamble(",
+        [RawLiteral::Text("preamble"), RawLiteral::Text("(")]
+    );
+    gen_ok_test!(
+        test_text_before_close_parenthesis,
+        "preamble)",
+        [RawLiteral::Text("preamble"), RawLiteral::Text(")")]
+    );
+    gen_ok_test!(
+        test_text_before_quoted_open_parenthesis,
+        "\"preamble(\"",
+        [RawLiteral::QuotedText("preamble(")]
+    );
+    gen_ok_test!(
+        test_text_before_quoted_close_parenthesis,
+        "\"preamble)\"",
+        [RawLiteral::QuotedText("preamble)")]
+    );
 
-    gen_ok_test!(test_text_after_open_parenthesis, "(post-amble", [RawLiteral::Text("("), RawLiteral::Text("post-amble")]);
-    gen_ok_test!(test_text_after_close_parenthesis, ")post-amble", [RawLiteral::Text(")"), RawLiteral::Text("post-amble")]);
-    gen_ok_test!(test_text_after_quoted_open_parenthesis, "\"(post-amble\"", [RawLiteral::QuotedText("(post-amble")]);
-    gen_ok_test!(test_text_after_quoted_close_parenthesis, "\")post-amble\"", [RawLiteral::QuotedText(")post-amble")]);
+    gen_ok_test!(
+        test_text_after_open_parenthesis,
+        "(post-amble",
+        [RawLiteral::Text("("), RawLiteral::Text("post-amble")]
+    );
+    gen_ok_test!(
+        test_text_after_close_parenthesis,
+        ")post-amble",
+        [RawLiteral::Text(")"), RawLiteral::Text("post-amble")]
+    );
+    gen_ok_test!(
+        test_text_after_quoted_open_parenthesis,
+        "\"(post-amble\"",
+        [RawLiteral::QuotedText("(post-amble")]
+    );
+    gen_ok_test!(
+        test_text_after_quoted_close_parenthesis,
+        "\")post-amble\"",
+        [RawLiteral::QuotedText(")post-amble")]
+    );
 
-    gen_ok_test!(test_text_around_open_parenthesis, "preamble(post-amble", [RawLiteral::Text("preamble"), RawLiteral::Text("("), RawLiteral::Text("post-amble")]);
-    gen_ok_test!(test_text_around_close_parenthesis, "preamble)post-amble", [RawLiteral::Text("preamble"), RawLiteral::Text(")"), RawLiteral::Text("post-amble")]);
-    gen_ok_test!(test_text_around_quoted_open_parenthesis, "\"preamble(post-amble\"", [RawLiteral::QuotedText("preamble(post-amble")]);
-    gen_ok_test!(test_text_around_quoted_close_parenthesis, "\"preamble)post-amble\"", [RawLiteral::QuotedText("preamble)post-amble")]);
+    gen_ok_test!(
+        test_text_around_open_parenthesis,
+        "preamble(post-amble",
+        [
+            RawLiteral::Text("preamble"),
+            RawLiteral::Text("("),
+            RawLiteral::Text("post-amble")
+        ]
+    );
+    gen_ok_test!(
+        test_text_around_close_parenthesis,
+        "preamble)post-amble",
+        [
+            RawLiteral::Text("preamble"),
+            RawLiteral::Text(")"),
+            RawLiteral::Text("post-amble")
+        ]
+    );
+    gen_ok_test!(
+        test_text_around_quoted_open_parenthesis,
+        "\"preamble(post-amble\"",
+        [RawLiteral::QuotedText("preamble(post-amble")]
+    );
+    gen_ok_test!(
+        test_text_around_quoted_close_parenthesis,
+        "\"preamble)post-amble\"",
+        [RawLiteral::QuotedText("preamble)post-amble")]
+    );
 }

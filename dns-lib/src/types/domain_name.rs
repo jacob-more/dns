@@ -1,11 +1,21 @@
-use std::{error::Error, fmt::{Debug, Display}, ops::Add};
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+    ops::Add,
+};
 
 use dns_macros::ToPresentation;
 
-use crate::serde::{presentation::{errors::TokenError, from_presentation::FromPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}};
+use crate::serde::{
+    presentation::{errors::TokenError, from_presentation::FromPresentation},
+    wire::{from_wire::FromWire, to_wire::ToWire},
+};
 
-use super::{ascii::AsciiString, c_domain_name::{CDomainName, CDomainNameError, CmpDomainName}, label::{case_sensitivity::CaseSensitivity, Label, OwnedLabel, RefLabel}};
-
+use super::{
+    ascii::AsciiString,
+    c_domain_name::{CDomainName, CDomainNameError, CmpDomainName},
+    label::{Label, OwnedLabel, RefLabel, case_sensitivity::CaseSensitivity},
+};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DomainNameError {
@@ -37,27 +47,41 @@ pub struct DomainName {
 impl DomainName {
     #[inline]
     pub fn new(string: &AsciiString) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: CDomainName::new(string)? })
+        Ok(Self {
+            domain_name: CDomainName::new(string)?,
+        })
     }
 
     #[inline]
     pub fn new_root() -> Self {
-        Self { domain_name: CDomainName::new_root() }
+        Self {
+            domain_name: CDomainName::new_root(),
+        }
     }
 
     #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: CDomainName::from_utf8(string)? })
+        Ok(Self {
+            domain_name: CDomainName::from_utf8(string)?,
+        })
     }
 
     #[inline]
-    pub fn from_labels<'a, C: CaseSensitivity, T: Label<C>>(labels: Vec<T>) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: CDomainName::from_labels(labels)? })
+    pub fn from_labels<'a, C: CaseSensitivity, T: Label<C>>(
+        labels: Vec<T>,
+    ) -> Result<Self, DomainNameError> {
+        Ok(Self {
+            domain_name: CDomainName::from_labels(labels)?,
+        })
     }
 
     #[inline]
-    pub fn from_owned_labels<C: CaseSensitivity>(labels: Vec<OwnedLabel<C>>) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: CDomainName::from_owned_labels(labels)? })
+    pub fn from_owned_labels<C: CaseSensitivity>(
+        labels: Vec<OwnedLabel<C>>,
+    ) -> Result<Self, DomainNameError> {
+        Ok(Self {
+            domain_name: CDomainName::from_owned_labels(labels)?,
+        })
     }
 
     #[inline]
@@ -86,12 +110,16 @@ impl DomainName {
     /// Creates a fully qualified domain from this domain.
     #[inline]
     pub fn as_fully_qualified(&self) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: self.domain_name.as_fully_qualified()? })
+        Ok(Self {
+            domain_name: self.domain_name.as_fully_qualified()?,
+        })
     }
 
     #[inline]
     pub fn as_canonical_name(&self) -> Result<Self, DomainNameError> {
-        Ok(Self { domain_name: self.domain_name.as_canonical_name()? })
+        Ok(Self {
+            domain_name: self.domain_name.as_canonical_name()?,
+        })
     }
 
     #[inline]
@@ -102,7 +130,9 @@ impl DomainName {
 
     #[inline]
     pub fn as_lowercase(&self) -> Self {
-        Self { domain_name: self.domain_name.as_lowercase() }
+        Self {
+            domain_name: self.domain_name.as_lowercase(),
+        }
     }
 
     #[inline]
@@ -111,13 +141,18 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn labels<'a, C: 'a + CaseSensitivity>(&'a self) -> impl 'a + DoubleEndedIterator<Item = &'a RefLabel<C>> + ExactSizeIterator<Item = &'a RefLabel<C>> {
+    pub fn labels<'a, C: 'a + CaseSensitivity>(
+        &'a self,
+    ) -> impl 'a + DoubleEndedIterator<Item = &'a RefLabel<C>> + ExactSizeIterator<Item = &'a RefLabel<C>>
+    {
         self.domain_name.labels()
     }
 
     #[inline]
     pub fn search_domains<'a>(&'a self) -> impl 'a + ExactSizeIterator<Item = Self> {
-        self.domain_name.search_domains().map(|domain_name| DomainName { domain_name })
+        self.domain_name
+            .search_domains()
+            .map(|domain_name| DomainName { domain_name })
     }
 }
 
@@ -171,7 +206,14 @@ impl CmpDomainName<DomainName> for DomainName {
 
 impl ToWire for DomainName {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, _compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(
+        &self,
+        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
+        _compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
+    where
+        'a: 'b,
+    {
         // Providing a None type compression map to the CDomainName disables domain name compression
         // while allowing us to re-use the rest of its implementation.
         self.domain_name.to_wire_format(wire, &mut None)
@@ -185,18 +227,39 @@ impl ToWire for DomainName {
 
 impl FromWire for DomainName {
     #[inline]
-    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+    fn from_wire_format<'a, 'b>(
+        wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>,
+    ) -> Result<Self, crate::serde::wire::read_wire::ReadWireError>
+    where
+        Self: Sized,
+        'a: 'b,
+    {
         // DomainName must still be able to decompress domain names if compression was used so we
         // don't want to disable that.
-        Ok(Self { domain_name: CDomainName::from_wire_format(wire)? })
+        Ok(Self {
+            domain_name: CDomainName::from_wire_format(wire)?,
+        })
     }
 }
 
 impl FromPresentation for DomainName {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+        'c: 'd,
+    {
         let (cdomain_name, tokens) = CDomainName::from_token_format(tokens)?;
-        Ok((Self { domain_name: cdomain_name }, tokens))
+        Ok((
+            Self {
+                domain_name: cdomain_name,
+            },
+            tokens,
+        ))
     }
 }
 
@@ -220,14 +283,16 @@ impl From<CDomainName> for DomainName {
 
 impl From<&CDomainName> for DomainName {
     fn from(domain_name: &CDomainName) -> Self {
-        Self { domain_name: domain_name.clone() }
+        Self {
+            domain_name: domain_name.clone(),
+        }
     }
 }
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
     use super::DomainName;
+    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,

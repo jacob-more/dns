@@ -1,10 +1,10 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
-mod to_wire;
 mod from_wire;
-use to_wire::impl_to_wire_macro;
+mod to_wire;
 use from_wire::impl_from_wire_macro;
+use to_wire::impl_to_wire_macro;
 
 mod from_tokenized_rdata;
 use from_tokenized_rdata::impl_from_tokenized_rdata_macro;

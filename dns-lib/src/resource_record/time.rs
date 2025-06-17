@@ -1,6 +1,13 @@
-use std::{time::Duration, ops::{Add, AddAssign, Sub, SubAssign, Mul, MulAssign, Div, DivAssign}, iter::Sum, error::Error, fmt::Display, num::ParseIntError};
+use std::{
+    error::Error,
+    fmt::Display,
+    iter::Sum,
+    num::ParseIntError,
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
+    time::Duration,
+};
 
-use dns_macros::{ToWire, FromWire, ToPresentation};
+use dns_macros::{FromWire, ToPresentation, ToWire};
 
 use crate::serde::presentation::{errors::TokenError, from_presentation::FromPresentation};
 
@@ -15,7 +22,7 @@ impl Display for TimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TimeError::DateTimeError(error) => write!(f, "{error}"),
-            TimeError::InvalidTime => write!{f, "invalid time"},
+            TimeError::InvalidTime => write! {f, "invalid time"},
         }
     }
 }
@@ -34,23 +41,36 @@ pub const TTL_MAX: TimeInt = 2_u32.pow(31) - 1;
 /// https://datatracker.ietf.org/doc/html/rfc2181#section-8
 pub const TTL_MIN: TimeInt = 0;
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug, ToWire, FromWire, ToPresentation)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    Debug,
+    ToWire,
+    FromWire,
+    ToPresentation,
+)]
 pub struct Time {
     ttl: TimeInt,
 }
 
 impl Time {
-    pub const ZERO: Self    = Self::from_secs(0);
-    pub const ONE: Self     = Self::from_secs(1);
-    pub const TWO: Self     = Self::from_secs(2);
-    pub const THREE: Self   = Self::from_secs(3);
-    pub const FOUR: Self    = Self::from_secs(4);
-    pub const FIVE: Self    = Self::from_secs(5);
-    pub const SIX: Self     = Self::from_secs(6);
-    pub const SEVEN: Self   = Self::from_secs(7);
-    pub const EIGHT: Self   = Self::from_secs(8);
-    pub const NINE: Self    = Self::from_secs(9);
-    pub const TEN: Self     = Self::from_secs(10);
+    pub const ZERO: Self = Self::from_secs(0);
+    pub const ONE: Self = Self::from_secs(1);
+    pub const TWO: Self = Self::from_secs(2);
+    pub const THREE: Self = Self::from_secs(3);
+    pub const FOUR: Self = Self::from_secs(4);
+    pub const FIVE: Self = Self::from_secs(5);
+    pub const SIX: Self = Self::from_secs(6);
+    pub const SEVEN: Self = Self::from_secs(7);
+    pub const EIGHT: Self = Self::from_secs(8);
+    pub const NINE: Self = Self::from_secs(9);
+    pub const TEN: Self = Self::from_secs(10);
 
     pub const MAX: Self = Self::from_secs(TTL_MAX);
     pub const MIN: Self = Self::from_secs(TTL_MIN);
@@ -58,7 +78,7 @@ impl Time {
     /// Creates a new `TTL` from the specified number of whole seconds.
     #[inline]
     pub const fn new(seconds: TimeInt) -> Self {
-        Self{ ttl: seconds }
+        Self { ttl: seconds }
     }
 
     /// Creates a new `TTL` from the specified number of whole seconds.
@@ -77,7 +97,9 @@ impl Time {
         if duration.as_secs() > TTL_MAX as u64 {
             None
         } else {
-            Some(Self{ ttl: second as TimeInt })
+            Some(Self {
+                ttl: second as TimeInt,
+            })
         }
     }
 
@@ -124,7 +146,7 @@ impl Time {
                 } else {
                     Some(Self { ttl: seconds })
                 }
-            },
+            }
             None => None,
         }
     }
@@ -175,7 +197,7 @@ impl Time {
                 } else {
                     return Some(Self { ttl: seconds });
                 }
-            },
+            }
             None => None,
         }
     }
@@ -218,7 +240,8 @@ impl Add for Time {
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        self.checked_add(rhs).expect("overflow when adding durations")
+        self.checked_add(rhs)
+            .expect("overflow when adding durations")
     }
 }
 
@@ -234,7 +257,8 @@ impl Sub for Time {
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        self.checked_sub(rhs).expect("overflow when subtracting durations")
+        self.checked_sub(rhs)
+            .expect("overflow when subtracting durations")
     }
 }
 
@@ -250,7 +274,8 @@ impl Mul<TimeInt> for Time {
 
     #[inline]
     fn mul(self, rhs: TimeInt) -> Self {
-        self.checked_mul(rhs).expect("overflow when multiplying duration by scalar")
+        self.checked_mul(rhs)
+            .expect("overflow when multiplying duration by scalar")
     }
 }
 
@@ -275,7 +300,8 @@ impl Div<TimeInt> for Time {
 
     #[inline]
     fn div(self, rhs: TimeInt) -> Self {
-        self.checked_div(rhs).expect("divide by zero error when dividing duration by scalar")
+        self.checked_div(rhs)
+            .expect("divide by zero error when dividing duration by scalar")
     }
 }
 
@@ -291,7 +317,9 @@ macro_rules! sum_durations {
         let mut total_secs: TimeInt = 0;
 
         for entry in $iter {
-            total_secs = total_secs.checked_add(entry.ttl).expect("overflow in iter::sum over durations");
+            total_secs = total_secs
+                .checked_add(entry.ttl)
+                .expect("overflow in iter::sum over durations");
         }
         Time::from_secs(total_secs)
     }};
@@ -319,7 +347,15 @@ const DATE_TIME_DIGITS: usize = 14;
 
 impl FromPresentation for Time {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+        'c: 'd,
+    {
         match tokens {
             &[] => Err(TokenError::OutOfTokens),
             &[token, ..] => {
@@ -361,7 +397,10 @@ impl Display for DateTimeError {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IncorrectNumberOfDigits(value) => write!(f, "IncorrectNumberOfDigits: expected 14 digits, received {value}"),
+            Self::IncorrectNumberOfDigits(value) => write!(
+                f,
+                "IncorrectNumberOfDigits: expected 14 digits, received {value}"
+            ),
             Self::IntegerParseError(error) => write!(f, "IntegerParseError: {error}"),
             Self::YearTooLarge(value) => write!(f, "YearTooLarge: integer received was {value}"),
             Self::YearTooSmall(value) => write!(f, "YearTooSmall: integer received was {value}"),
@@ -371,11 +410,22 @@ impl Display for DateTimeError {
             Self::DayTooSmall(value) => write!(f, "DayTooSmall: integer received was {value}"),
             Self::HourTooLarge(value) => write!(f, "HourTooLarge: integer received was {value}"),
             Self::HourTooSmall(value) => write!(f, "HourTooSmall: integer received was {value}"),
-            Self::MinuteTooLarge(value) => write!(f, "MinuteTooLarge: integer received was {value}"),
-            Self::MinuteTooSmall(value) => write!(f, "MinuteTooSmall: integer received was {value}"),
-            Self::SecondTooLarge(value) => write!(f, "SecondTooLarge: integer received was {value}"),
-            Self::SecondTooSmall(value) => write!(f, "SecondTooSmall: integer received was {value}"),
-            Self::IntegerOverflow => write!(f, "IntegerOverflow: integer overflowed while finding the number of seconds since epoch")
+            Self::MinuteTooLarge(value) => {
+                write!(f, "MinuteTooLarge: integer received was {value}")
+            }
+            Self::MinuteTooSmall(value) => {
+                write!(f, "MinuteTooSmall: integer received was {value}")
+            }
+            Self::SecondTooLarge(value) => {
+                write!(f, "SecondTooLarge: integer received was {value}")
+            }
+            Self::SecondTooSmall(value) => {
+                write!(f, "SecondTooSmall: integer received was {value}")
+            }
+            Self::IntegerOverflow => write!(
+                f,
+                "IntegerOverflow: integer overflowed while finding the number of seconds since epoch"
+            ),
         }
     }
 }
@@ -418,7 +468,10 @@ fn month_to_days(month: TimeInt, year: TimeInt) -> TimeInt {
 
 #[inline]
 fn months_to_seconds(months: TimeInt, year: TimeInt) -> Option<TimeInt> {
-    let days = (1..=months).into_iter().map(|month| month_to_days(month, year)).sum();
+    let days = (1..=months)
+        .into_iter()
+        .map(|month| month_to_days(month, year))
+        .sum();
     days_to_seconds(days)
 }
 
@@ -436,12 +489,18 @@ fn months_to_seconds(months: TimeInt, year: TimeInt) -> Option<TimeInt> {
 fn years_since_1970_to_seconds(years: TimeInt) -> Option<TimeInt> {
     let leap_years = years / 4;
     let non_leap_years = years - leap_years;
-    days_to_seconds(leap_years.checked_mul(366)?)?
-        .checked_add(non_leap_years.checked_mul(365)?)
+    days_to_seconds(leap_years.checked_mul(366)?)?.checked_add(non_leap_years.checked_mul(365)?)
 }
 
 #[inline]
-fn seconds_since_1970(year: TimeInt, month: TimeInt, day: TimeInt, hour: TimeInt, minute: TimeInt, second: TimeInt) -> Option<TimeInt> {
+fn seconds_since_1970(
+    year: TimeInt,
+    month: TimeInt,
+    day: TimeInt,
+    hour: TimeInt,
+    minute: TimeInt,
+    second: TimeInt,
+) -> Option<TimeInt> {
     let mut total_second = 0_u32;
     if year > 1970 {
         total_second = total_second.checked_add(years_since_1970_to_seconds(1970 - year - 1)?)?;
@@ -462,7 +521,10 @@ fn seconds_since_1970(year: TimeInt, month: TimeInt, day: TimeInt, hour: TimeInt
 }
 
 #[inline]
-fn datetime_parse<'a, 'b>(token: &'a str) -> Result<TimeInt, DateTimeError> where 'a: 'b {
+fn datetime_parse<'a, 'b>(token: &'a str) -> Result<TimeInt, DateTimeError>
+where
+    'a: 'b,
+{
     if token.len() < DATE_TIME_DIGITS {
         todo!("Error: cannot parse");
     }
@@ -503,8 +565,8 @@ fn datetime_parse<'a, 'b>(token: &'a str) -> Result<TimeInt, DateTimeError> wher
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
+    use super::{TTL_MAX, TTL_MIN, Time};
     use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
-    use super::{Time, TTL_MAX, TTL_MIN};
 
     gen_test_circular_serde_sanity_test!(
         min_record_circular_serde_sanity_test,
@@ -514,36 +576,72 @@ mod circular_serde_sanity_test {
         max_record_circular_serde_sanity_test,
         Time { ttl: TTL_MAX }
     );
-    gen_test_circular_serde_sanity_test!(
-        one_record_circular_serde_sanity_test,
-        Time { ttl: 1 }
-    );
-    gen_test_circular_serde_sanity_test!(
-        record_circular_serde_sanity_test,
-        Time { ttl: 86400 }
-    );
+    gen_test_circular_serde_sanity_test!(one_record_circular_serde_sanity_test, Time { ttl: 1 });
+    gen_test_circular_serde_sanity_test!(record_circular_serde_sanity_test, Time { ttl: 86400 });
 }
 
 #[cfg(test)]
 mod tokenizer_tests {
-    use crate::{serde::presentation::test_from_presentation::{gen_fail_token_test, gen_ok_token_test}, resource_record::time::{TTL_MIN, TTL_MAX}};
     use super::Time;
+    use crate::{
+        resource_record::time::{TTL_MAX, TTL_MIN},
+        serde::presentation::test_from_presentation::{gen_fail_token_test, gen_ok_token_test},
+    };
 
     gen_fail_token_test!(test_fail_u32_illegal_chars, Time, &["characters"]);
     gen_fail_token_test!(test_fail_u32_empty_str, Time, &[""]);
 
     // u32 tests
     gen_ok_token_test!(test_ok_u32_min, Time, Time { ttl: TTL_MIN }, &["0"]);
-    gen_ok_token_test!(test_ok_u32_max, Time, Time { ttl: TTL_MAX }, &["2147483647"]);
+    gen_ok_token_test!(
+        test_ok_u32_max,
+        Time,
+        Time { ttl: TTL_MAX },
+        &["2147483647"]
+    );
 
     // datetime tests
-    gen_ok_token_test!(test_ok_date_time_min, Time, Time { ttl: 0 }, &["00010101000000"]);
-    gen_ok_token_test!(test_ok_date_time_one, Time, Time { ttl: 1 }, &["00010101000001"]);
-    gen_fail_token_test!(test_fail_date_time_seconds_overflow, Time, &["00010101000060"]);
-    gen_fail_token_test!(test_fail_date_time_minutes_overflow, Time, &["00010101006000"]);
-    gen_fail_token_test!(test_fail_date_time_hours_overflow, Time, &["00010101240000"]);
+    gen_ok_token_test!(
+        test_ok_date_time_min,
+        Time,
+        Time { ttl: 0 },
+        &["00010101000000"]
+    );
+    gen_ok_token_test!(
+        test_ok_date_time_one,
+        Time,
+        Time { ttl: 1 },
+        &["00010101000001"]
+    );
+    gen_fail_token_test!(
+        test_fail_date_time_seconds_overflow,
+        Time,
+        &["00010101000060"]
+    );
+    gen_fail_token_test!(
+        test_fail_date_time_minutes_overflow,
+        Time,
+        &["00010101006000"]
+    );
+    gen_fail_token_test!(
+        test_fail_date_time_hours_overflow,
+        Time,
+        &["00010101240000"]
+    );
     gen_fail_token_test!(test_fail_date_time_days_overflow, Time, &["00010132000000"]);
-    gen_fail_token_test!(test_fail_date_time_month_overflow, Time, &["00011301000000"]);
-    gen_fail_token_test!(test_fail_date_time_digit_overflow, Time, &["100010101000000"]);
-    gen_fail_token_test!(test_fail_date_time_digit_underflow, Time, &["0010101000000"]);
+    gen_fail_token_test!(
+        test_fail_date_time_month_overflow,
+        Time,
+        &["00011301000000"]
+    );
+    gen_fail_token_test!(
+        test_fail_date_time_digit_overflow,
+        Time,
+        &["100010101000000"]
+    );
+    gen_fail_token_test!(
+        test_fail_date_time_digit_underflow,
+        Time,
+        &["0010101000000"]
+    );
 }

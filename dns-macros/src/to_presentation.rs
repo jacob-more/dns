@@ -1,6 +1,6 @@
 use proc_macro;
-use syn::{DeriveInput, Data, DataStruct};
 use quote::quote;
+use syn::{Data, DataStruct, DeriveInput};
 
 pub fn impl_to_presentation_macro(ast: &DeriveInput) -> proc_macro::TokenStream {
     match &ast.data {
@@ -10,7 +10,10 @@ pub fn impl_to_presentation_macro(ast: &DeriveInput) -> proc_macro::TokenStream 
     }
 }
 
-fn impl_to_presentation_struct_macro(data: &DataStruct, ast: &DeriveInput) -> proc_macro::TokenStream {
+fn impl_to_presentation_struct_macro(
+    data: &DataStruct,
+    ast: &DeriveInput,
+) -> proc_macro::TokenStream {
     let name = &ast.ident;
     let field_name = data.fields.iter().map(|f| &f.ident);
     let field_type = data.fields.iter().map(|f| &f.ty);

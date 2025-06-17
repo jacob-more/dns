@@ -1,6 +1,17 @@
-use std::{error::Error, fmt::Display, ops::{Bound, RangeBounds}};
+use std::{
+    error::Error,
+    fmt::Display,
+    ops::{Bound, RangeBounds},
+};
 
-use crate::{types::{c_domain_name::CDomainNameError, ascii::AsciiError, base16::Base16Error, base32::Base32Error, extended_base32::ExtendedBase32Error, base64::Base64Error, domain_name::DomainNameError}, resource_record::rtype::RType};
+use crate::{
+    resource_record::rtype::RType,
+    types::{
+        ascii::AsciiError, base16::Base16Error, base32::Base32Error, base64::Base64Error,
+        c_domain_name::CDomainNameError, domain_name::DomainNameError,
+        extended_base32::ExtendedBase32Error,
+    },
+};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ReadWireError {
@@ -8,10 +19,7 @@ pub enum ReadWireError {
     OverflowError(String),
     OutOfBoundsError(String),
     UnsupportedRType(RType),
-    UnexpectedRType {
-        expected: RType,
-        actual: RType,
-    },
+    UnexpectedRType { expected: RType, actual: RType },
     ValueError(String),
     VersionError(String),
     CDomainNameError(CDomainNameError),
@@ -24,23 +32,34 @@ pub enum ReadWireError {
 }
 impl Error for ReadWireError {}
 impl Display for ReadWireError {
-     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::FormatError(error) => write!(f, "Read Wire Format Error: {error}"),
             Self::OverflowError(error) => write!(f, "Read Wire Overflow Error: {error}"),
             Self::OutOfBoundsError(error) => write!(f, "Read Wire Out Of Bounds Error: {error}"),
-            Self::UnsupportedRType(rtype) => write!(f, "Resource Record Type {rtype} is not supported"),
-            Self::UnexpectedRType { expected, actual} => write!(f, "Expected Resource Record Type {expected} but found {actual}"),
+            Self::UnsupportedRType(rtype) => {
+                write!(f, "Resource Record Type {rtype} is not supported")
+            }
+            Self::UnexpectedRType { expected, actual } => write!(
+                f,
+                "Expected Resource Record Type {expected} but found {actual}"
+            ),
             Self::ValueError(error) => write!(f, "Read Wire Value Error: {error}"),
             Self::VersionError(error) => write!(f, "Read Wire Version Error: {error}"),
 
-            Self::CDomainNameError(error) => write!(f, "Read Wire Compressible Domain Name Error: {error}"),
-            Self::DomainNameError(error) => write!(f, "Read Wire Incompressible Domain Name Error: {error}"),
+            Self::CDomainNameError(error) => {
+                write!(f, "Read Wire Compressible Domain Name Error: {error}")
+            }
+            Self::DomainNameError(error) => {
+                write!(f, "Read Wire Incompressible Domain Name Error: {error}")
+            }
             Self::AsciiError(error) => write!(f, "Read Wire Ascii Error: {error}"),
 
             Self::Base16Error(error) => write!(f, "Read Wire Base16 Error: {error}"),
             Self::Base32Error(error) => write!(f, "Read Wire Bsse32 Error: {error}"),
-            Self::ExtendedBase32Error(error) => write!(f, "Read Wire Extended Base32 Error: {error}"),
+            Self::ExtendedBase32Error(error) => {
+                write!(f, "Read Wire Extended Base32 Error: {error}")
+            }
             Self::Base64Error(error) => write!(f, "Read Wire Base64 Error: {error}"),
         }
     }
@@ -107,29 +126,52 @@ impl<'a> ReadWire<'a> {
     }
 
     #[inline]
-    pub fn current(&self) -> &'a [u8] { &self.wire[self.offset..] }
+    pub fn current(&self) -> &'a [u8] {
+        &self.wire[self.offset..]
+    }
 
     #[inline]
-    pub fn current_len(&self) -> usize { self.current().len() }
+    pub fn current_len(&self) -> usize {
+        self.current().len()
+    }
 
     #[inline]
-    pub fn current_offset(&self) -> usize { self.offset }
+    pub fn current_offset(&self) -> usize {
+        self.offset
+    }
 
     #[inline]
-    pub fn is_end_reached(&self) -> bool { self.offset >= self.wire.len() }
+    pub fn is_end_reached(&self) -> bool {
+        self.offset >= self.wire.len()
+    }
 
     #[inline]
-    pub fn wire(&self) -> &'a [u8] { self.wire }
+    pub fn wire(&self) -> &'a [u8] {
+        self.wire
+    }
 
     #[inline]
-    pub fn wire_len(&self) -> usize { self.wire.len() }
+    pub fn wire_len(&self) -> usize {
+        self.wire.len()
+    }
 
     #[inline]
-    pub fn with_offset_or_err(&self, offset: usize, visibility: WireVisibility, err_msg: impl FnOnce() -> String) -> Result<Self, ReadWireError> {
+    pub fn with_offset_or_err(
+        &self,
+        offset: usize,
+        visibility: WireVisibility,
+        err_msg: impl FnOnce() -> String,
+    ) -> Result<Self, ReadWireError> {
         if self.wire_len() >= offset {
             match visibility {
-                WireVisibility::Entire => Ok(Self { wire: self.wire(), offset }),
-                WireVisibility::Current => Ok(Self { wire: self.current(), offset }),
+                WireVisibility::Entire => Ok(Self {
+                    wire: self.wire(),
+                    offset,
+                }),
+                WireVisibility::Current => Ok(Self {
+                    wire: self.current(),
+                    offset,
+                }),
             }
         } else {
             Err(ReadWireError::OverflowError(err_msg()))
@@ -137,12 +179,22 @@ impl<'a> ReadWire<'a> {
     }
 
     #[inline]
-    pub fn with_offset(&self, offset: usize, visibility: WireVisibility) -> Result<Self, ReadWireError> {
-        self.with_offset_or_err(offset, visibility, || format!("setting offset to {offset} would read past the end of the wire"))
+    pub fn with_offset(
+        &self,
+        offset: usize,
+        visibility: WireVisibility,
+    ) -> Result<Self, ReadWireError> {
+        self.with_offset_or_err(offset, visibility, || {
+            format!("setting offset to {offset} would read past the end of the wire")
+        })
     }
 
     #[inline]
-    pub fn set_offset_or_err(&mut self, offset: usize, err_msg: impl FnOnce() -> String) -> Result<(), ReadWireError> {
+    pub fn set_offset_or_err(
+        &mut self,
+        offset: usize,
+        err_msg: impl FnOnce() -> String,
+    ) -> Result<(), ReadWireError> {
         if self.wire_len() >= offset {
             self.offset = offset;
             Ok(())
@@ -153,11 +205,17 @@ impl<'a> ReadWire<'a> {
 
     #[inline]
     pub fn set_offset(&mut self, offset: usize) -> Result<(), ReadWireError> {
-        self.set_offset_or_err(offset, || format!("setting offset to {offset} would read past the end of the wire"))
+        self.set_offset_or_err(offset, || {
+            format!("setting offset to {offset} would read past the end of the wire")
+        })
     }
 
     #[inline]
-    pub fn shift_or_err(&mut self, shift: usize, err_msg: impl FnOnce() -> String) -> Result<(), ReadWireError> {
+    pub fn shift_or_err(
+        &mut self,
+        shift: usize,
+        err_msg: impl FnOnce() -> String,
+    ) -> Result<(), ReadWireError> {
         if self.current_len() >= shift {
             self.offset += shift;
             Ok(())
@@ -168,11 +226,17 @@ impl<'a> ReadWire<'a> {
 
     #[inline]
     pub fn shift(&mut self, shift: usize) -> Result<(), ReadWireError> {
-        self.shift_or_err(shift, || format!("shifting {shift} bytes would have gone past the end of the wire"))
+        self.shift_or_err(shift, || {
+            format!("shifting {shift} bytes would have gone past the end of the wire")
+        })
     }
 
     #[inline]
-    pub fn get_or_err(&self, count: usize, err_msg: impl FnOnce() -> String) -> Result<&'a [u8], ReadWireError> {
+    pub fn get_or_err(
+        &self,
+        count: usize,
+        err_msg: impl FnOnce() -> String,
+    ) -> Result<&'a [u8], ReadWireError> {
         if self.current_len() >= count {
             Ok(&self.wire[self.offset..(self.offset + count)])
         } else {
@@ -182,14 +246,20 @@ impl<'a> ReadWire<'a> {
 
     #[inline]
     pub fn get(&self, count: usize) -> Result<&'a [u8], ReadWireError> {
-        self.get_or_err(count, || format!("getting {count} bytes would have read past the end of the wire"))
+        self.get_or_err(count, || {
+            format!("getting {count} bytes would have read past the end of the wire")
+        })
     }
 
     #[inline]
-    pub fn get_as_read_wire_or_err(&self, count: usize, err_msg: impl FnOnce() -> String) -> Result<Self, ReadWireError> {
+    pub fn get_as_read_wire_or_err(
+        &self,
+        count: usize,
+        err_msg: impl FnOnce() -> String,
+    ) -> Result<Self, ReadWireError> {
         Ok(Self {
             wire: self.get_or_err(count, err_msg)?,
-            offset: 0
+            offset: 0,
         })
     }
 
@@ -197,12 +267,16 @@ impl<'a> ReadWire<'a> {
     pub fn get_as_read_wire(&self, count: usize) -> Result<Self, ReadWireError> {
         Ok(Self {
             wire: self.get(count)?,
-            offset: 0
+            offset: 0,
         })
     }
 
     #[inline]
-    pub fn take_or_err(&mut self, count: usize, err_msg: impl FnOnce() -> String) -> Result<&'a [u8], ReadWireError> {
+    pub fn take_or_err(
+        &mut self,
+        count: usize,
+        err_msg: impl FnOnce() -> String,
+    ) -> Result<&'a [u8], ReadWireError> {
         if self.current_len() >= count {
             let offset = self.offset;
             self.offset += count;
@@ -214,7 +288,9 @@ impl<'a> ReadWire<'a> {
 
     #[inline]
     pub fn take(&mut self, count: usize) -> Result<&'a [u8], ReadWireError> {
-        self.take_or_err(count, || format!("taking {count} bytes would have read past the end of the wire"))
+        self.take_or_err(count, || {
+            format!("taking {count} bytes would have read past the end of the wire")
+        })
     }
 
     #[inline]
@@ -225,10 +301,14 @@ impl<'a> ReadWire<'a> {
     }
 
     #[inline]
-    pub fn take_as_read_wire_or_err(&mut self, count: usize, err_msg: impl FnOnce() -> String) -> Result<Self, ReadWireError> {
+    pub fn take_as_read_wire_or_err(
+        &mut self,
+        count: usize,
+        err_msg: impl FnOnce() -> String,
+    ) -> Result<Self, ReadWireError> {
         Ok(Self {
             wire: self.take_or_err(count, err_msg)?,
-            offset: 0
+            offset: 0,
         })
     }
 
@@ -236,7 +316,7 @@ impl<'a> ReadWire<'a> {
     pub fn take_as_read_wire(&mut self, count: usize) -> Result<Self, ReadWireError> {
         Ok(Self {
             wire: self.take(count)?,
-            offset: 0
+            offset: 0,
         })
     }
 
@@ -244,7 +324,7 @@ impl<'a> ReadWire<'a> {
     pub fn take_all_as_read_wire(&mut self) -> Self {
         Self {
             wire: self.take_all(),
-            offset: 0
+            offset: 0,
         }
     }
 
@@ -263,7 +343,10 @@ impl<'a> ReadWire<'a> {
     }
 
     #[inline]
-    pub fn take_byte_or_err(&mut self, err_msg: impl FnOnce() -> String) -> Result<u8, ReadWireError> {
+    pub fn take_byte_or_err(
+        &mut self,
+        err_msg: impl FnOnce() -> String,
+    ) -> Result<u8, ReadWireError> {
         if self.current_len() >= 1 {
             let offset = self.offset;
             self.offset += 1;
@@ -297,7 +380,11 @@ impl<'a> ReadWire<'a> {
     /// SliceWireVisibility::Slice - Only the wire within the bounds of `start` to `end` will be
     ///   visible. The offset of the new wire will be `0`.
     #[inline]
-    pub fn slice_from_current(&self, range: impl RangeBounds<usize>, visibility: SliceWireVisibility) -> Result<Self, ReadWireError> {
+    pub fn slice_from_current(
+        &self,
+        range: impl RangeBounds<usize>,
+        visibility: SliceWireVisibility,
+    ) -> Result<Self, ReadWireError> {
         let current_len = self.current_len();
         let start = match range.start_bound() {
             Bound::Included(&start) => start,
@@ -310,16 +397,28 @@ impl<'a> ReadWire<'a> {
             Bound::Unbounded => current_len,
         };
         if end < start {
-            panic!("range start must not be greater than end: {:?} <= {:?}", start, end);
+            panic!(
+                "range start must not be greater than end: {:?} <= {:?}",
+                start, end
+            );
         }
         if current_len < end {
             panic!("range end out of bounds: {:?} <= {:?}", end, current_len);
         }
 
         match visibility {
-            SliceWireVisibility::Entire => Ok(Self { wire: &self.wire[..(self.offset + end)], offset: self.offset + start }),
-            SliceWireVisibility::Current => Ok(Self { wire: &self.wire[self.offset..(self.offset + end)], offset: start }),
-            SliceWireVisibility::Slice => Ok(Self { wire: &self.wire[(self.offset + start)..(self.offset + end)], offset: 0 }),
+            SliceWireVisibility::Entire => Ok(Self {
+                wire: &self.wire[..(self.offset + end)],
+                offset: self.offset + start,
+            }),
+            SliceWireVisibility::Current => Ok(Self {
+                wire: &self.wire[self.offset..(self.offset + end)],
+                offset: start,
+            }),
+            SliceWireVisibility::Slice => Ok(Self {
+                wire: &self.wire[(self.offset + start)..(self.offset + end)],
+                offset: 0,
+            }),
         }
     }
 }

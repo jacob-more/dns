@@ -25,5 +25,5 @@ macro_rules! gen_fail_record_test {
     }
 }
 
-pub(crate) use gen_ok_record_test;
 pub(crate) use gen_fail_record_test;
+pub(crate) use gen_ok_record_test;

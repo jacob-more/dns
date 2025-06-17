@@ -1,9 +1,9 @@
 mod gen_enum;
 
-pub mod types;
 pub mod serde;
+pub mod types;
 
-pub mod resource_record;
 pub mod query;
+pub mod resource_record;
 
 pub mod interface;

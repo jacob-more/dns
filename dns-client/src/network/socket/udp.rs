@@ -1,8 +1,14 @@
-use std::{future::Future, net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}, pin::Pin, sync::Arc, task::Poll};
+use std::{
+    future::Future,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    pin::Pin,
+    sync::Arc,
+    task::Poll,
+};
 
 use async_lib::awake_token::{AwakeToken, AwokenToken};
 use async_trait::async_trait;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use pin_project::pin_project;
 use tokio::net;
 
@@ -10,9 +16,7 @@ use crate::network::errors;
 
 use super::{FutureSocket, PollSocket};
 
-
 const SOCKET_TYPE: errors::SocketType = errors::SocketType::Udp;
-
 
 pub(crate) enum UdpState {
     Managed(Arc<net::UdpSocket>, AwakeToken),
@@ -21,12 +25,17 @@ pub(crate) enum UdpState {
 }
 
 #[async_trait]
-pub(crate) trait UdpSocket where Self: 'static + Sized + Send + Sync {
+pub(crate) trait UdpSocket
+where
+    Self: 'static + Sized + Send + Sync,
+{
     fn peer_addr(&self) -> SocketAddr;
     fn state(&self) -> &std::sync::RwLock<UdpState>;
 
     #[inline]
-    fn socket_type(&self) -> errors::SocketType { SOCKET_TYPE }
+    fn socket_type(&self) -> errors::SocketType {
+        SOCKET_TYPE
+    }
 
     /// Start the UDP listener and drive the UDP state to Managed.
     #[inline]
@@ -40,16 +49,21 @@ pub(crate) trait UdpSocket where Self: 'static + Sized + Send + Sync {
     /// Start the UDP listener and drive the UDP state to Managed.
     /// Returns a reference to the created UDP socket.
     #[inline]
-    async fn init(self: Arc<Self>) -> Result<(Arc<net::UdpSocket>, AwakeToken), errors::SocketError> {
+    async fn init(
+        self: Arc<Self>,
+    ) -> Result<(Arc<net::UdpSocket>, AwakeToken), errors::SocketError> {
         // Initially, verify if the connection has already been established.
         match &*self.state().read().unwrap() {
             UdpState::Managed(udp_socket, kill_udp) => {
-                return Ok((udp_socket.clone(), kill_udp.clone()))
-            },
+                return Ok((udp_socket.clone(), kill_udp.clone()));
+            }
             UdpState::None => (),
             UdpState::Blocked => {
-                return Err(errors::SocketError::Disabled(SOCKET_TYPE, errors::SocketStage::Initialization));
-            },
+                return Err(errors::SocketError::Disabled(
+                    SOCKET_TYPE,
+                    errors::SocketStage::Initialization,
+                ));
+            }
         }
 
         let local_addr = match self.peer_addr() {
@@ -66,7 +80,7 @@ pub(crate) trait UdpSocket where Self: 'static + Sized + Send + Sync {
                     error: io_error,
                 };
                 return Err(socket_error);
-            },
+            }
         };
         if let Err(error) = udp_socket.connect(self.peer_addr()).await {
             let io_error = errors::IoError::from(error);
@@ -89,7 +103,7 @@ pub(crate) trait UdpSocket where Self: 'static + Sized + Send + Sync {
         match &*w_state {
             UdpState::Managed(existing_udp_socket, _) => {
                 return Ok((existing_udp_socket.clone(), kill_udp));
-            },
+            }
             UdpState::None => {
                 *w_state = UdpState::Managed(udp_writer.clone(), kill_udp.clone());
                 drop(w_state);
@@ -97,11 +111,14 @@ pub(crate) trait UdpSocket where Self: 'static + Sized + Send + Sync {
                 tokio::spawn(self.listen(udp_reader, kill_udp.clone()));
 
                 return Ok((udp_writer, kill_udp));
-            },
+            }
             UdpState::Blocked => {
                 drop(w_state);
-                return Err(errors::SocketError::Disabled(SOCKET_TYPE, errors::SocketStage::Initialization));
-            },
+                return Err(errors::SocketError::Disabled(
+                    SOCKET_TYPE,
+                    errors::SocketStage::Initialization,
+                ));
+            }
         }
     }
 
@@ -127,8 +144,8 @@ pub(crate) trait UdpSocket where Self: 'static + Sized + Send + Sync {
     async fn enable(self: Arc<Self>) {
         let mut w_state = self.state().write().unwrap();
         match &*w_state {
-            UdpState::Managed(_, _) => (),  //< Already enabled
-            UdpState::None => (),           //< Already enabled
+            UdpState::Managed(_, _) => (), //< Already enabled
+            UdpState::None => (),          //< Already enabled
             UdpState::Blocked => *w_state = UdpState::None,
         }
         drop(w_state);
@@ -147,14 +164,15 @@ pub(crate) trait UdpSocket where Self: 'static + Sized + Send + Sync {
                 drop(w_state);
 
                 kill_udp.awake();
-            },
+            }
             UdpState::None => {
                 *w_state = UdpState::Blocked;
                 drop(w_state);
-            },
-            UdpState::Blocked => { //< Already disabled
+            }
+            UdpState::Blocked => {
+                // Already disabled
                 drop(w_state);
-            },
+            }
         }
     }
 
@@ -198,7 +216,7 @@ where
                         error: io_error,
                     };
                     return Err(socket_error);
-                },
+                }
             };
             if let Err(error) = udp_socket.connect(upstream_socket).await {
                 let io_error = errors::IoError::from(error);
@@ -210,14 +228,22 @@ where
                 return Err(socket_error);
             };
             return Ok((udp_socket, AwakeToken::new()));
-        }.boxed();
+        }
+        .boxed();
 
         self.set(QUdpSocket::InitUdp(init_udp));
     }
 
     #[inline]
-    fn set_acquired(mut self: std::pin::Pin<&mut Self>, udp_socket: Arc<net::UdpSocket>, kill_udp_token: AwakeToken) {
-        self.set(QUdpSocket::Acquired { udp_socket, kill_udp: kill_udp_token.awoken() });
+    fn set_acquired(
+        mut self: std::pin::Pin<&mut Self>,
+        udp_socket: Arc<net::UdpSocket>,
+        kill_udp_token: AwakeToken,
+    ) {
+        self.set(QUdpSocket::Acquired {
+            udp_socket,
+            kill_udp: kill_udp_token.awoken(),
+        });
     }
 
     #[inline]
@@ -230,7 +256,11 @@ impl<'a, 'c, 'd, S: UdpSocket> FutureSocket<'a, 'd, S, errors::SocketError> for 
 where
     'a: 'c,
 {
-    fn poll(self: &mut Pin<&mut Self>, socket: &'a Arc<S>, cx: &mut std::task::Context<'_>) -> PollSocket<errors::SocketError> {
+    fn poll(
+        self: &mut Pin<&mut Self>,
+        socket: &'a Arc<S>,
+        cx: &mut std::task::Context<'_>,
+    ) -> PollSocket<errors::SocketError> {
         match self.as_mut().project() {
             QUdpSocketProj::Fresh => {
                 let r_state = socket.state().read().unwrap();
@@ -244,7 +274,7 @@ where
 
                         // Next loop should poll `kill_udp`
                         return PollSocket::Continue;
-                    },
+                    }
                     UdpState::None => {
                         drop(r_state);
 
@@ -252,7 +282,7 @@ where
 
                         // Next loop should poll `init_udp`
                         return PollSocket::Continue;
-                    },
+                    }
                     UdpState::Blocked => {
                         drop(r_state);
 
@@ -263,13 +293,17 @@ where
                         self.as_mut().set_closed(error.clone());
 
                         return PollSocket::Error(error);
-                    },
+                    }
                 }
-            },
+            }
             QUdpSocketProj::InitUdp(init_udp) => {
                 match init_udp.as_mut().poll(cx) {
                     Poll::Ready(Ok((udp_socket, kill_udp_token))) => {
-                        tokio::spawn(socket.clone().listen(udp_socket.clone(), kill_udp_token.clone()));
+                        tokio::spawn(
+                            socket
+                                .clone()
+                                .listen(udp_socket.clone(), kill_udp_token.clone()),
+                        );
 
                         let mut w_udp_state = socket.state().write().unwrap();
                         match &*w_udp_state {
@@ -282,20 +316,24 @@ where
                                 // the one that already exists.
                                 kill_udp_token.awake();
 
-                                self.as_mut().set_acquired(existing_udp_socket.clone(), existing_kill_udp.clone());
+                                self.as_mut().set_acquired(
+                                    existing_udp_socket.clone(),
+                                    existing_kill_udp.clone(),
+                                );
 
                                 // Next loop should poll `kill_udp`
                                 return PollSocket::Continue;
-                            },
+                            }
                             UdpState::None => {
-                                *w_udp_state = UdpState::Managed(udp_socket.clone(), kill_udp_token.clone());
+                                *w_udp_state =
+                                    UdpState::Managed(udp_socket.clone(), kill_udp_token.clone());
                                 drop(w_udp_state);
 
                                 self.as_mut().set_acquired(udp_socket, kill_udp_token);
 
                                 // Next loop should poll `init_udp`
                                 return PollSocket::Continue;
-                            },
+                            }
                             UdpState::Blocked => {
                                 drop(w_udp_state);
 
@@ -307,38 +345,37 @@ where
                                 self.as_mut().set_closed(error.clone());
 
                                 return PollSocket::Error(error);
-                            },
+                            }
                         }
-                    },
+                    }
                     Poll::Ready(Err(error)) => {
                         self.as_mut().set_closed(error.clone());
 
                         return PollSocket::Error(error);
-                    },
+                    }
                     Poll::Pending => {
                         return PollSocket::Pending;
-                    },
+                    }
                 }
-            },
-            QUdpSocketProj::Acquired { udp_socket: _, mut kill_udp } => {
-                match kill_udp.as_mut().poll(cx) {
-                    Poll::Ready(()) => {
-                        let error = errors::SocketError::Shutdown(
-                            SOCKET_TYPE,
-                            errors::SocketStage::Connected,
-                        );
-                        self.as_mut().set_closed(error.clone());
+            }
+            QUdpSocketProj::Acquired {
+                udp_socket: _,
+                mut kill_udp,
+            } => match kill_udp.as_mut().poll(cx) {
+                Poll::Ready(()) => {
+                    let error =
+                        errors::SocketError::Shutdown(SOCKET_TYPE, errors::SocketStage::Connected);
+                    self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
-                    },
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    },
+                    return PollSocket::Error(error);
+                }
+                Poll::Pending => {
+                    return PollSocket::Pending;
                 }
             },
             QUdpSocketProj::Closed(error) => {
                 return PollSocket::Error(error.clone());
-            },
+            }
         }
     }
 }

@@ -1,8 +1,28 @@
-use std::{error::Error, fmt::Display, num::{ParseIntError, TryFromIntError}, net::AddrParseError};
+use std::{
+    error::Error,
+    fmt::Display,
+    net::AddrParseError,
+    num::{ParseIntError, TryFromIntError},
+};
 
 use mac_address::MacParseError;
 
-use crate::{resource_record::{dnssec_alg::DnsSecAlgorithmError, ports::PortError, protocol::ProtocolError, rclass::RClassError, rtype::{RType, RTypeError}, time::{DateTimeError, TimeError}, types::cert::CertificateTypeError}, types::{ascii::AsciiError, base16::Base16Error, base32::Base32Error, base64::Base64Error, c_domain_name::CDomainNameError, character_string::CharacterStringError, domain_name::DomainNameError, extended_base32::ExtendedBase32Error}};
+use crate::{
+    resource_record::{
+        dnssec_alg::DnsSecAlgorithmError,
+        ports::PortError,
+        protocol::ProtocolError,
+        rclass::RClassError,
+        rtype::{RType, RTypeError},
+        time::{DateTimeError, TimeError},
+        types::cert::CertificateTypeError,
+    },
+    types::{
+        ascii::AsciiError, base16::Base16Error, base32::Base32Error, base64::Base64Error,
+        c_domain_name::CDomainNameError, character_string::CharacterStringError,
+        domain_name::DomainNameError, extended_base32::ExtendedBase32Error,
+    },
+};
 
 use super::tokenizer::errors::TokenizerError;
 
@@ -10,8 +30,8 @@ use super::tokenizer::errors::TokenizerError;
 pub enum TokenizedRecordError {
     TokenizerError(TokenizerError),
     TokenError(TokenError),
-    TooManyRDataTokensError{ expected: usize, received: usize },
-    TooFewRDataTokensError{ expected: usize, received: usize },
+    TooManyRDataTokensError { expected: usize, received: usize },
+    TooFewRDataTokensError { expected: usize, received: usize },
     UnsupportedRType(RType),
     RTypeNotAllowed(RType),
     OutOfBoundsError(String),
@@ -23,10 +43,20 @@ impl Display for TokenizedRecordError {
         match self {
             Self::TokenizerError(error) => write!(f, "{error}"),
             Self::TokenError(error) => write!(f, "{error}"),
-            Self::TooManyRDataTokensError{expected, received} => write!(f, "too many tokens; expected {expected} but received {received}"),
-            Self::TooFewRDataTokensError{expected, received} => write!(f, "too few tokens; expected {expected} but received {received}"),
-            Self::UnsupportedRType(rtype) => write!(f, "Resource Record Type {rtype} is not supported"),
-            Self::RTypeNotAllowed(rtype) => write!(f, "Resource Record Type {rtype} is not allowed in files"),
+            Self::TooManyRDataTokensError { expected, received } => write!(
+                f,
+                "too many tokens; expected {expected} but received {received}"
+            ),
+            Self::TooFewRDataTokensError { expected, received } => write!(
+                f,
+                "too few tokens; expected {expected} but received {received}"
+            ),
+            Self::UnsupportedRType(rtype) => {
+                write!(f, "Resource Record Type {rtype} is not supported")
+            }
+            Self::RTypeNotAllowed(rtype) => {
+                write!(f, "Resource Record Type {rtype} is not allowed in files")
+            }
             Self::OutOfBoundsError(error) => write!(f, "Out Of Bounds: {error}"),
             Self::ValueError(error) => write!(f, "Value Error: {error}"),
         }
@@ -71,7 +101,10 @@ impl Error for TokenError {}
 impl Display for TokenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::OutOfTokens => write!(f, "Token Error: no tokens to parse. At least 1 was expected"),
+            Self::OutOfTokens => write!(
+                f,
+                "Token Error: no tokens to parse. At least 1 was expected"
+            ),
             Self::ParseIntError(error) => write!(f, "{error}"),
             Self::TryFromIntError(error) => write!(f, "{error}"),
             Self::UxTryFromIntError => write!(f, "out of range integral type conversion attempted"),

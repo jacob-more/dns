@@ -1,14 +1,23 @@
-use std::{future::Future, iter::repeat, sync::{atomic::{AtomicBool, Ordering}, Arc}, task::Context, thread::{self, sleep}, time::Duration};
+use std::{
+    future::Future,
+    iter::repeat,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::Context,
+    thread::{self, sleep},
+    time::Duration,
+};
 
 use async_lib::awake_token::AwakeToken;
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use tokio::pin;
-
 
 fn append_no_contention_benchmark(c: &mut Criterion) {
     let awake_token = AwakeToken::new();
 
-    c.bench_function("Append No Contention", |b|
+    c.bench_function("Append No Contention", |b| {
         b.iter_with_large_drop(|| {
             let waker = futures::task::noop_waker();
             let mut context = Context::from_waker(&waker);
@@ -17,7 +26,7 @@ fn append_no_contention_benchmark(c: &mut Criterion) {
             pin! { awoken_token };
             let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
         })
-    );
+    });
 }
 
 fn append_with_heavy_contention_benchmark(c: &mut Criterion) {
@@ -52,21 +61,27 @@ fn append_with_heavy_contention_benchmark(c: &mut Criterion) {
         // Give the other threads a moment to start running.
         sleep(Duration::from_secs(1));
 
-        benchmark_group.bench_with_input(BenchmarkId::new("Append With Contention", thread_count), &thread_count, |b, _|
-            b.iter(|| {
-                let waker = futures::task::noop_waker();
-                let mut context = Context::from_waker(&waker);
-                let awake_token = awake_token.clone();
-                let awoken_token = awake_token.awoken();
-                pin! { awoken_token };
-                let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
-            })
+        benchmark_group.bench_with_input(
+            BenchmarkId::new("Append With Contention", thread_count),
+            &thread_count,
+            |b, _| {
+                b.iter(|| {
+                    let waker = futures::task::noop_waker();
+                    let mut context = Context::from_waker(&waker);
+                    let awake_token = awake_token.clone();
+                    let awoken_token = awake_token.awoken();
+                    pin! { awoken_token };
+                    let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
+                })
+            },
         );
 
         contention_alive.store(false, Ordering::Release);
-        contention_threads.into_iter().for_each(|contention_thread| {
-            let _ = contention_thread.join();
-        });
+        contention_threads
+            .into_iter()
+            .for_each(|contention_thread| {
+                let _ = contention_thread.join();
+            });
     }
 
     benchmark_group.finish();
@@ -114,21 +129,27 @@ fn append_with_heavy_contention_multiadd_benchmark(c: &mut Criterion) {
         // Give the other threads a moment to start running.
         sleep(Duration::from_secs(1));
 
-        benchmark_group.bench_with_input(BenchmarkId::new("Append With Contention", thread_count), &thread_count, |b, _|
-            b.iter(|| {
-                let waker = futures::task::noop_waker();
-                let mut context = Context::from_waker(&waker);
-                let awake_token = awake_token.clone();
-                let awoken_token = awake_token.awoken();
-                pin! { awoken_token };
-                let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
-            })
+        benchmark_group.bench_with_input(
+            BenchmarkId::new("Append With Contention", thread_count),
+            &thread_count,
+            |b, _| {
+                b.iter(|| {
+                    let waker = futures::task::noop_waker();
+                    let mut context = Context::from_waker(&waker);
+                    let awake_token = awake_token.clone();
+                    let awoken_token = awake_token.awoken();
+                    pin! { awoken_token };
+                    let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
+                })
+            },
         );
 
         contention_alive.store(false, Ordering::Release);
-        contention_threads.into_iter().for_each(|contention_thread| {
-            let _ = contention_thread.join();
-        });
+        contention_threads
+            .into_iter()
+            .for_each(|contention_thread| {
+                let _ = contention_thread.join();
+            });
     }
 
     benchmark_group.finish();
@@ -168,21 +189,27 @@ fn append_with_light_contention_benchmark(c: &mut Criterion) {
         // Give the other threads a moment to start running.
         sleep(Duration::from_secs(1));
 
-        benchmark_group.bench_with_input(BenchmarkId::new("Append With Contention", thread_count), &thread_count, |b, _|
-            b.iter(|| {
-                let waker = futures::task::noop_waker();
-                let mut context = Context::from_waker(&waker);
-                let awake_token = awake_token.clone();
-                let awoken_token = awake_token.awoken();
-                pin! { awoken_token };
-                let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
-            })
+        benchmark_group.bench_with_input(
+            BenchmarkId::new("Append With Contention", thread_count),
+            &thread_count,
+            |b, _| {
+                b.iter(|| {
+                    let waker = futures::task::noop_waker();
+                    let mut context = Context::from_waker(&waker);
+                    let awake_token = awake_token.clone();
+                    let awoken_token = awake_token.awoken();
+                    pin! { awoken_token };
+                    let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
+                })
+            },
         );
 
         contention_alive.store(false, Ordering::Release);
-        contention_threads.into_iter().for_each(|contention_thread| {
-            let _ = contention_thread.join();
-        });
+        contention_threads
+            .into_iter()
+            .for_each(|contention_thread| {
+                let _ = contention_thread.join();
+            });
     }
 
     benchmark_group.finish();
@@ -232,26 +259,31 @@ fn append_with_light_contention_multiadd_benchmark(c: &mut Criterion) {
         // Give the other threads a moment to start running.
         sleep(Duration::from_secs(1));
 
-        benchmark_group.bench_with_input(BenchmarkId::new("Append With Contention", thread_count), &thread_count, |b, _|
-            b.iter(|| {
-                let waker = futures::task::noop_waker();
-                let mut context = Context::from_waker(&waker);
-                let awake_token = awake_token.clone();
-                let awoken_token = awake_token.awoken();
-                pin! { awoken_token };
-                let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
-            })
+        benchmark_group.bench_with_input(
+            BenchmarkId::new("Append With Contention", thread_count),
+            &thread_count,
+            |b, _| {
+                b.iter(|| {
+                    let waker = futures::task::noop_waker();
+                    let mut context = Context::from_waker(&waker);
+                    let awake_token = awake_token.clone();
+                    let awoken_token = awake_token.awoken();
+                    pin! { awoken_token };
+                    let _ = black_box(black_box(awoken_token).poll(black_box(&mut context)));
+                })
+            },
         );
 
         contention_alive.store(false, Ordering::Release);
-        contention_threads.into_iter().for_each(|contention_thread| {
-            let _ = contention_thread.join();
-        });
+        contention_threads
+            .into_iter()
+            .for_each(|contention_thread| {
+                let _ = contention_thread.join();
+            });
     }
 
     benchmark_group.finish();
 }
-
 
 criterion_group!(
     benches,

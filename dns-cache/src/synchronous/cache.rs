@@ -1,10 +1,13 @@
-use dns_lib::interface::cache::{cache::Cache, main_cache::MainCache, transaction_cache::TransactionCache, CacheQuery, CacheRecord, CacheResponse};
+use dns_lib::interface::cache::{
+    CacheQuery, CacheRecord, CacheResponse, cache::Cache, main_cache::MainCache,
+    transaction_cache::TransactionCache,
+};
 
 use super::{main_cache::MainTreeCache, transaction_cache::TransactionTreeCache};
 
 pub struct TreeCache<'a> {
     main_cache: &'a mut MainTreeCache,
-    transaction_cache: TransactionTreeCache
+    transaction_cache: TransactionTreeCache,
 }
 
 impl<'a> TreeCache<'a> {
@@ -26,12 +29,16 @@ impl<'a> Cache for TreeCache<'a> {
             // an error since it may hold critical records.
             (CacheResponse::Err(rcode), _) => CacheResponse::Err(rcode),
 
-            (CacheResponse::Records(mut transaction_records), CacheResponse::Records(main_records)) => {
+            (
+                CacheResponse::Records(mut transaction_records),
+                CacheResponse::Records(main_records),
+            ) => {
                 transaction_records.extend(main_records);
                 CacheResponse::Records(transaction_records)
-            },
-            (transaction_records @ CacheResponse::Records(_), CacheResponse::Err(_)) => transaction_records,
-
+            }
+            (transaction_records @ CacheResponse::Records(_), CacheResponse::Err(_)) => {
+                transaction_records
+            }
         }
     }
 
@@ -39,5 +46,4 @@ impl<'a> Cache for TreeCache<'a> {
         self.transaction_cache.insert_record(record.clone());
         self.main_cache.insert_record(record);
     }
-
 }

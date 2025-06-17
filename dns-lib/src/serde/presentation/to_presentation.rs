@@ -17,7 +17,7 @@ macro_rules! std_to_token_impl {
                 out_buffer.push(self.to_string())
             }
         }
-    }
+    };
 }
 
 std_to_token_impl!(u8);
@@ -44,7 +44,7 @@ macro_rules! ux_to_token_impl {
                 out_buffer.push(self.to_string())
             }
         }
-    }
+    };
 }
 
 ux_to_token_impl!(u1);

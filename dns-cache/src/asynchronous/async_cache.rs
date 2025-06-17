@@ -1,14 +1,19 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dns_lib::interface::cache::{cache::AsyncCache, main_cache::AsyncMainCache, transaction_cache::AsyncTransactionCache, CacheQuery, CacheRecord, CacheResponse};
+use dns_lib::interface::cache::{
+    CacheQuery, CacheRecord, CacheResponse, cache::AsyncCache, main_cache::AsyncMainCache,
+    transaction_cache::AsyncTransactionCache,
+};
 use tokio::join;
 
-use super::{async_main_cache::AsyncMainTreeCache, async_transaction_cache::AsyncTransactionTreeCache};
+use super::{
+    async_main_cache::AsyncMainTreeCache, async_transaction_cache::AsyncTransactionTreeCache,
+};
 
 pub struct AsyncTreeCache {
     main_cache: Arc<AsyncMainTreeCache>,
-    transaction_cache: AsyncTransactionTreeCache
+    transaction_cache: AsyncTransactionTreeCache,
 }
 
 impl AsyncTreeCache {
@@ -30,12 +35,16 @@ impl AsyncCache for AsyncTreeCache {
             // Note: The transaction cache CANNOT return an error, otherwise the overall response is
             // an error since it may hold critical records.
             (CacheResponse::Err(rcode), _) => CacheResponse::Err(rcode),
-            (CacheResponse::Records(mut transaction_records), CacheResponse::Records(main_records)) => {
+            (
+                CacheResponse::Records(mut transaction_records),
+                CacheResponse::Records(main_records),
+            ) => {
                 transaction_records.extend(main_records);
                 CacheResponse::Records(transaction_records)
-            },
-            (CacheResponse::Records(transaction_records), CacheResponse::Err(_)) => CacheResponse::Records(transaction_records),
-
+            }
+            (CacheResponse::Records(transaction_records), CacheResponse::Err(_)) => {
+                CacheResponse::Records(transaction_records)
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-use dns_macros::{ToWire, FromWire, RData};
+use dns_macros::{FromWire, RData, ToWire};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.3
 /// (Updated)  https://datatracker.ietf.org/doc/html/rfc5936#section-2
@@ -14,11 +14,8 @@ impl AXFR {
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
     use super::AXFR;
+    use crate::serde::wire::circular_test::gen_test_circular_serde_sanity_test;
 
-    gen_test_circular_serde_sanity_test!(
-        record_circular_serde_sanity_test,
-        AXFR {}
-    );
+    gen_test_circular_serde_sanity_test!(record_circular_serde_sanity_test, AXFR {});
 }

@@ -1,6 +1,18 @@
-use std::{collections::{hash_map::Entry, HashMap, HashSet}, error::Error, fmt::Display, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet, hash_map::Entry},
+    error::Error,
+    fmt::Display,
+    sync::Arc,
+};
 
-use dns_lib::{query::question::Question, resource_record::{rclass::RClass, rtype::RType}, types::{c_domain_name::CDomainName, label::{CaseInsensitive, Label, OwnedLabel}}};
+use dns_lib::{
+    query::question::Question,
+    resource_record::{rclass::RClass, rtype::RType},
+    types::{
+        c_domain_name::CDomainName,
+        label::{CaseInsensitive, Label, OwnedLabel},
+    },
+};
 use futures::StreamExt;
 use tokio::sync::{Mutex, RwLock};
 
@@ -13,7 +25,9 @@ impl Error for AsyncTreeCacheError {}
 impl Display for AsyncTreeCacheError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NonFullyQualifiedDomainName(name) => write!(f, "The domain names '{name}' must be fully qualified"),
+            Self::NonFullyQualifiedDomainName(name) => {
+                write!(f, "The domain names '{name}' must be fully qualified")
+            }
             Self::InconsistentState(message) => write!(f, "Inconsistent State: {message}"),
         }
     }
@@ -21,7 +35,7 @@ impl Display for AsyncTreeCacheError {
 
 #[derive(Debug)]
 pub struct AsyncTreeCache<Records> {
-    root_nodes: RwLock<HashMap<RClass, Arc<TreeNode<Records>>>>
+    root_nodes: RwLock<HashMap<RClass, Arc<TreeNode<Records>>>>,
 }
 
 type ChildNodes<Records> = RwLock<HashMap<OwnedLabel<CaseInsensitive>, Arc<TreeNode<Records>>>>;
@@ -33,19 +47,29 @@ pub struct TreeNode<Records> {
     pub records: MappedRecords<Records>,
 }
 
-impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
+impl<Records> AsyncTreeCache<Records>
+where
+    Records: Send + Sync,
+{
     #[inline]
     pub fn new() -> Self {
-        Self { root_nodes: RwLock::new(HashMap::new()) }
+        Self {
+            root_nodes: RwLock::new(HashMap::new()),
+        }
     }
 
     #[inline]
-    pub async fn get_or_create_node(&self, question: &Question) -> Result<Arc<TreeNode<Records>>, AsyncTreeCacheError> {
+    pub async fn get_or_create_node(
+        &self,
+        question: &Question,
+    ) -> Result<Arc<TreeNode<Records>>, AsyncTreeCacheError> {
         // Checks if domain name ends in root node.
         // The root node of the cache is the root label so if the domain name is not
         // fully qualified, then it is not possible for the domain to be in the cache.
         if !question.qname().is_fully_qualified() {
-            return Err(AsyncTreeCacheError::NonFullyQualifiedDomainName(question.qname().clone()));
+            return Err(AsyncTreeCacheError::NonFullyQualifiedDomainName(
+                question.qname().clone(),
+            ));
         }
 
         // If the node does not exist, create it. Then, we can get a shared reference back out of
@@ -57,7 +81,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
             Some(root_node) => {
                 current_node = root_node.clone();
                 drop(read_root_node);
-            },
+            }
             None => {
                 drop(read_root_node);
                 let mut write_root_node = self.root_nodes.write().await;
@@ -68,7 +92,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                         let root_node = entry.get();
                         current_node = root_node.clone();
                         drop(write_root_node);
-                    },
+                    }
                     Entry::Vacant(entry) => {
                         let new_node = Arc::new(TreeNode {
                             children: RwLock::new(HashMap::new()),
@@ -77,9 +101,9 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                         entry.insert(new_node.clone());
                         drop(write_root_node);
                         current_node = new_node;
-                    },
+                    }
                 }
-            },
+            }
         }
 
         // Note: Skipping first label (root label) because it was already checked.
@@ -92,7 +116,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                     let child_node = child_node.clone();
                     drop(read_current_node_children);
                     current_node = child_node;
-                },
+                }
                 None => {
                     drop(read_current_node_children);
                     let mut write_current_node_children = current_node.children.write().await;
@@ -103,7 +127,7 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                             let child_node = entry.get().clone();
                             drop(write_current_node_children);
                             current_node = child_node;
-                        },
+                        }
                         Entry::Vacant(entry) => {
                             let child_node = Arc::new(TreeNode {
                                 children: RwLock::new(HashMap::new()),
@@ -112,22 +136,27 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
                             entry.insert(child_node.clone());
                             drop(write_current_node_children);
                             current_node = child_node;
-                        },
+                        }
                     }
-                },
+                }
             }
         }
 
-        return Ok(current_node)
+        return Ok(current_node);
     }
 
     #[inline]
-    pub async fn get_node(&self, question: &Question) -> Result<Option<Arc<TreeNode<Records>>>, AsyncTreeCacheError> {
+    pub async fn get_node(
+        &self,
+        question: &Question,
+    ) -> Result<Option<Arc<TreeNode<Records>>>, AsyncTreeCacheError> {
         // Checks if domain name ends in root node.
         // The root node of the cache is the root label so if the domain name is not
         // fully qualified, then it is not possible for the domain to be in the cache.
         if !question.qname().is_fully_qualified() {
-            return Err(AsyncTreeCacheError::NonFullyQualifiedDomainName(question.qname().clone()));
+            return Err(AsyncTreeCacheError::NonFullyQualifiedDomainName(
+                question.qname().clone(),
+            ));
         }
 
         let mut current_node;
@@ -157,12 +186,18 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
     }
 
     #[inline]
-    pub async fn remove_node(&self, qname: &CDomainName, qclass: &RClass) -> Result<Option<Arc<TreeNode<Records>>>, AsyncTreeCacheError> {
+    pub async fn remove_node(
+        &self,
+        qname: &CDomainName,
+        qclass: &RClass,
+    ) -> Result<Option<Arc<TreeNode<Records>>>, AsyncTreeCacheError> {
         // Checks if domain name ends in root node.
         // The root node of the cache is the root label so if the domain name is not
         // fully qualified, then it is not possible for the domain to be in the cache.
         if !qname.is_fully_qualified() {
-            return Err(AsyncTreeCacheError::NonFullyQualifiedDomainName(qname.clone()));
+            return Err(AsyncTreeCacheError::NonFullyQualifiedDomainName(
+                qname.clone(),
+            ));
         }
 
         if qname.is_root() {
@@ -199,7 +234,11 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
 
         let last_label = match qname.labels().next() {
             Some(last_label) => last_label,
-            None => return Err(AsyncTreeCacheError::InconsistentState(format!("Could not determine the last label in the qname '{qname}'"))),
+            None => {
+                return Err(AsyncTreeCacheError::InconsistentState(format!(
+                    "Could not determine the last label in the qname '{qname}'"
+                )));
+            }
         };
         let mut write_children = parent_node.children.write().await;
         let result = write_children.remove(last_label);
@@ -207,25 +246,32 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         return Ok(result);
     }
 
-    async fn get_subdomains(node: Arc<TreeNode<Records>>) -> HashSet<Vec<OwnedLabel<CaseInsensitive>>> {
+    async fn get_subdomains(
+        node: Arc<TreeNode<Records>>,
+    ) -> HashSet<Vec<OwnedLabel<CaseInsensitive>>> {
         let read_node_children = node.children.read().await;
         let node_children = read_node_children.clone();
         drop(read_node_children);
 
         let children_names = Arc::new(Mutex::new(HashSet::new()));
-        futures::stream::iter(node_children.into_iter()).for_each_concurrent(None, |(label, child)| {
-            let children_names = children_names.clone();
-            async move {
-                let subdomain_names = Self::get_subdomains(child).await;
-                let mut write_children_names = children_names.lock().await;
-                write_children_names.extend(
-                    subdomain_names.into_iter().map(|mut subdomain_name| {subdomain_name.push(label.clone()); subdomain_name})
-                );
-                write_children_names.insert(vec![label]);
-                drop(write_children_names);
-                drop(children_names);
-            }
-        }).await;
+        futures::stream::iter(node_children.into_iter())
+            .for_each_concurrent(None, |(label, child)| {
+                let children_names = children_names.clone();
+                async move {
+                    let subdomain_names = Self::get_subdomains(child).await;
+                    let mut write_children_names = children_names.lock().await;
+                    write_children_names.extend(subdomain_names.into_iter().map(
+                        |mut subdomain_name| {
+                            subdomain_name.push(label.clone());
+                            subdomain_name
+                        },
+                    ));
+                    write_children_names.insert(vec![label]);
+                    drop(write_children_names);
+                    drop(children_names);
+                }
+            })
+            .await;
 
         Arc::into_inner(children_names)
             .expect("The `children_names` did not get dropped")
@@ -238,24 +284,32 @@ impl<Records> AsyncTreeCache<Records> where Records: Send + Sync {
         drop(read_root_node);
 
         let domains = Arc::new(Mutex::new(HashSet::new()));
-        futures::stream::iter(root_nodes.into_iter()).for_each_concurrent(None, |(_, root_node)| {
-            let domains = domains.clone();
-            async move {
-                let subdomain_names = Self::get_subdomains(root_node).await;
-                let mut write_domains = domains.lock().await;
-                write_domains.extend(
-                    subdomain_names.into_iter()
-                        .map(|mut subdomain_name| {subdomain_name.push(OwnedLabel::new_root()); subdomain_name})
-                        .filter_map(|domain_name| match CDomainName::from_owned_labels(domain_name) {
-                            Ok(domain_name) => Some(domain_name),
-                            Err(_) => None,
-                        })
-                );
-                write_domains.insert(CDomainName::new_root());
-                drop(write_domains);
-                drop(domains);
-            }
-        }).await;
+        futures::stream::iter(root_nodes.into_iter())
+            .for_each_concurrent(None, |(_, root_node)| {
+                let domains = domains.clone();
+                async move {
+                    let subdomain_names = Self::get_subdomains(root_node).await;
+                    let mut write_domains = domains.lock().await;
+                    write_domains.extend(
+                        subdomain_names
+                            .into_iter()
+                            .map(|mut subdomain_name| {
+                                subdomain_name.push(OwnedLabel::new_root());
+                                subdomain_name
+                            })
+                            .filter_map(|domain_name| {
+                                match CDomainName::from_owned_labels(domain_name) {
+                                    Ok(domain_name) => Some(domain_name),
+                                    Err(_) => None,
+                                }
+                            }),
+                    );
+                    write_domains.insert(CDomainName::new_root());
+                    drop(write_domains);
+                    drop(domains);
+                }
+            })
+            .await;
 
         Arc::into_inner(domains)
             .expect("The `domains` did not get dropped")

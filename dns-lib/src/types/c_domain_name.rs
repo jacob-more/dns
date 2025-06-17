@@ -1,11 +1,35 @@
-use std::{collections::HashMap, error::Error, fmt::{Debug, Display}, iter::FusedIterator, marker::PhantomData, ops::Add};
+use std::{
+    collections::HashMap,
+    error::Error,
+    fmt::{Debug, Display},
+    iter::FusedIterator,
+    marker::PhantomData,
+    ops::Add,
+};
 
-use tinyvec::{tiny_vec, ArrayVec, TinyVec};
+use tinyvec::{ArrayVec, TinyVec, tiny_vec};
 
-use crate::{serde::{presentation::{errors::TokenError, from_presentation::FromPresentation, parse_chars::{char_token::EscapableChar, escaped_to_escapable::{EscapedCharsEnumerateIter, ParseError}}, to_presentation::ToPresentation}, wire::{from_wire::FromWire, to_wire::ToWire}}, types::ascii::{constants::ASCII_PERIOD, AsciiError, AsciiString}};
+use crate::{
+    serde::{
+        presentation::{
+            errors::TokenError,
+            from_presentation::FromPresentation,
+            parse_chars::{
+                char_token::EscapableChar,
+                escaped_to_escapable::{EscapedCharsEnumerateIter, ParseError},
+            },
+            to_presentation::ToPresentation,
+        },
+        wire::{from_wire::FromWire, to_wire::ToWire},
+    },
+    types::ascii::{AsciiError, AsciiString, constants::ASCII_PERIOD},
+};
 
-use super::{ascii::AsciiChar, domain_name::DomainName, label::{case_sensitivity::CaseSensitivity, CaseInsensitive, Label, OwnedLabel, RefLabel}};
-
+use super::{
+    ascii::AsciiChar,
+    domain_name::DomainName,
+    label::{CaseInsensitive, Label, OwnedLabel, RefLabel, case_sensitivity::CaseSensitivity},
+};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum CDomainNameError {
@@ -22,25 +46,58 @@ pub enum CDomainNameError {
     InvalidPointer,
     BadRData,
     AsciiError(AsciiError),
-    ParseError(ParseError)
+    ParseError(ParseError),
 }
 
 impl Error for CDomainNameError {}
 impl Display for CDomainNameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyString =>       write!(f, "Domain Cannot Be Empty: domain name must have at least one byte"),
-            Self::Fqdn =>              write!(f, "Domain Must Be Fully Qualified: indicates that a domain name does not have a closing dot"),
-            Self::LongDomain =>        write!(f, "Domain Name Exceeded {} Wire-Format Octets", CDomainName::MAX_OCTETS),
-            Self::LongLabel =>         write!(f, "Label Exceeded {} Wire-Format Octets", <OwnedLabel<CaseInsensitive>>::MAX_OCTETS),
-            Self::LeadingDot =>        write!(f, "Bad Leading Dot: domain name must not begin with a '.' except for in the root zone"),
-            Self::ConsecutiveDots =>   write!(f, "Two Consecutive Dots: domain name must not contain two consecutive dots '..' unless one of them is escaped"),
-            Self::InternalRootLabel => write!(f, "Internal Root Label: domain name must not a root label unless it is the last label"),
-            Self::Buffer =>            write!(f, "Buffer size too small"),
-            Self::TooManyPointers =>   write!(f, "Too Many Compression Pointers: the maximum compression pointers permitted is {}", CDomainName::MAX_COMPRESSION_POINTERS),
-            Self::ForwardPointers =>   write!(f, "Forward Pointer: domain name pointers can only point backwards. Cannot point forward in the buffer"),
-            Self::InvalidPointer =>    write!(f, "Invalid Pointer: domain name pointer cannot use the first two bits. These are reserved"),
-            Self::BadRData =>          write!(f, "Bad RData."),
+            Self::EmptyString => write!(
+                f,
+                "Domain Cannot Be Empty: domain name must have at least one byte"
+            ),
+            Self::Fqdn => write!(
+                f,
+                "Domain Must Be Fully Qualified: indicates that a domain name does not have a closing dot"
+            ),
+            Self::LongDomain => write!(
+                f,
+                "Domain Name Exceeded {} Wire-Format Octets",
+                CDomainName::MAX_OCTETS
+            ),
+            Self::LongLabel => write!(
+                f,
+                "Label Exceeded {} Wire-Format Octets",
+                <OwnedLabel<CaseInsensitive>>::MAX_OCTETS
+            ),
+            Self::LeadingDot => write!(
+                f,
+                "Bad Leading Dot: domain name must not begin with a '.' except for in the root zone"
+            ),
+            Self::ConsecutiveDots => write!(
+                f,
+                "Two Consecutive Dots: domain name must not contain two consecutive dots '..' unless one of them is escaped"
+            ),
+            Self::InternalRootLabel => write!(
+                f,
+                "Internal Root Label: domain name must not a root label unless it is the last label"
+            ),
+            Self::Buffer => write!(f, "Buffer size too small"),
+            Self::TooManyPointers => write!(
+                f,
+                "Too Many Compression Pointers: the maximum compression pointers permitted is {}",
+                CDomainName::MAX_COMPRESSION_POINTERS
+            ),
+            Self::ForwardPointers => write!(
+                f,
+                "Forward Pointer: domain name pointers can only point backwards. Cannot point forward in the buffer"
+            ),
+            Self::InvalidPointer => write!(
+                f,
+                "Invalid Pointer: domain name pointer cannot use the first two bits. These are reserved"
+            ),
+            Self::BadRData => write!(f, "Bad RData."),
             Self::AsciiError(error) => write!(f, "{error}"),
             Self::ParseError(error) => write!(f, "{error}"),
         }
@@ -65,7 +122,7 @@ pub trait CmpDomainName<T>: Sized {
     #[inline]
     fn is_child_domain_of(&self, parent: &T) -> bool
     where
-        T: CmpDomainName<Self>
+        T: CmpDomainName<Self>,
     {
         parent.is_parent_domain_of(self)
     }
@@ -140,7 +197,10 @@ impl CDomainName {
     pub const MAX_COMPRESSION_POINTERS: u16 = Self::MAX_LABELS - 1;
 
     pub fn new_root() -> Self {
-        Self { octets: vec![0], length_octets: tiny_vec![0] }
+        Self {
+            octets: vec![0],
+            length_octets: tiny_vec![0],
+        }
     }
 
     pub fn new(string: &AsciiString) -> Result<Self, CDomainNameError> {
@@ -155,7 +215,9 @@ impl CDomainName {
         let mut length_octets = TinyVec::new();
         let mut length_octet_index = 0;
 
-        for escaped_char_result in EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate()) {
+        for escaped_char_result in
+            EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate())
+        {
             match (escaped_char_result, (octets.len() - length_octet_index)) {
                 (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), _) => {
                     // leading dots are illegal except for the root zone
@@ -165,9 +227,11 @@ impl CDomainName {
 
                     length_octets.push(octets[length_octet_index]);
                     break;
-                },
+                }
                 // consecutive dots are never legal
-                (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 1) => return Err(CDomainNameError::ConsecutiveDots),
+                (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 1) => {
+                    return Err(CDomainNameError::ConsecutiveDots);
+                }
                 // a label is found
                 (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 2..) => {
                     length_octets.push(octets[length_octet_index]);
@@ -178,7 +242,7 @@ impl CDomainName {
 
                     length_octet_index = octets.len();
                     octets.push(0);
-                },
+                }
                 (Ok((_, escapable_char)), _) => {
                     octets.push(escapable_char.into_unescaped_character());
                     octets[length_octet_index] += 1;
@@ -192,7 +256,7 @@ impl CDomainName {
                     if octets.len() > Self::MAX_OCTETS as usize {
                         return Err(CDomainNameError::LongDomain);
                     }
-                },
+                }
                 (Err(error), _) => return Err(CDomainNameError::ParseError(error)),
             }
         }
@@ -202,22 +266,26 @@ impl CDomainName {
         }
 
         octets.shrink_to_fit();
-        Ok(Self { octets, length_octets })
+        Ok(Self {
+            octets,
+            length_octets,
+        })
     }
 
     #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, CDomainNameError> {
-        Self::new(
-            &AsciiString::from_utf8(string)?
-        )
+        Self::new(&AsciiString::from_utf8(string)?)
     }
 
     #[inline]
-    pub fn from_labels<'a, C: CaseSensitivity, T: Label<C>>(labels: Vec<T>) -> Result<Self, CDomainNameError> {
+    pub fn from_labels<'a, C: CaseSensitivity, T: Label<C>>(
+        labels: Vec<T>,
+    ) -> Result<Self, CDomainNameError> {
         if labels.is_empty() {
             return Err(CDomainNameError::EmptyString);
         }
-        let total_octets = labels.len() + (labels.iter().map(|label| label.len()).sum::<u16>() as usize);
+        let total_octets =
+            labels.len() + (labels.iter().map(|label| label.len()).sum::<u16>() as usize);
         if total_octets > Self::MAX_OCTETS as usize {
             return Err(CDomainNameError::LongDomain);
         }
@@ -229,15 +297,21 @@ impl CDomainName {
             octets.extend(label.octets());
             length_octets.push(length_octet);
         }
-        Ok(Self { octets, length_octets })
+        Ok(Self {
+            octets,
+            length_octets,
+        })
     }
 
     #[inline]
-    pub fn from_owned_labels<C: CaseSensitivity>(labels: Vec<OwnedLabel<C>>) -> Result<Self, CDomainNameError> {
+    pub fn from_owned_labels<C: CaseSensitivity>(
+        labels: Vec<OwnedLabel<C>>,
+    ) -> Result<Self, CDomainNameError> {
         if labels.is_empty() {
             return Err(CDomainNameError::EmptyString);
         }
-        let total_octets = labels.len() + (labels.iter().map(|label| label.len()).sum::<u16>() as usize);
+        let total_octets =
+            labels.len() + (labels.iter().map(|label| label.len()).sum::<u16>() as usize);
         if total_octets > Self::MAX_OCTETS as usize {
             return Err(CDomainNameError::LongDomain);
         }
@@ -249,7 +323,10 @@ impl CDomainName {
             octets.extend(label.into_octets());
             length_octets.push(length_octet);
         }
-        Ok(Self { octets, length_octets })
+        Ok(Self {
+            octets,
+            length_octets,
+        })
     }
 
     #[inline]
@@ -298,7 +375,10 @@ impl CDomainName {
             octets.push(0);
             let mut length_octets = self.length_octets.clone();
             length_octets.push(0);
-            return Ok(Self { octets, length_octets });
+            return Ok(Self {
+                octets,
+                length_octets,
+            });
         }
     }
 
@@ -354,7 +434,10 @@ impl CDomainName {
             octets[index] = *length_octet;
             index += (*length_octet as usize) + 1;
         }
-        Self { octets, length_octets: self.length_octets.clone() }
+        Self {
+            octets,
+            length_octets: self.length_octets.clone(),
+        }
     }
 
     #[inline]
@@ -370,12 +453,17 @@ impl CDomainName {
     }
 
     #[inline]
-    pub fn labels<'a, C: 'a + CaseSensitivity>(&'a self) -> impl 'a + DoubleEndedIterator<Item = &'a RefLabel<C>> + ExactSizeIterator<Item = &'a RefLabel<C>> {
+    pub fn labels<'a, C: 'a + CaseSensitivity>(
+        &'a self,
+    ) -> impl 'a + DoubleEndedIterator<Item = &'a RefLabel<C>> + ExactSizeIterator<Item = &'a RefLabel<C>>
+    {
         CDomainLabelIter::new(self)
     }
 
     #[inline]
-    pub fn search_domains<'a>(&'a self) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
+    pub fn search_domains<'a>(
+        &'a self,
+    ) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
         CDomainSearchNameIter::new(self)
     }
 }
@@ -408,7 +496,10 @@ impl<'a, C: 'a + CaseSensitivity> Iterator for CDomainLabelIter<'a, C> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.next_length_index < self.last_length_index {
             let length = self.name.length_octets[self.next_length_index as usize];
-            let label = RefLabel::from_octets(&self.name.octets[((self.next_octet_index as usize) + 1)..((self.next_octet_index as usize) + 1 + (length as usize))]);
+            let label = RefLabel::from_octets(
+                &self.name.octets[((self.next_octet_index as usize) + 1)
+                    ..((self.next_octet_index as usize) + 1 + (length as usize))],
+            );
             self.next_octet_index += length + 1;
             self.next_length_index += 1;
             return Some(label);
@@ -427,7 +518,10 @@ impl<'a, C: 'a + CaseSensitivity> DoubleEndedIterator for CDomainLabelIter<'a, C
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.next_length_index < self.last_length_index {
             let length = self.name.length_octets[(self.last_length_index as usize) - 1];
-            let label = RefLabel::from_octets(&self.name.octets[((self.last_octet_index as usize) - (length as usize))..(self.last_octet_index as usize)]);
+            let label = RefLabel::from_octets(
+                &self.name.octets[((self.last_octet_index as usize) - (length as usize))
+                    ..(self.last_octet_index as usize)],
+            );
             self.last_octet_index -= length + 1;
             self.last_length_index -= 1;
             return Some(label);
@@ -471,7 +565,9 @@ impl<'a> Iterator for CDomainSearchNameIter<'a> {
             self.next_length_index += 1;
             return Some(CDomainName {
                 octets: self.name.octets[(octet_index as usize)..].to_vec(),
-                length_octets: TinyVec::from(&self.name.length_octets[(length_octet_index as usize)..]),
+                length_octets: TinyVec::from(
+                    &self.name.length_octets[(length_octet_index as usize)..],
+                ),
             });
         } else {
             return None;
@@ -487,11 +583,14 @@ impl<'a> Iterator for CDomainSearchNameIter<'a> {
 impl<'a> DoubleEndedIterator for CDomainSearchNameIter<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.next_length_index < self.last_length_index {
-            self.last_octet_index -= self.name.length_octets[(self.last_length_index as usize) - 1] + 1;
+            self.last_octet_index -=
+                self.name.length_octets[(self.last_length_index as usize) - 1] + 1;
             self.last_length_index -= 1;
             return Some(CDomainName {
                 octets: self.name.octets[(self.last_octet_index as usize)..].to_vec(),
-                length_octets: TinyVec::from(&self.name.length_octets[(self.last_length_index as usize)..]),
+                length_octets: TinyVec::from(
+                    &self.name.length_octets[(self.last_length_index as usize)..],
+                ),
             });
         } else {
             return None;
@@ -550,7 +649,10 @@ impl Add for CDomainName {
         let mut length_octets = self.length_octets.clone();
         length_octets.extend(rhs.length_octets);
 
-        return Ok(Self { octets, length_octets });
+        return Ok(Self {
+            octets,
+            length_octets,
+        });
     }
 }
 
@@ -575,7 +677,8 @@ impl CmpDomainName<CDomainName> for CDomainName {
             return false;
         }
         // Entire parent is contained by the child (child = subdomain)
-        self.labels::<CaseInsensitive>().rev()
+        self.labels::<CaseInsensitive>()
+            .rev()
             .zip(child.labels().rev())
             .all(|(self_label, child_label)| self_label == child_label)
     }
@@ -595,11 +698,20 @@ impl CmpDomainName<DomainName> for CDomainName {
 
 impl ToWire for CDomainName {
     #[inline]
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(
+        &self,
+        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
+        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
+    where
+        'a: 'b,
+    {
         if let Some(compression_map) = compression {
             let mut length_byte_index = 0_usize;
             while length_byte_index < self.octets.len() {
-                if let Some(pointer) = compression_map.find_sequence(&self.octets[length_byte_index..]) {
+                if let Some(pointer) =
+                    compression_map.find_sequence(&self.octets[length_byte_index..])
+                {
                     // The pointer cannot make use of the first two bits. These are reserved for
                     // use indicating that this label is a pointer. If they are needed for the
                     // pointer itself, the pointer would be corrupted.
@@ -617,7 +729,9 @@ impl ToWire for CDomainName {
                     // malformed pointer, then none of the pointers after this one will be well
                     // formed.
                     let pointer = wire.current_len() as u16;
-                    if ((pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000) || (&self.octets[length_byte_index..] != &[0]) {
+                    if ((pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000)
+                        || (&self.octets[length_byte_index..] != &[0])
+                    {
                         break;
                     }
                     length_byte_index += (self.octets[length_byte_index] as usize) + 1;
@@ -636,7 +750,13 @@ impl ToWire for CDomainName {
 
 impl FromWire for CDomainName {
     #[inline]
-    fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, crate::serde::wire::read_wire::ReadWireError> where Self: Sized, 'a: 'b {
+    fn from_wire_format<'a, 'b>(
+        wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>,
+    ) -> Result<Self, crate::serde::wire::read_wire::ReadWireError>
+    where
+        Self: Sized,
+        'a: 'b,
+    {
         let mut pointer_count = 0;
         let mut fully_qualified = false;
         let mut octets = ArrayVec::<[u8; Self::MAX_OCTETS as usize]>::new();
@@ -658,7 +778,7 @@ impl FromWire for CDomainName {
                     octets.extend_from_slice(wire.take((label_length as usize) + 1)?);
                     length_octets.push(label_length);
                     fully_qualified = label_length == 0;
-                },
+                }
                 0b1100_0000 => {
                     pointer_count += 1;
                     if pointer_count > Self::MAX_COMPRESSION_POINTERS {
@@ -682,7 +802,7 @@ impl FromWire for CDomainName {
                     }
 
                     wire.set_offset(pointer as usize)?;
-                },
+                }
                 _ => {
                     // 0x80 and 0x40 are reserved
                     return Err(CDomainNameError::BadRData)?;
@@ -695,13 +815,24 @@ impl FromWire for CDomainName {
         }
 
         let octets = octets.to_vec();
-        Ok(Self { octets, length_octets })
+        Ok(Self {
+            octets,
+            length_octets,
+        })
     }
 }
 
 impl FromPresentation for CDomainName {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+        'c: 'd,
+    {
         let (ascii_domain_name, tokens) = AsciiString::from_token_format(tokens)?;
         Ok((Self::new(&ascii_domain_name)?, tokens))
     }
@@ -722,7 +853,9 @@ pub struct CompressionMap {
 impl CompressionMap {
     #[inline]
     pub fn new() -> CompressionMap {
-        Self { map: HashMap::new() }
+        Self {
+            map: HashMap::new(),
+        }
     }
 
     #[inline]
@@ -740,8 +873,17 @@ impl CompressionMap {
 mod circular_serde_sanity_test {
     use tinyvec::TinyVec;
 
-    use crate::{serde::wire::{circular_test::gen_test_circular_serde_sanity_test, from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire}, types::{ascii::AsciiString, c_domain_name::CDomainName, label::{CaseSensitive, Label, OwnedLabel}}};
-
+    use crate::{
+        serde::wire::{
+            circular_test::gen_test_circular_serde_sanity_test, from_wire::FromWire,
+            read_wire::ReadWire, to_wire::ToWire, write_wire::WriteWire,
+        },
+        types::{
+            ascii::AsciiString,
+            c_domain_name::CDomainName,
+            label::{CaseSensitive, Label, OwnedLabel},
+        },
+    };
 
     gen_test_circular_serde_sanity_test!(
         root_record_circular_serde_sanity_test,
@@ -770,13 +912,31 @@ mod circular_serde_sanity_test {
             (".", vec![""]),
             ("com.", vec!["com", ""]),
             ("www.example.com.", vec!["www", "example", "com", ""]),
-            ("www.example.com.www.example.com.", vec!["www", "example", "com", "www", "example", "com", ""]),
-            ("www.example.com.www.example.com.www.example.com.", vec!["www", "example", "com", "www", "example", "com", "www", "example", "com", ""]),
+            (
+                "www.example.com.www.example.com.",
+                vec!["www", "example", "com", "www", "example", "com", ""],
+            ),
+            (
+                "www.example.com.www.example.com.www.example.com.",
+                vec![
+                    "www", "example", "com", "www", "example", "com", "www", "example", "com", "",
+                ],
+            ),
         ];
         for (domain, expected_labels) in domain_label_pairs {
             let domain_name = CDomainName::from_utf8(domain).unwrap();
-            let expected_labels = expected_labels.into_iter().map(|label| <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(AsciiString::from_utf8(label).unwrap().as_slice()))).collect::<Vec<_>>();
-            let actual_labels = domain_name.labels().map(|label| label.as_owned()).collect::<Vec<_>>();
+            let expected_labels = expected_labels
+                .into_iter()
+                .map(|label| {
+                    <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
+                        AsciiString::from_utf8(label).unwrap().as_slice(),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            let actual_labels = domain_name
+                .labels()
+                .map(|label| label.as_owned())
+                .collect::<Vec<_>>();
             assert_eq!(expected_labels, actual_labels);
         }
     }
@@ -786,13 +946,44 @@ mod circular_serde_sanity_test {
         let domain_search_name_pairs = vec![
             (".", vec!["."]),
             ("com.", vec!["com.", "."]),
-            ("www.example.com.", vec!["www.example.com.", "example.com.", "com.", "."]),
-            ("www.example.com.www.example.com.", vec!["www.example.com.www.example.com.", "example.com.www.example.com.", "com.www.example.com.", "www.example.com.", "example.com.", "com.", "."]),
-            ("www.example.com.www.example.com.www.example.com.", vec!["www.example.com.www.example.com.www.example.com.", "example.com.www.example.com.www.example.com.", "com.www.example.com.www.example.com.", "www.example.com.www.example.com.", "example.com.www.example.com.", "com.www.example.com.", "www.example.com.", "example.com.", "com.", "."]),
+            (
+                "www.example.com.",
+                vec!["www.example.com.", "example.com.", "com.", "."],
+            ),
+            (
+                "www.example.com.www.example.com.",
+                vec![
+                    "www.example.com.www.example.com.",
+                    "example.com.www.example.com.",
+                    "com.www.example.com.",
+                    "www.example.com.",
+                    "example.com.",
+                    "com.",
+                    ".",
+                ],
+            ),
+            (
+                "www.example.com.www.example.com.www.example.com.",
+                vec![
+                    "www.example.com.www.example.com.www.example.com.",
+                    "example.com.www.example.com.www.example.com.",
+                    "com.www.example.com.www.example.com.",
+                    "www.example.com.www.example.com.",
+                    "example.com.www.example.com.",
+                    "com.www.example.com.",
+                    "www.example.com.",
+                    "example.com.",
+                    "com.",
+                    ".",
+                ],
+            ),
         ];
         for (domain, expected_search_names) in domain_search_name_pairs {
             let domain_name = CDomainName::from_utf8(domain).unwrap();
-            let expected_search_names = expected_search_names.into_iter().map(|search_name| CDomainName::from_utf8(search_name).unwrap()).collect::<Vec<_>>();
+            let expected_search_names = expected_search_names
+                .into_iter()
+                .map(|search_name| CDomainName::from_utf8(search_name).unwrap())
+                .collect::<Vec<_>>();
             let actual_search_names = domain_name.search_domains().collect::<Vec<_>>();
             assert_eq!(expected_search_names, actual_search_names);
         }

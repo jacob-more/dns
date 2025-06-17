@@ -4,7 +4,13 @@ mod built_in_primitives_test {
         ($test_name:ident, $integer:ident, $integer_byte_count:ident) => {
             #[cfg(test)]
             mod $test_name {
-                use crate::{types::c_domain_name::CompressionMap, serde::{wire::{to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*}};
+                use crate::{
+                    serde::{
+                        const_byte_counts::*,
+                        wire::{to_wire::ToWire, write_wire::WriteWire},
+                    },
+                    types::c_domain_name::CompressionMap,
+                };
 
                 #[test]
                 fn per_byte_test() {
@@ -17,7 +23,8 @@ mod built_in_primitives_test {
                             let mut write_wire_buffer = [0].repeat($integer_byte_count as usize);
                             let mut write_wire = WriteWire::from_bytes(&mut write_wire_buffer);
                             let mut compression_map = Some(CompressionMap::new());
-                            let output = input.to_wire_format(&mut write_wire, &mut compression_map);
+                            let output =
+                                input.to_wire_format(&mut write_wire, &mut compression_map);
 
                             assert!(output.is_ok());
                             assert_eq!(expected.as_slice(), write_wire.current());
@@ -67,7 +74,7 @@ mod built_in_primitives_test {
                     assert_eq!(expected.as_slice(), write_wire.current());
                 }
             }
-        }
+        };
     }
 
     test_int_to_wire!(to_wire_u8, u8, U8_BYTE_COUNT);
@@ -91,7 +98,13 @@ mod ux_primitives_test {
             mod $test_name {
                 use ux::$integer;
 
-                use crate::{types::c_domain_name::CompressionMap, serde::{wire::{to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*}};
+                use crate::{
+                    serde::{
+                        const_byte_counts::*,
+                        wire::{to_wire::ToWire, write_wire::WriteWire},
+                    },
+                    types::c_domain_name::CompressionMap,
+                };
 
                 #[test]
                 fn per_byte_test() {
@@ -104,7 +117,8 @@ mod ux_primitives_test {
                             let mut write_wire_buffer = [0].repeat($integer_byte_count as usize);
                             let mut write_wire = WriteWire::from_bytes(&mut write_wire_buffer);
                             let mut compression_map = Some(CompressionMap::new());
-                            let output = input.to_wire_format(&mut write_wire, &mut compression_map);
+                            let output =
+                                input.to_wire_format(&mut write_wire, &mut compression_map);
 
                             assert!(output.is_ok());
                             assert_eq!(expected.as_slice(), write_wire.current());
@@ -154,7 +168,7 @@ mod ux_primitives_test {
                     assert_eq!(expected.as_slice(), write_wire.current());
                 }
             }
-        }
+        };
     }
 
     macro_rules! test_ix_to_wire {
@@ -163,7 +177,13 @@ mod ux_primitives_test {
             mod $test_name {
                 use ux::$integer;
 
-                use crate::{types::c_domain_name::CompressionMap, serde::{wire::{to_wire::ToWire, write_wire::WriteWire}, const_byte_counts::*}};
+                use crate::{
+                    serde::{
+                        const_byte_counts::*,
+                        wire::{to_wire::ToWire, write_wire::WriteWire},
+                    },
+                    types::c_domain_name::CompressionMap,
+                };
 
                 #[test]
                 fn per_byte_test() {
@@ -182,7 +202,8 @@ mod ux_primitives_test {
                             let mut write_wire_buffer = [0].repeat($integer_byte_count as usize);
                             let mut write_wire = WriteWire::from_bytes(&mut write_wire_buffer);
                             let mut compression_map = Some(CompressionMap::new());
-                            let output = input.to_wire_format(&mut write_wire, &mut compression_map);
+                            let output =
+                                input.to_wire_format(&mut write_wire, &mut compression_map);
 
                             assert!(output.is_ok());
                             assert_eq!(expected.as_slice(), write_wire.current());
@@ -234,7 +255,7 @@ mod ux_primitives_test {
                     assert_eq!(expected.as_slice(), write_wire.current());
                 }
             }
-        }
+        };
     }
 
     test_ux_to_wire!(from_wire_u24, u24, U24_BYTE_COUNT, u32);

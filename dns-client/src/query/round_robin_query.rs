@@ -1,13 +1,39 @@
-use std::{cmp::Reverse, collections::{hash_map::Entry, HashMap}, future::Future, net::IpAddr, pin::Pin, sync::Arc, task::Poll, time::Duration};
+use std::{
+    cmp::Reverse,
+    collections::{HashMap, hash_map::Entry},
+    future::Future,
+    net::IpAddr,
+    pin::Pin,
+    sync::Arc,
+    task::Poll,
+    time::Duration,
+};
 
 use async_lib::once_watch::{self, OnceWatchSend, OnceWatchSubscribe};
-use dns_lib::{interface::{cache::{cache::AsyncCache, CacheQuery, CacheResponse}, client::Context}, query::{message::Message, qr::QR}, resource_record::{rcode::RCode, resource_record::{RecordData, ResourceRecord}, rtype::RType}, types::c_domain_name::CDomainName};
-use futures::{future::BoxFuture, FutureExt};
+use dns_lib::{
+    interface::{
+        cache::{CacheQuery, CacheResponse, cache::AsyncCache},
+        client::Context,
+    },
+    query::{message::Message, qr::QR},
+    resource_record::{
+        rcode::RCode,
+        resource_record::{RecordData, ResourceRecord},
+        rtype::RType,
+    },
+    types::c_domain_name::CDomainName,
+};
+use futures::{FutureExt, future::BoxFuture};
 use log::{debug, info, trace};
 use pin_project::{pin_project, pinned_drop};
 use rand::{seq::IteratorRandom, thread_rng};
 
-use crate::{network::{errors::QueryError, mixed_tcp_udp::MixedSocket}, query::{network_query::query_network, recursive_query::recursive_query}, result::{QError, QOk, QResult}, DNSAsyncClient};
+use crate::{
+    DNSAsyncClient,
+    network::{errors::QueryError, mixed_tcp_udp::MixedSocket},
+    query::{network_query::query_network, recursive_query::recursive_query},
+    result::{QError, QOk, QResult},
+};
 
 fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
     match record.into_rdata() {
@@ -17,22 +43,40 @@ fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
     }
 }
 
-async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(ns_domain: CDomainName, address_rtype: RType, context: Arc<Context>, client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>) -> NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
-    let ns_question = context.query().with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
+async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(
+    ns_domain: CDomainName,
+    address_rtype: RType,
+    context: Arc<Context>,
+    client: Arc<DNSAsyncClient>,
+    joined_cache: Arc<CCache>,
+) -> NSQuery<'a, 'b, 'c, CCache>
+where
+    CCache: AsyncCache + Send + Sync,
+{
+    let ns_question = context
+        .query()
+        .with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
 
     let ns_addresses;
     let cache_response;
-    match joined_cache.get(&CacheQuery { authoritative: false, question: &ns_question }).await {
+    match joined_cache
+        .get(&CacheQuery {
+            authoritative: false,
+            question: &ns_question,
+        })
+        .await
+    {
         CacheResponse::Records(records) if !records.is_empty() => {
-            ns_addresses = records.into_iter()
+            ns_addresses = records
+                .into_iter()
                 .filter_map(|record| rr_to_ip(record.record))
                 .collect();
             cache_response = NSQueryCacheResponse::Hit;
-        },
+        }
         _ => {
             ns_addresses = vec![];
             cache_response = NSQueryCacheResponse::Miss;
-        },
+        }
     };
 
     NSQuery {
@@ -56,7 +100,10 @@ enum NSQueryResult {
 }
 
 #[pin_project]
-struct NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
+struct NSQuery<'a, 'b, 'c, CCache>
+where
+    CCache: AsyncCache + Send + Sync,
+{
     ns_domain: CDomainName,
     ns_address_rtype: RType,
     context: Arc<Context>,
@@ -85,16 +132,37 @@ enum NSQueryCacheResponse {
     Miss,
 }
 
-impl<'a, 'b, 'c, CCache> NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
+impl<'a, 'b, 'c, CCache> NSQuery<'a, 'b, 'c, CCache>
+where
+    CCache: AsyncCache + Send + Sync,
+{
     pub fn best_address_stats(&self) -> Option<(u32, u32)> {
-        self.ns_addresses.iter().map(|address| self.sockets.get(address)
-                .map(|socket| (socket.average_dropped_udp_packets(), socket.average_udp_response_time()))
-                .filter(|(average_dropped_udp_packets, average_udp_response_time)| (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()))
-                // If more than 80% of UDP packets are being dropped, we'd rather explore new
-                // addresses. Otherwise, this address would still be technically better than one
-                // which had not yet been explored.
-                .filter(|(average_dropped_udp_packets, _)| *average_dropped_udp_packets < 0.80)
-                .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32))))
+        self.ns_addresses
+            .iter()
+            .map(|address| {
+                self.sockets
+                    .get(address)
+                    .map(|socket| {
+                        (
+                            socket.average_dropped_udp_packets(),
+                            socket.average_udp_response_time(),
+                        )
+                    })
+                    .filter(|(average_dropped_udp_packets, average_udp_response_time)| {
+                        (average_dropped_udp_packets.is_finite()
+                            && average_udp_response_time.is_finite())
+                    })
+                    // If more than 80% of UDP packets are being dropped, we'd rather explore new
+                    // addresses. Otherwise, this address would still be technically better than one
+                    // which had not yet been explored.
+                    .filter(|(average_dropped_udp_packets, _)| *average_dropped_udp_packets < 0.80)
+                    .map(|(average_dropped_udp_packets, average_udp_response_time)| {
+                        Reverse((
+                            (average_dropped_udp_packets * 100.0).ceil() as u32,
+                            average_udp_response_time.ceil() as u32,
+                        ))
+                    })
+            })
             .max()
             .flatten()
             .map(|val| val.0)
@@ -106,68 +174,131 @@ fn take_random<T>(vec: &mut Vec<T>) -> Option<T> {
     Some(vec.swap_remove(i))
 }
 
-fn take_best_address<'a, 'b, 'c, CCache>(ns_addresses: &mut Vec<IpAddr>, sockets: &HashMap<IpAddr, Arc<MixedSocket>>) -> Option<IpAddr> where CCache: AsyncCache + Send + Sync {
-    match ns_addresses.iter()
-        .enumerate()
-        .max_by_key(|(_, address)| sockets.get(address)
-            .map(|socket| (socket.average_dropped_udp_packets(), socket.average_udp_response_time()))
-            .filter(|(average_dropped_udp_packets, average_udp_response_time)| (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()))
+fn take_best_address<'a, 'b, 'c, CCache>(
+    ns_addresses: &mut Vec<IpAddr>,
+    sockets: &HashMap<IpAddr, Arc<MixedSocket>>,
+) -> Option<IpAddr>
+where
+    CCache: AsyncCache + Send + Sync,
+{
+    match ns_addresses.iter().enumerate().max_by_key(|(_, address)| {
+        sockets
+            .get(address)
+            .map(|socket| {
+                (
+                    socket.average_dropped_udp_packets(),
+                    socket.average_udp_response_time(),
+                )
+            })
+            .filter(|(average_dropped_udp_packets, average_udp_response_time)| {
+                (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite())
+            })
             // If more than 80% of UDP packets are being dropped, we'd rather explore new
             // addresses. Otherwise, this address would still be technically better than one
             // which had not yet been explored.
             .filter(|(average_dropped_udp_packets, _)| *average_dropped_udp_packets < 0.80)
-            .map(|(average_dropped_udp_packets, average_udp_response_time)| Reverse(((average_dropped_udp_packets * 100.0).ceil() as u32, average_udp_response_time.ceil() as u32))))
-    {
+            .map(|(average_dropped_udp_packets, average_udp_response_time)| {
+                Reverse((
+                    (average_dropped_udp_packets * 100.0).ceil() as u32,
+                    average_udp_response_time.ceil() as u32,
+                ))
+            })
+    }) {
         Some((index, _)) => Some(ns_addresses.swap_remove(index)),
         None => take_random(ns_addresses),
     }
 }
 
-impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+{
     type Output = NSQueryResult;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-        async fn recursive_query_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Context) -> QResult where CCache: AsyncCache + Send + Sync + 'static {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        async fn recursive_query_owned_args<CCache>(
+            client: Arc<DNSAsyncClient>,
+            joined_cache: Arc<CCache>,
+            context: Context,
+        ) -> QResult
+        where
+            CCache: AsyncCache + Send + Sync + 'static,
+        {
             recursive_query(client, joined_cache, context).await
         }
 
-        async fn query_network_owned_args<CCache>(client: Arc<DNSAsyncClient>, joined_cache: Arc<CCache>, context: Arc<Context>, name_server_address: IpAddr) -> Result<Message, QueryError> where CCache: AsyncCache + Send + Sync {
+        async fn query_network_owned_args<CCache>(
+            client: Arc<DNSAsyncClient>,
+            joined_cache: Arc<CCache>,
+            context: Arc<Context>,
+            name_server_address: IpAddr,
+        ) -> Result<Message, QueryError>
+        where
+            CCache: AsyncCache + Send + Sync,
+        {
             query_network(&client, joined_cache, context.query(), &name_server_address).await
         }
 
-        async fn query_for_sockets<CCache>(client: Arc<DNSAsyncClient>, sockets: Vec<IpAddr>) -> Vec<Arc<MixedSocket>> where CCache: AsyncCache + Send {
-            client.socket_manager.try_get_all_udp_tcp(sockets.iter()).await
+        async fn query_for_sockets<CCache>(
+            client: Arc<DNSAsyncClient>,
+            sockets: Vec<IpAddr>,
+        ) -> Vec<Arc<MixedSocket>>
+        where
+            CCache: AsyncCache + Send,
+        {
+            client
+                .socket_manager
+                .try_get_all_udp_tcp(sockets.iter())
+                .await
         }
 
         loop {
             let this = self.as_mut().project();
             match this.state {
                 InnerNSQuery::Fresh(NSQueryCacheResponse::Hit) => {
-                    let sockets_addresses = this.ns_addresses.iter()
+                    let sockets_addresses = this
+                        .ns_addresses
+                        .iter()
                         .map(|address| *address)
                         .collect::<Vec<_>>();
                     let client = this.client.clone();
                     let context = &self.context;
                     trace!(context:?; "NSQuery::Fresh(Hit) -> NSQuery::GettingSocketStats for {:#?}", self.ns_addresses);
 
-                    self.state = InnerNSQuery::GettingSocketStats(query_for_sockets::<CCache>(client, sockets_addresses).boxed());
+                    self.state = InnerNSQuery::GettingSocketStats(
+                        query_for_sockets::<CCache>(client, sockets_addresses).boxed(),
+                    );
 
                     // TODO
                     continue;
-                },
+                }
                 InnerNSQuery::Fresh(NSQueryCacheResponse::Miss) => {
                     let client = self.client.clone();
                     let cache = self.joined_cache.clone();
-                    match self.context.clone().new_ns_address(self.context.query().with_new_qname_qtype(self.ns_domain.clone(), self.ns_address_rtype)) {
+                    match self.context.clone().new_ns_address(
+                        self.context
+                            .query()
+                            .with_new_qname_qtype(self.ns_domain.clone(), self.ns_address_rtype),
+                    ) {
                         Ok(ns_address_context) => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::Fresh(Miss) -> NSQuery::QueryingNetworkNSAddresses: querying for new ns addresses with context '{ns_address_context:?}'");
 
-                            self.state = InnerNSQuery::QueryingNetworkNSAddresses { ns_addresses_query: recursive_query_owned_args(client, cache, ns_address_context).boxed() };
+                            self.state = InnerNSQuery::QueryingNetworkNSAddresses {
+                                ns_addresses_query: recursive_query_owned_args(
+                                    client,
+                                    cache,
+                                    ns_address_context,
+                                )
+                                .boxed(),
+                            };
 
                             // Next loop will poll the query for NS addresses
                             continue;
-                        },
+                        }
                         Err(error) => {
                             let context = self.context.as_ref();
                             debug!(context:?; "NSQuery::Fresh(Miss) -> NSQuery::OutOfAddresses: new ns address error: {error}");
@@ -175,13 +306,19 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                             self.state = InnerNSQuery::OutOfAddresses;
 
                             // Exit loop. The was an error trying to query for the addresses.
-                            return Poll::Ready(NSQueryResult::Result(QError::ContextErr(error).into()));
-                        },
+                            return Poll::Ready(NSQueryResult::Result(
+                                QError::ContextErr(error).into(),
+                            ));
+                        }
                     };
-                },
+                }
                 InnerNSQuery::QueryingNetworkNSAddresses { ns_addresses_query } => {
                     match ns_addresses_query.as_mut().poll(cx) {
-                        Poll::Ready(QResult::Ok(QOk { answer, name_servers: _, additional: _ })) if answer.is_empty() => {
+                        Poll::Ready(QResult::Ok(QOk {
+                            answer,
+                            name_servers: _,
+                            additional: _,
+                        })) if answer.is_empty() => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::NoRecords when querying network for ns addresses");
 
@@ -190,7 +327,11 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                             // Exit loop. There are no addresses to query.
                             return Poll::Ready(NSQueryResult::OutOfAddresses);
                         }
-                        Poll::Ready(QResult::Ok(QOk { answer, name_servers: _, additional: _ })) => {
+                        Poll::Ready(QResult::Ok(QOk {
+                            answer,
+                            name_servers: _,
+                            additional: _,
+                        })) => {
                             this.ns_addresses
                                 .extend(answer.into_iter().filter_map(|record| rr_to_ip(record)));
                             if this.ns_addresses.is_empty() {
@@ -202,19 +343,23 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                                 // Exit loop. There are no addresses to query.
                                 return Poll::Ready(NSQueryResult::OutOfAddresses);
                             } else {
-                                let sockets_addresses = this.ns_addresses.iter()
+                                let sockets_addresses = this
+                                    .ns_addresses
+                                    .iter()
                                     .map(|address| *address)
                                     .collect::<Vec<_>>();
                                 let client = this.client.clone();
                                 let context = &self.context;
                                 trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::GettingSocketStats");
 
-                                self.state = InnerNSQuery::GettingSocketStats(query_for_sockets::<CCache>(client, sockets_addresses).boxed());
+                                self.state = InnerNSQuery::GettingSocketStats(
+                                    query_for_sockets::<CCache>(client, sockets_addresses).boxed(),
+                                );
 
                                 // TODO
                                 continue;
                             }
-                        },
+                        }
                         Poll::Ready(QResult::Err(error)) => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::Error({error}) when querying network for ns addresses");
@@ -223,7 +368,7 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
 
                             // Exit loop. The was an error trying to query for the addresses.
                             return Poll::Ready(NSQueryResult::Result(error.into()));
-                        },
+                        }
                         Poll::Ready(QResult::Fail(rcode)) => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: received response QueryResponse::Error({rcode}) when querying network for ns addresses");
@@ -232,16 +377,16 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
 
                             // Exit loop. The was an error trying to query for the addresses.
                             return Poll::Ready(NSQueryResult::Result(rcode.into()));
-                        },
+                        }
                         Poll::Pending => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetworkNSAddresses: waiting for network query response for ns addresses");
 
                             // Exit loop. Will be woken up by the ns address query.
                             return Poll::Pending;
-                        },
+                        }
                     }
-                },
+                }
                 InnerNSQuery::GettingSocketStats(sockets_future) => {
                     match sockets_future.as_mut().poll(cx) {
                         Poll::Ready(sockets) => {
@@ -257,16 +402,16 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
 
                             // TODO
                             continue;
-                        },
+                        }
                         Poll::Pending => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::GettingSocketStats: getting sockets to determine the fastest addresses");
 
                             // Exit loop. Will be woken up by the ns address query.
                             return Poll::Pending;
-                        },
+                        }
                     }
-                },
+                }
                 InnerNSQuery::NetworkQueryStart => {
                     match take_best_address::<CCache>(this.ns_addresses, &this.sockets) {
                         Some(next_ns_address) => {
@@ -276,21 +421,23 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
                             let client = this.client.clone();
                             let cache = this.joined_cache.clone();
                             let context = this.context.clone();
-                            let query = query_network_owned_args(client, cache, context, next_ns_address).boxed();
+                            let query =
+                                query_network_owned_args(client, cache, context, next_ns_address)
+                                    .boxed();
 
                             self.state = InnerNSQuery::QueryingNetwork(query);
 
                             // Next loop will poll the query for the question.
                             continue;
-                        },
+                        }
                         None => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::NetworkQueryStart -> NSQuery::OutOfAddresses: tried to query next ns address but out of addresses");
 
                             return Poll::Ready(NSQueryResult::OutOfAddresses);
-                        },
+                        }
                     }
-                },
+                }
                 InnerNSQuery::QueryingNetwork(query) => {
                     match query.as_mut().poll(cx) {
                         Poll::Ready(result) => {
@@ -303,33 +450,44 @@ impl<'a, 'b, 'c, CCache> Future for NSQuery<'a, 'b, 'c, CCache> where CCache: As
 
                             // Exit loop. A result was found.
                             match result {
-                                Ok(message) => return Poll::Ready(NSQueryResult::Result(QResult::Ok(message))),
-                                Err(error) => return Poll::Ready(NSQueryResult::Result(QResult::Err(error.into()))),
+                                Ok(message) => {
+                                    return Poll::Ready(NSQueryResult::Result(QResult::Ok(
+                                        message,
+                                    )));
+                                }
+                                Err(error) => {
+                                    return Poll::Ready(NSQueryResult::Result(QResult::Err(
+                                        error.into(),
+                                    )));
+                                }
                             }
-                        },
+                        }
                         Poll::Pending => {
                             let context = self.context.as_ref();
                             trace!(context:?; "NSQuery::QueryingNetwork: waiting for network query response for ns addresses");
 
                             // Exit loop. Will be woken up by the query.
                             return Poll::Pending;
-                        },
+                        }
                     }
-                },
+                }
                 InnerNSQuery::OutOfAddresses => {
                     let context = self.context.as_ref();
                     trace!(context:?; "NSQuery::OutOfAddresses");
 
                     // Exit loop. All addresses have been queried.
                     return Poll::Ready(NSQueryResult::OutOfAddresses);
-                },
+                }
             }
         }
     }
 }
 
 #[pin_project]
-struct NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
+struct NSSelectQuery<'a, 'b, 'c, CCache>
+where
+    CCache: AsyncCache + Send + Sync,
+{
     // Note: the queries are read in reverse order (like a stack).
     ns_queries: Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>,
     running: Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>,
@@ -339,8 +497,15 @@ struct NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync 
     add_query_timer: Option<tokio::time::Sleep>,
 }
 
-impl<'a, 'b, 'c, CCache> NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync {
-    pub fn new(ns_queries: Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>, max_concurrency: usize, add_query_timeout: Duration) -> Self {
+impl<'a, 'b, 'c, CCache> NSSelectQuery<'a, 'b, 'c, CCache>
+where
+    CCache: AsyncCache + Send + Sync,
+{
+    pub fn new(
+        ns_queries: Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>,
+        max_concurrency: usize,
+        add_query_timeout: Duration,
+    ) -> Self {
         Self {
             ns_queries,
             running: Vec::new(),
@@ -357,8 +522,14 @@ impl<'a, 'b, 'c, CCache> NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCa
     }
 }
 
-fn take_best_ns_query<'a, 'b, 'c, CCache>(ns_queries: &mut Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>) -> Option<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>> where CCache: AsyncCache + Send + Sync {
-    match ns_queries.iter()
+fn take_best_ns_query<'a, 'b, 'c, CCache>(
+    ns_queries: &mut Vec<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>,
+) -> Option<Pin<Box<NSQuery<'a, 'b, 'c, CCache>>>>
+where
+    CCache: AsyncCache + Send + Sync,
+{
+    match ns_queries
+        .iter()
         .enumerate()
         .max_by_key(|(_, ns_query)| ns_query.best_address_stats().map(|stats| Reverse(stats)))
     {
@@ -367,7 +538,10 @@ fn take_best_ns_query<'a, 'b, 'c, CCache>(ns_queries: &mut Vec<Pin<Box<NSQuery<'
     }
 }
 
-impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+{
     type Output = Option<NSQueryResult>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -381,14 +555,19 @@ impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCac
                     // Although on the first poll, it is probably already None.
                     this.add_query_timer.set(None);
                     return Poll::Ready(None);
-                },
+                }
             }
 
             // Initialize or refresh the `add_query_timer`
-            match (this.add_query_timer.as_mut().as_pin_mut(), tokio::time::Instant::now().checked_add(*this.add_query_timeout)) {
+            match (
+                this.add_query_timer.as_mut().as_pin_mut(),
+                tokio::time::Instant::now().checked_add(*this.add_query_timeout),
+            ) {
                 // The expected case is that a fresh NSSelectQuery has not yet had the
                 // `add_query_timer` initialized. We should do that here.
-                (None, Some(deadline)) => this.add_query_timer.set(Some(tokio::time::sleep_until(deadline))),
+                (None, Some(deadline)) => this
+                    .add_query_timer
+                    .set(Some(tokio::time::sleep_until(deadline))),
                 // If a time was created manually, we should refresh the deadline since it may have
                 // become stale if this task has been waiting to be run for a while.
                 (Some(timer), Some(deadline)) => timer.reset(deadline),
@@ -427,11 +606,11 @@ impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCac
                             // will only be moved to `running` when a space opens up in `running`.
                             this.add_query_timer.set(None);
                         }
-                    },
+                    }
                     None => {
                         // Don't want to be erroneously woken up if there is nobody else to add.
                         this.add_query_timer.set(None);
-                    },
+                    }
                 }
             }
         }
@@ -446,18 +625,18 @@ impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCac
                     // append to the end.
                     (Some(new_ns_query), NSQueryResult::OutOfAddresses) => {
                         *ns_query = new_ns_query;
-                    },
+                    }
                     (Some(new_ns_query), _) => {
                         let ns_query = this.running.swap_remove(index);
                         this.running.push(new_ns_query);
                         this.ns_queries.push(ns_query);
-                    },
+                    }
                     (None, NSQueryResult::OutOfAddresses) => {
                         let _ = this.running.swap_remove(index);
                         // Don't want to be erroneously woken up if there is
                         // nobody else to add.
                         this.add_query_timer.set(None);
-                    },
+                    }
                     (None, _) => {
                         // Since we are down to the last ns_query, it can stay in the running queue
                         // until it runs out of addresses.
@@ -465,7 +644,7 @@ impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCac
                         // Don't want to be erroneously woken up if there is
                         // nobody else to add.
                         this.add_query_timer.set(None);
-                    },
+                    }
                 }
 
                 return Poll::Ready(Some(result));
@@ -479,7 +658,7 @@ impl<'a, 'b, 'c, CCache> Future for NSSelectQuery<'a, 'b, 'c, CCache> where CCac
             (_, 1..) => Poll::Pending,
             (1.., 0) => {
                 panic!("There are still queries in the queue but the running queue is empty")
-            },
+            }
         }
     }
 }
@@ -521,13 +700,30 @@ where
     Complete,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
-    fn new(client: &'a Arc<DNSAsyncClient>, joined_cache: &'b Arc<CCache>, question: &'c Arc<Context>, name_servers: &'d [CDomainName]) -> Self {
-        Self { client, joined_cache, context: question, inner: InnerNSRoundRobin::Fresh { name_servers } }
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+{
+    fn new(
+        client: &'a Arc<DNSAsyncClient>,
+        joined_cache: &'b Arc<CCache>,
+        question: &'c Arc<Context>,
+        name_servers: &'d [CDomainName],
+    ) -> Self {
+        Self {
+            client,
+            joined_cache,
+            context: question,
+            inner: InnerNSRoundRobin::Fresh { name_servers },
+        }
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future
+    for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+{
     type Output = QResult;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -535,36 +731,72 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
                 InnerNSRoundRobinProj::Fresh { name_servers } => {
-                    let name_server_address_queries = name_servers.iter()
-                        .flat_map(|ns_domain| [
-                            query_cache_for_ns_addresses(ns_domain.clone(), RType::A, this.context.clone(), this.client.clone(), this.joined_cache.clone()).boxed(),
-                            query_cache_for_ns_addresses(ns_domain.clone(), RType::AAAA, this.context.clone(), this.client.clone(), this.joined_cache.clone()).boxed(),
-                        ])
+                    let name_server_address_queries = name_servers
+                        .iter()
+                        .flat_map(|ns_domain| {
+                            [
+                                query_cache_for_ns_addresses(
+                                    ns_domain.clone(),
+                                    RType::A,
+                                    this.context.clone(),
+                                    this.client.clone(),
+                                    this.joined_cache.clone(),
+                                )
+                                .boxed(),
+                                query_cache_for_ns_addresses(
+                                    ns_domain.clone(),
+                                    RType::AAAA,
+                                    this.context.clone(),
+                                    this.client.clone(),
+                                    this.joined_cache.clone(),
+                                )
+                                .boxed(),
+                            ]
+                        })
                         .collect::<Vec<_>>();
                     let capacity = name_server_address_queries.len();
 
-                    this.inner.set(InnerNSRoundRobin::GetCachedNSAddresses { name_server_address_queries, name_server_cached_queries: Vec::with_capacity(capacity), name_server_non_cached_queries: Vec::with_capacity(capacity) });
+                    this.inner.set(InnerNSRoundRobin::GetCachedNSAddresses {
+                        name_server_address_queries,
+                        name_server_cached_queries: Vec::with_capacity(capacity),
+                        name_server_non_cached_queries: Vec::with_capacity(capacity),
+                    });
 
                     let context = self.context.as_ref();
                     trace!(context:?; "NSRoundRobin::Fresh -> NSRoundRobin::GetCachedNSAddresses: Getting cached ns addresses");
 
                     // Next loop will poll all the NS address queries
                     continue;
-                },
-                InnerNSRoundRobinProj::GetCachedNSAddresses { name_server_address_queries, name_server_non_cached_queries, name_server_cached_queries } => {
-                    name_server_address_queries.retain_mut(|ns_address_query| {
-                        match ns_address_query.as_mut().poll(cx) {
-                            Poll::Ready(ns_query @ NSQuery { ns_domain: _, ns_address_rtype: _, context: _, client: _, joined_cache: _, ns_addresses: _, sockets: _, state: InnerNSQuery::Fresh(NSQueryCacheResponse::Hit) }) => {
+                }
+                InnerNSRoundRobinProj::GetCachedNSAddresses {
+                    name_server_address_queries,
+                    name_server_non_cached_queries,
+                    name_server_cached_queries,
+                } => {
+                    name_server_address_queries.retain_mut(
+                        |ns_address_query| match ns_address_query.as_mut().poll(cx) {
+                            Poll::Ready(
+                                ns_query @ NSQuery {
+                                    ns_domain: _,
+                                    ns_address_rtype: _,
+                                    context: _,
+                                    client: _,
+                                    joined_cache: _,
+                                    ns_addresses: _,
+                                    sockets: _,
+                                    state: InnerNSQuery::Fresh(NSQueryCacheResponse::Hit),
+                                },
+                            ) => {
                                 name_server_cached_queries.push(Box::pin(ns_query));
                                 false
-                            },
+                            }
                             Poll::Ready(ns_query) => {
                                 name_server_non_cached_queries.push(Box::pin(ns_query));
                                 false
-                            },
+                            }
                             Poll::Pending => true,
-                        }
-                    });
+                        },
+                    );
                     if name_server_address_queries.is_empty() {
                         let context = this.context.as_ref();
                         trace!(context:?; "NSRoundRobin::GetCachedNSAddresses -> NSRoundRobin::QueryNameServers: Received all cache responses. {} queries are cached. {} queries are non-cached", name_server_non_cached_queries.len(), name_server_cached_queries.len());
@@ -572,12 +804,16 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         // addresses are at the front and the ones with cached addresses are at the
                         // back. This list will be read like a stack, so the cached queries will be
                         // run first.
-                        let mut ns_queries = Vec::with_capacity(name_server_non_cached_queries.len() + name_server_cached_queries.len());
+                        let mut ns_queries = Vec::with_capacity(
+                            name_server_non_cached_queries.len() + name_server_cached_queries.len(),
+                        );
                         ns_queries.extend(name_server_non_cached_queries.drain(..));
                         ns_queries.extend(name_server_cached_queries.drain(..));
-                        let ns_query_select = NSSelectQuery::new(ns_queries, 3, Duration::from_millis(200));
+                        let ns_query_select =
+                            NSSelectQuery::new(ns_queries, 3, Duration::from_millis(200));
 
-                        this.inner.set(InnerNSRoundRobin::QueryNameServers { ns_query_select });
+                        this.inner
+                            .set(InnerNSRoundRobin::QueryNameServers { ns_query_select });
 
                         // Next loop will select the first query from the list and start it
                         continue;
@@ -588,8 +824,10 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         // Exit loop. Wait for one of the address queries to wake us again.
                         return Poll::Pending;
                     }
-                },
-                InnerNSRoundRobinProj::QueryNameServers { mut ns_query_select } => {
+                }
+                InnerNSRoundRobinProj::QueryNameServers {
+                    mut ns_query_select,
+                } => {
                     match ns_query_select.as_mut().poll(cx) {
                         // No error. Valid response.
                         Poll::Ready(Some(NSQueryResult::Result(QResult::Ok(response @ Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer: _, authority: _, additional: _ }))))
@@ -661,29 +899,40 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for NSRoundRobin<'a, 'b, 'c,
                         // Exit loop. Wait for one of the ns queries to wake us again.
                         Poll::Pending => return Poll::Pending,
                     }
-                },
+                }
                 InnerNSRoundRobinProj::Complete => {
-                    panic!("InnerNSRoundRobin::Complete: query for '{}' was polled again after it already returned Poll::Ready", this.context.query());
-                },
+                    panic!(
+                        "InnerNSRoundRobin::Complete: query for '{}' was polled again after it already returned Poll::Ready",
+                        this.context.query()
+                    );
+                }
             }
         }
     }
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> PinnedDrop for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> PinnedDrop
+    for NSRoundRobin<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+{
     fn drop(mut self: Pin<&mut Self>) {
         let this = self.project();
         match this.inner.project() {
             InnerNSRoundRobinProj::Fresh { name_servers: _ } => (),
-            InnerNSRoundRobinProj::GetCachedNSAddresses { name_server_address_queries: _, name_server_non_cached_queries: _, name_server_cached_queries: _ } => {
+            InnerNSRoundRobinProj::GetCachedNSAddresses {
+                name_server_address_queries: _,
+                name_server_non_cached_queries: _,
+                name_server_cached_queries: _,
+            } => {
                 let context = this.context.as_ref();
                 trace!(context:?; "InnerNSRoundRobin::GetCachedNSAddresses -> NSRoundRobin::(drop): Cleaning up query {}", this.context.query());
-            },
+            }
             InnerNSRoundRobinProj::QueryNameServers { ns_query_select: _ } => {
                 let context = this.context.as_ref();
                 trace!(context:?; "InnerNSRoundRobin::QueryNameServers -> NSRoundRobin::(drop): Cleaning up query {}", this.context.query());
-            },
+            }
             InnerNSRoundRobinProj::Complete => (),
         }
     }
@@ -692,7 +941,21 @@ impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> PinnedDrop for NSRoundRobin<'a, 'b,
 #[inline]
 fn query_response(answer: Message) -> QResult {
     match answer {
-        Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode: RCode::NoError, question: _, answer, authority, additional } => QResult::Ok(QOk {
+        Message {
+            id: _,
+            qr: QR::Response,
+            opcode: _,
+            authoritative_answer: _,
+            truncation: false,
+            recursion_desired: _,
+            recursion_available: _,
+            z: _,
+            rcode: RCode::NoError,
+            question: _,
+            answer,
+            authority,
+            additional,
+        } => QResult::Ok(QOk {
             answer,
             name_servers: authority
                 .into_iter()
@@ -700,8 +963,36 @@ fn query_response(answer: Message) -> QResult {
                 .collect(),
             additional,
         }),
-        Message { id: _, qr: QR::Response, opcode: _, authoritative_answer: _, truncation: false, recursion_desired: _, recursion_available: _, z: _, rcode, question: _, answer: _, authority: _, additional: _ } => QResult::Fail(rcode),
-        Message { id: _, qr: _, opcode: _, authoritative_answer: _, truncation: _, recursion_desired: _, recursion_available: _, z: _, rcode: _, question: _, answer: _, authority: _, additional: _ } => QResult::Fail(RCode::FormErr),
+        Message {
+            id: _,
+            qr: QR::Response,
+            opcode: _,
+            authoritative_answer: _,
+            truncation: false,
+            recursion_desired: _,
+            recursion_available: _,
+            z: _,
+            rcode,
+            question: _,
+            answer: _,
+            authority: _,
+            additional: _,
+        } => QResult::Fail(rcode),
+        Message {
+            id: _,
+            qr: _,
+            opcode: _,
+            authoritative_answer: _,
+            truncation: _,
+            recursion_desired: _,
+            recursion_available: _,
+            z: _,
+            rcode: _,
+            question: _,
+            answer: _,
+            authority: _,
+            additional: _,
+        } => QResult::Fail(RCode::FormErr),
     }
 }
 
@@ -725,8 +1016,16 @@ enum InnerActiveQuery {
     Complete,
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> where CCache: AsyncCache + Send + Sync + 'static {
-    fn new(client: &'a Arc<DNSAsyncClient>, joined_cache: &'b Arc<CCache>, question: &'c Arc<Context>, name_servers: &'d [CDomainName]) -> Self {
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+{
+    fn new(
+        client: &'a Arc<DNSAsyncClient>,
+        joined_cache: &'b Arc<CCache>,
+        question: &'c Arc<Context>,
+        name_servers: &'d [CDomainName],
+    ) -> Self {
         Self {
             round_robin: NSRoundRobin::new(client, joined_cache, question, name_servers),
             inner: InnerActiveQuery::Fresh,
@@ -752,13 +1051,17 @@ impl InnerActiveQuery {
     }
 }
 
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future for ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> Future
+    for ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
 where
     CCache: AsyncCache + Send + Sync + 'static,
 {
     type Output = QResult;
 
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         loop {
             let mut this = self.as_mut().project();
             match this.inner.as_mut().project() {
@@ -773,7 +1076,7 @@ where
 
                             // TODO
                             continue;
-                        },
+                        }
                         None => {
                             drop(r_active_queries);
 
@@ -781,11 +1084,12 @@ where
 
                             // TODO
                             continue;
-                        },
+                        }
                     }
-                },
+                }
                 InnerActiveQueryProj::WriteActiveQueries => {
-                    let mut w_active_queries = this.round_robin.client.active_queries.write().unwrap();
+                    let mut w_active_queries =
+                        this.round_robin.client.active_queries.write().unwrap();
                     match w_active_queries.entry(this.round_robin.context.query().clone()) {
                         Entry::Occupied(occupied_entry) => {
                             let result_receiver = occupied_entry.get().subscribe();
@@ -795,7 +1099,7 @@ where
 
                             // TODO
                             continue;
-                        },
+                        }
                         Entry::Vacant(vacant_entry) => {
                             let (send_response, result_receiver) = once_watch::channel();
                             vacant_entry.insert(send_response);
@@ -805,9 +1109,9 @@ where
 
                             // TODO
                             continue;
-                        },
+                        }
                     }
-                },
+                }
                 InnerActiveQueryProj::Following(mut result_receiver) => {
                     match result_receiver.as_mut().poll(cx) {
                         Poll::Ready(Ok(response)) => {
@@ -817,7 +1121,7 @@ where
 
                             // TODO
                             return Poll::Ready(response);
-                        },
+                        }
                         Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                             // The sender is responsible for removing the channel from the active
                             // queries map.
@@ -825,10 +1129,10 @@ where
 
                             // TODO
                             return Poll::Ready(QResult::Fail(RCode::ServFail));
-                        },
+                        }
                         Poll::Pending => {
                             // Setup is done. Awaiting results. Now, poll the round_robin.
-                        },
+                        }
                     }
 
                     match this.round_robin.as_mut().poll(cx) {
@@ -838,16 +1142,19 @@ where
                             this.inner.set_cleanup(result);
 
                             continue;
-                        },
+                        }
                         Poll::Pending => {
                             // Will be awoken if either the result_receiver or round_robin are.
                             return Poll::Pending;
-                        },
-                    }            
-                },
+                        }
+                    }
+                }
                 InnerActiveQueryProj::Cleanup(result) => {
-                    let mut w_active_queries = this.round_robin.client.active_queries.write().unwrap();
-                    if let Some(result_sender) = w_active_queries.remove(&this.round_robin.context.query()) {
+                    let mut w_active_queries =
+                        this.round_robin.client.active_queries.write().unwrap();
+                    if let Some(result_sender) =
+                        w_active_queries.remove(&this.round_robin.context.query())
+                    {
                         // Always make sure the channel is closed. This *should* never have an
                         // effect but will ensure that it is never left open.
                         result_sender.close();
@@ -859,35 +1166,34 @@ where
                             this.inner.set_complete();
 
                             return Poll::Ready(result);
-                        },
+                        }
                         None => {
                             this.inner.set_complete();
 
                             panic!("The Option result is supposed to always be Some but was None")
-                        },
+                        }
                     }
-                },
+                }
                 InnerActiveQueryProj::Complete => {
                     panic!("ActiveQuery cannot be polled after completion");
-                },
+                }
             }
         }
     }
 }
 
 #[pinned_drop]
-impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> PinnedDrop for ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
+impl<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache> PinnedDrop
+    for ActiveQuery<'a, 'b, 'c, 'd, 'e, 'f, 'g, 'h, CCache>
 where
     CCache: AsyncCache + Send + Sync + 'static,
 {
     fn drop(mut self: Pin<&mut Self>) {
         match self.as_mut().project().inner.as_mut().project() {
-            InnerActiveQueryProj::Fresh
-          | InnerActiveQueryProj::WriteActiveQueries => {
+            InnerActiveQueryProj::Fresh | InnerActiveQueryProj::WriteActiveQueries => {
                 // Nothing to do
-            },
-            InnerActiveQueryProj::Following(_)
-          | InnerActiveQueryProj::Cleanup(_) => {
+            }
+            InnerActiveQueryProj::Following(_) | InnerActiveQueryProj::Cleanup(_) => {
                 // An active query has been registered. Need to make sure it doesn't need to be
                 // removed.
                 let mut w_active_queries = self.round_robin.client.active_queries.write().unwrap();
@@ -897,16 +1203,24 @@ where
                     }
                 }
                 drop(w_active_queries);
-            },
+            }
             InnerActiveQueryProj::Complete => {
                 // Nothing to do
-            },
+            }
         }
     }
 }
 
 #[inline]
-pub async fn query_name_servers<CCache>(client: &Arc<DNSAsyncClient>, joined_cache: &Arc<CCache>, context: Arc<Context>, name_servers: &[CDomainName]) -> QResult where CCache: AsyncCache + Send + Sync + 'static {
+pub async fn query_name_servers<CCache>(
+    client: &Arc<DNSAsyncClient>,
+    joined_cache: &Arc<CCache>,
+    context: Arc<Context>,
+    name_servers: &[CDomainName],
+) -> QResult
+where
+    CCache: AsyncCache + Send + Sync + 'static,
+{
     info!(context:?; "Querying Name Servers for '{}'", context.query());
     ActiveQuery::new(client, joined_cache, &context, name_servers).await
 }

@@ -3,7 +3,6 @@ pub mod server;
 
 pub mod cache;
 
-
 pub mod ports {
     pub const DNS_UDP_PORT: u16 = 53;
     pub const DNS_TCP_PORT: u16 = 53;

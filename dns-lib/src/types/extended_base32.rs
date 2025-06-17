@@ -1,8 +1,17 @@
-use std::{error::Error, fmt::{Display, Debug}};
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+};
 
 use ux::u5;
 
-use crate::{serde::presentation::{errors::TokenError, from_presentation::FromPresentation}, types::{ascii::{constants::*, AsciiChar, AsciiError, AsciiString}, base_conversions::BaseConversions}};
+use crate::{
+    serde::presentation::{errors::TokenError, from_presentation::FromPresentation},
+    types::{
+        ascii::{AsciiChar, AsciiError, AsciiString, constants::*},
+        base_conversions::BaseConversions,
+    },
+};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum ExtendedBase32Error {
@@ -18,12 +27,18 @@ impl Display for ExtendedBase32Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             // TODO: error messages could be improved
-            Self::BadChar(character) => write!(f, "Character '{character}' is not a valid extended base 32 character"),
+            Self::BadChar(character) => write!(
+                f,
+                "Character '{character}' is not a valid extended base 32 character"
+            ),
             Self::IncorrectBufferSize => write!(f, "Buffer size is incorrect"),
             Self::Overflow => write!(f, "Overflow"),
             Self::Underflow => write!(f, "Underflow"),
-            Self::BadPadding => write!(f, "Padding can only occur at the end of the encoding and must be exact"),
-            Self::AsciiError(ascii_err) => write!(f, "{ascii_err}")
+            Self::BadPadding => write!(
+                f,
+                "Padding can only occur at the end of the encoding and must be exact"
+            ),
+            Self::AsciiError(ascii_err) => write!(f, "{ascii_err}"),
         }
     }
 }
@@ -71,23 +86,25 @@ fn u5_to_extended_base32(bits: u5) -> AsciiChar {
         0b000_11110 => ASCII_UPPERCASE_U,
         0b000_11111 => ASCII_UPPERCASE_V,
 
-        _ => unreachable!("Illegal State Reached: This should not be possible. The value should convert to a u5 and exhaustively match those values.")
+        _ => unreachable!(
+            "Illegal State Reached: This should not be possible. The value should convert to a u5 and exhaustively match those values."
+        ),
     }
 }
 
 #[inline]
 const fn extended_base32_to_u5(character: AsciiChar) -> Result<u5, ExtendedBase32Error> {
     match character {
-        ASCII_ZERO        => Ok(u5::new(0b000_00000)),
-        ASCII_ONE         => Ok(u5::new(0b000_00001)),
-        ASCII_TWO         => Ok(u5::new(0b000_00010)),
-        ASCII_THREE       => Ok(u5::new(0b000_00011)),
-        ASCII_FOUR        => Ok(u5::new(0b000_00100)),
-        ASCII_FIVE        => Ok(u5::new(0b000_00101)),
-        ASCII_SIX         => Ok(u5::new(0b000_00110)),
-        ASCII_SEVEN       => Ok(u5::new(0b000_00111)),
-        ASCII_EIGHT       => Ok(u5::new(0b000_01000)),
-        ASCII_NINE        => Ok(u5::new(0b000_01001)),
+        ASCII_ZERO => Ok(u5::new(0b000_00000)),
+        ASCII_ONE => Ok(u5::new(0b000_00001)),
+        ASCII_TWO => Ok(u5::new(0b000_00010)),
+        ASCII_THREE => Ok(u5::new(0b000_00011)),
+        ASCII_FOUR => Ok(u5::new(0b000_00100)),
+        ASCII_FIVE => Ok(u5::new(0b000_00101)),
+        ASCII_SIX => Ok(u5::new(0b000_00110)),
+        ASCII_SEVEN => Ok(u5::new(0b000_00111)),
+        ASCII_EIGHT => Ok(u5::new(0b000_01000)),
+        ASCII_NINE => Ok(u5::new(0b000_01001)),
         ASCII_UPPERCASE_A => Ok(u5::new(0b000_01010)),
         ASCII_UPPERCASE_B => Ok(u5::new(0b000_01011)),
         ASCII_UPPERCASE_C => Ok(u5::new(0b000_01100)),
@@ -151,23 +168,17 @@ impl ExtendedBase32 {
 
     #[inline]
     pub fn from_case_insensitive_ascii(string: &AsciiString) -> Result<Self, ExtendedBase32Error> {
-        Self::from_ascii(
-            &string.as_uppercase()
-        )
+        Self::from_ascii(&string.as_uppercase())
     }
 
     #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, ExtendedBase32Error> {
-        ExtendedBase32::from_ascii(
-            &AsciiString::from_utf8(string)?
-        )
+        ExtendedBase32::from_ascii(&AsciiString::from_utf8(string)?)
     }
 
     #[inline]
     pub fn from_case_insensitive_utf8(string: &str) -> Result<Self, ExtendedBase32Error> {
-        Self::from_case_insensitive_ascii(
-            &AsciiString::from_utf8(string)?
-        )
+        Self::from_case_insensitive_ascii(&AsciiString::from_utf8(string)?)
     }
 
     #[inline]
@@ -186,97 +197,200 @@ impl ExtendedBase32 {
                 &[PADDING_CHAR, _, _, _, _, _, _, _] => return Err(ExtendedBase32Error::Overflow),
 
                 // Characters 1, 2, & 3 can only be a padding character if every byte that follows is also a padding character.
-                &[char1, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => {
-                    let bits0_4   = (u64::from(extended_base32_to_u5(char1)?) << 35) & 0b11111_00000_00000_00000_00000_00000_00000_00000;
+                &[
+                    char1,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                ] => {
+                    let bits0_4 = (u64::from(extended_base32_to_u5(char1)?) << 35)
+                        & 0b11111_00000_00000_00000_00000_00000_00000_00000;
                     let merged_bytes = bits0_4;
 
                     let [_, _, _, byte1, _, _, _, _] = u64::to_be_bytes(merged_bytes);
 
                     encoded_bytes.push(byte1);
                     break;
-                },
-                &[_, PADDING_CHAR, _, _, _, _, _, _] => return Err(ExtendedBase32Error::BadPadding),
+                }
+                &[_, PADDING_CHAR, _, _, _, _, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
 
-                &[char1, char2, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => {
-                    let bits0_4   = (u64::from(extended_base32_to_u5(char1)?) << 35) & 0b11111_00000_00000_00000_00000_00000_00000_00000;
-                    let bits5_7   = (u64::from(extended_base32_to_u5(char2)?) << 30) & 0b00000_11100_00000_00000_00000_00000_00000_00000;
+                &[
+                    char1,
+                    char2,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                ] => {
+                    let bits0_4 = (u64::from(extended_base32_to_u5(char1)?) << 35)
+                        & 0b11111_00000_00000_00000_00000_00000_00000_00000;
+                    let bits5_7 = (u64::from(extended_base32_to_u5(char2)?) << 30)
+                        & 0b00000_11100_00000_00000_00000_00000_00000_00000;
                     let merged_bytes = bits0_4 | bits5_7;
 
                     let [_, _, _, byte1, _, _, _, _] = u64::to_be_bytes(merged_bytes);
 
                     encoded_bytes.push(byte1);
                     break;
-                },
-                &[_, _, PADDING_CHAR, _, _, _, _, _] => return Err(ExtendedBase32Error::BadPadding),
+                }
+                &[_, _, PADDING_CHAR, _, _, _, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
 
                 // 4th character can never be a padding character.
-                &[_, _, _, PADDING_CHAR, _, _, _, _] => return Err(ExtendedBase32Error::BadPadding),
+                &[_, _, _, PADDING_CHAR, _, _, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
 
                 // Characters 5 & 6 can only be a padding character if every byte that follows is also a padding character.
-                &[char1, char2, char3, char4, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => {
-                    let bits0_4   = (u64::from(extended_base32_to_u5(char1)?) << 35) & 0b11111_00000_00000_00000_00000_00000_00000_00000;
-                    let bits5_9   = (u64::from(extended_base32_to_u5(char2)?) << 30) & 0b00000_11111_00000_00000_00000_00000_00000_00000;
-                    let bits10_14 = (u64::from(extended_base32_to_u5(char3)?) << 25) & 0b00000_00000_11111_00000_00000_00000_00000_00000;
-                    let bits15_15 = (u64::from(extended_base32_to_u5(char4)?) << 20) & 0b00000_00000_00000_10000_00000_00000_00000_00000;
+                &[
+                    char1,
+                    char2,
+                    char3,
+                    char4,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                ] => {
+                    let bits0_4 = (u64::from(extended_base32_to_u5(char1)?) << 35)
+                        & 0b11111_00000_00000_00000_00000_00000_00000_00000;
+                    let bits5_9 = (u64::from(extended_base32_to_u5(char2)?) << 30)
+                        & 0b00000_11111_00000_00000_00000_00000_00000_00000;
+                    let bits10_14 = (u64::from(extended_base32_to_u5(char3)?) << 25)
+                        & 0b00000_00000_11111_00000_00000_00000_00000_00000;
+                    let bits15_15 = (u64::from(extended_base32_to_u5(char4)?) << 20)
+                        & 0b00000_00000_00000_10000_00000_00000_00000_00000;
                     let merged_bytes = bits0_4 | bits5_9 | bits10_14 | bits15_15;
 
                     let [_, _, _, byte1, byte2, _, _, _] = u64::to_be_bytes(merged_bytes);
                     encoded_bytes.extend([byte1, byte2]);
                     break;
-                },
-                &[_, _, _, _, PADDING_CHAR, _, _, _] => return Err(ExtendedBase32Error::BadPadding),
-                &[char1, char2, char3, char4, char5, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => {
-                    let bits0_4   = (u64::from(extended_base32_to_u5(char1)?) << 35) & 0b11111_00000_00000_00000_00000_00000_00000_00000;
-                    let bits5_9   = (u64::from(extended_base32_to_u5(char2)?) << 30) & 0b00000_11111_00000_00000_00000_00000_00000_00000;
-                    let bits10_14 = (u64::from(extended_base32_to_u5(char3)?) << 25) & 0b00000_00000_11111_00000_00000_00000_00000_00000;
-                    let bits15_19 = (u64::from(extended_base32_to_u5(char4)?) << 20) & 0b00000_00000_00000_11111_00000_00000_00000_00000;
-                    let bits20_23 = (u64::from(extended_base32_to_u5(char5)?) << 15) & 0b00000_00000_00000_00000_11110_00000_00000_00000;
+                }
+                &[_, _, _, _, PADDING_CHAR, _, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
+                &[
+                    char1,
+                    char2,
+                    char3,
+                    char4,
+                    char5,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                ] => {
+                    let bits0_4 = (u64::from(extended_base32_to_u5(char1)?) << 35)
+                        & 0b11111_00000_00000_00000_00000_00000_00000_00000;
+                    let bits5_9 = (u64::from(extended_base32_to_u5(char2)?) << 30)
+                        & 0b00000_11111_00000_00000_00000_00000_00000_00000;
+                    let bits10_14 = (u64::from(extended_base32_to_u5(char3)?) << 25)
+                        & 0b00000_00000_11111_00000_00000_00000_00000_00000;
+                    let bits15_19 = (u64::from(extended_base32_to_u5(char4)?) << 20)
+                        & 0b00000_00000_00000_11111_00000_00000_00000_00000;
+                    let bits20_23 = (u64::from(extended_base32_to_u5(char5)?) << 15)
+                        & 0b00000_00000_00000_00000_11110_00000_00000_00000;
                     let merged_bytes = bits0_4 | bits5_9 | bits10_14 | bits15_19 | bits20_23;
 
                     let [_, _, _, byte1, byte2, byte3, _, _] = u64::to_be_bytes(merged_bytes);
                     encoded_bytes.extend([byte1, byte2, byte3]);
                     break;
-                },
-                &[_, _, _, _, _, PADDING_CHAR, _, _] => return Err(ExtendedBase32Error::BadPadding),
+                }
+                &[_, _, _, _, _, PADDING_CHAR, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
 
                 // 7th character can never be a padding character.
-                &[_, _, _, _, _, _, PADDING_CHAR, _] => return Err(ExtendedBase32Error::BadPadding),
+                &[_, _, _, _, _, _, PADDING_CHAR, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
 
                 // 8th character can be padding but does not have to be.
-                &[char1, char2, char3, char4, char5, char6, char7, PADDING_CHAR] => {
-                    let bits0_4   = (u64::from(extended_base32_to_u5(char1)?) << 35) & 0b11111_00000_00000_00000_00000_00000_00000_00000;
-                    let bits5_9   = (u64::from(extended_base32_to_u5(char2)?) << 30) & 0b00000_11111_00000_00000_00000_00000_00000_00000;
-                    let bits10_14 = (u64::from(extended_base32_to_u5(char3)?) << 25) & 0b00000_00000_11111_00000_00000_00000_00000_00000;
-                    let bits15_19 = (u64::from(extended_base32_to_u5(char4)?) << 20) & 0b00000_00000_00000_11111_00000_00000_00000_00000;
-                    let bits20_24 = (u64::from(extended_base32_to_u5(char5)?) << 15) & 0b00000_00000_00000_00000_11111_00000_00000_00000;
-                    let bits25_29 = (u64::from(extended_base32_to_u5(char6)?) << 10) & 0b00000_00000_00000_00000_00000_11111_00000_00000;
-                    let bits30_31 = (u64::from(extended_base32_to_u5(char7)?) << 5)  & 0b00000_00000_00000_00000_00000_00000_11000_00000;
-                    let merged_bytes = bits0_4 | bits5_9 | bits10_14 | bits15_19 | bits20_24 | bits25_29 | bits30_31;
+                &[
+                    char1,
+                    char2,
+                    char3,
+                    char4,
+                    char5,
+                    char6,
+                    char7,
+                    PADDING_CHAR,
+                ] => {
+                    let bits0_4 = (u64::from(extended_base32_to_u5(char1)?) << 35)
+                        & 0b11111_00000_00000_00000_00000_00000_00000_00000;
+                    let bits5_9 = (u64::from(extended_base32_to_u5(char2)?) << 30)
+                        & 0b00000_11111_00000_00000_00000_00000_00000_00000;
+                    let bits10_14 = (u64::from(extended_base32_to_u5(char3)?) << 25)
+                        & 0b00000_00000_11111_00000_00000_00000_00000_00000;
+                    let bits15_19 = (u64::from(extended_base32_to_u5(char4)?) << 20)
+                        & 0b00000_00000_00000_11111_00000_00000_00000_00000;
+                    let bits20_24 = (u64::from(extended_base32_to_u5(char5)?) << 15)
+                        & 0b00000_00000_00000_00000_11111_00000_00000_00000;
+                    let bits25_29 = (u64::from(extended_base32_to_u5(char6)?) << 10)
+                        & 0b00000_00000_00000_00000_00000_11111_00000_00000;
+                    let bits30_31 = (u64::from(extended_base32_to_u5(char7)?) << 5)
+                        & 0b00000_00000_00000_00000_00000_00000_11000_00000;
+                    let merged_bytes = bits0_4
+                        | bits5_9
+                        | bits10_14
+                        | bits15_19
+                        | bits20_24
+                        | bits25_29
+                        | bits30_31;
 
                     let [_, _, _, byte1, byte2, byte3, byte4, _] = u64::to_be_bytes(merged_bytes);
                     encoded_bytes.extend([byte1, byte2, byte3, byte4]);
                     break;
-                },
+                }
 
                 &[char1, char2, char3, char4, char5, char6, char7, char8] => {
-                    let bits0_4   = (u64::from(extended_base32_to_u5(char1)?) << 35) & 0b11111_00000_00000_00000_00000_00000_00000_00000;
-                    let bits5_9   = (u64::from(extended_base32_to_u5(char2)?) << 30) & 0b00000_11111_00000_00000_00000_00000_00000_00000;
-                    let bits10_14 = (u64::from(extended_base32_to_u5(char3)?) << 25) & 0b00000_00000_11111_00000_00000_00000_00000_00000;
-                    let bits15_19 = (u64::from(extended_base32_to_u5(char4)?) << 20) & 0b00000_00000_00000_11111_00000_00000_00000_00000;
-                    let bits20_24 = (u64::from(extended_base32_to_u5(char5)?) << 15) & 0b00000_00000_00000_00000_11111_00000_00000_00000;
-                    let bits25_29 = (u64::from(extended_base32_to_u5(char6)?) << 10) & 0b00000_00000_00000_00000_00000_11111_00000_00000;
-                    let bits30_34 = (u64::from(extended_base32_to_u5(char7)?) << 5)  & 0b00000_00000_00000_00000_00000_00000_11111_00000;
-                    let bits35_39 = (u64::from(extended_base32_to_u5(char8)?) << 0)  & 0b00000_00000_00000_00000_00000_00000_00000_11111;
-                    let merged_bytes = bits0_4 | bits5_9 | bits10_14 | bits15_19 | bits20_24 | bits25_29 | bits30_34 | bits35_39;
+                    let bits0_4 = (u64::from(extended_base32_to_u5(char1)?) << 35)
+                        & 0b11111_00000_00000_00000_00000_00000_00000_00000;
+                    let bits5_9 = (u64::from(extended_base32_to_u5(char2)?) << 30)
+                        & 0b00000_11111_00000_00000_00000_00000_00000_00000;
+                    let bits10_14 = (u64::from(extended_base32_to_u5(char3)?) << 25)
+                        & 0b00000_00000_11111_00000_00000_00000_00000_00000;
+                    let bits15_19 = (u64::from(extended_base32_to_u5(char4)?) << 20)
+                        & 0b00000_00000_00000_11111_00000_00000_00000_00000;
+                    let bits20_24 = (u64::from(extended_base32_to_u5(char5)?) << 15)
+                        & 0b00000_00000_00000_00000_11111_00000_00000_00000;
+                    let bits25_29 = (u64::from(extended_base32_to_u5(char6)?) << 10)
+                        & 0b00000_00000_00000_00000_00000_11111_00000_00000;
+                    let bits30_34 = (u64::from(extended_base32_to_u5(char7)?) << 5)
+                        & 0b00000_00000_00000_00000_00000_00000_11111_00000;
+                    let bits35_39 = (u64::from(extended_base32_to_u5(char8)?) << 0)
+                        & 0b00000_00000_00000_00000_00000_00000_00000_11111;
+                    let merged_bytes = bits0_4
+                        | bits5_9
+                        | bits10_14
+                        | bits15_19
+                        | bits20_24
+                        | bits25_29
+                        | bits30_34
+                        | bits35_39;
 
-                    let [_, _, _, byte1, byte2, byte3, byte4, byte5] = u64::to_be_bytes(merged_bytes);
+                    let [_, _, _, byte1, byte2, byte3, byte4, byte5] =
+                        u64::to_be_bytes(merged_bytes);
                     encoded_bytes.extend([byte1, byte2, byte3, byte4, byte5]);
-                },
-                _ => panic!("The pattern was supposed to chunk exactly 8 bytes. However, the chunk contained {} bytes", chunk.len()),
+                }
+                _ => panic!(
+                    "The pattern was supposed to chunk exactly 8 bytes. However, the chunk contained {} bytes",
+                    chunk.len()
+                ),
             }
         }
 
-        return Ok(Self { bytes: encoded_bytes });
+        return Ok(Self {
+            bytes: encoded_bytes,
+        });
     }
 
     #[inline]
@@ -286,16 +400,25 @@ impl ExtendedBase32 {
         let remainder = byte_chunks.remainder();
 
         byte_chunks.for_each(|chunk| {
-            let merged_bytes = u64::from_be_bytes([0, 0, 0, chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]]);
+            let merged_bytes =
+                u64::from_be_bytes([0, 0, 0, chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]]);
 
-            let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
-            let bits5_9   = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000) >> 30) as u8;
-            let bits10_14 = ((merged_bytes & 0b00000_00000_11111_00000_00000_00000_00000_00000) >> 25) as u8;
-            let bits15_19 = ((merged_bytes & 0b00000_00000_00000_11111_00000_00000_00000_00000) >> 20) as u8;
-            let bits20_24 = ((merged_bytes & 0b00000_00000_00000_00000_11111_00000_00000_00000) >> 15) as u8;
-            let bits25_29 = ((merged_bytes & 0b00000_00000_00000_00000_00000_11111_00000_00000) >> 10) as u8;
-            let bits30_34 = ((merged_bytes & 0b00000_00000_00000_00000_00000_00000_11111_00000) >> 5) as u8;
-            let bits35_39 = ((merged_bytes & 0b00000_00000_00000_00000_00000_00000_00000_11111) >> 0) as u8;
+            let bits0_4 =
+                ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
+            let bits5_9 =
+                ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000) >> 30) as u8;
+            let bits10_14 =
+                ((merged_bytes & 0b00000_00000_11111_00000_00000_00000_00000_00000) >> 25) as u8;
+            let bits15_19 =
+                ((merged_bytes & 0b00000_00000_00000_11111_00000_00000_00000_00000) >> 20) as u8;
+            let bits20_24 =
+                ((merged_bytes & 0b00000_00000_00000_00000_11111_00000_00000_00000) >> 15) as u8;
+            let bits25_29 =
+                ((merged_bytes & 0b00000_00000_00000_00000_00000_11111_00000_00000) >> 10) as u8;
+            let bits30_34 =
+                ((merged_bytes & 0b00000_00000_00000_00000_00000_00000_11111_00000) >> 5) as u8;
+            let bits35_39 =
+                ((merged_bytes & 0b00000_00000_00000_00000_00000_00000_00000_11111) >> 0) as u8;
 
             decoded_bytes.extend([
                 u5_to_extended_base32(u5::new(bits0_4)),
@@ -314,8 +437,10 @@ impl ExtendedBase32 {
             &[byte0] => {
                 let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, 0, 0, 0, 0]);
 
-                let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
-                let bits5_7   = ((merged_bytes & 0b00000_11100_00000_00000_00000_00000_00000_00000) >> 30) as u8;
+                let bits0_4 = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000)
+                    >> 35) as u8;
+                let bits5_7 = ((merged_bytes & 0b00000_11100_00000_00000_00000_00000_00000_00000)
+                    >> 30) as u8;
 
                 decoded_bytes.extend([
                     u5_to_extended_base32(u5::new(bits0_4)),
@@ -327,14 +452,18 @@ impl ExtendedBase32 {
                     PADDING_CHAR,
                     PADDING_CHAR,
                 ]);
-            },
+            }
             &[byte0, byte1] => {
                 let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, 0, 0, 0]);
 
-                let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
-                let bits5_9   = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000) >> 30) as u8;
-                let bits10_14 = ((merged_bytes & 0b00000_00000_11111_00000_00000_00000_00000_00000) >> 25) as u8;
-                let bits15_15 = ((merged_bytes & 0b00000_00000_00000_10000_00000_00000_00000_00000) >> 20) as u8;
+                let bits0_4 = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000)
+                    >> 35) as u8;
+                let bits5_9 = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000)
+                    >> 30) as u8;
+                let bits10_14 = ((merged_bytes & 0b00000_00000_11111_00000_00000_00000_00000_00000)
+                    >> 25) as u8;
+                let bits15_15 = ((merged_bytes & 0b00000_00000_00000_10000_00000_00000_00000_00000)
+                    >> 20) as u8;
 
                 decoded_bytes.extend([
                     u5_to_extended_base32(u5::new(bits0_4)),
@@ -346,15 +475,20 @@ impl ExtendedBase32 {
                     PADDING_CHAR,
                     PADDING_CHAR,
                 ]);
-            },
+            }
             &[byte0, byte1, byte2] => {
                 let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, byte2, 0, 0]);
 
-                let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
-                let bits5_9   = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000) >> 30) as u8;
-                let bits10_14 = ((merged_bytes & 0b00000_00000_11111_00000_00000_00000_00000_00000) >> 25) as u8;
-                let bits15_19 = ((merged_bytes & 0b00000_00000_00000_11111_00000_00000_00000_00000) >> 20) as u8;
-                let bits20_23 = ((merged_bytes & 0b00000_00000_00000_00000_11110_00000_00000_00000) >> 15) as u8;
+                let bits0_4 = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000)
+                    >> 35) as u8;
+                let bits5_9 = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000)
+                    >> 30) as u8;
+                let bits10_14 = ((merged_bytes & 0b00000_00000_11111_00000_00000_00000_00000_00000)
+                    >> 25) as u8;
+                let bits15_19 = ((merged_bytes & 0b00000_00000_00000_11111_00000_00000_00000_00000)
+                    >> 20) as u8;
+                let bits20_23 = ((merged_bytes & 0b00000_00000_00000_00000_11110_00000_00000_00000)
+                    >> 15) as u8;
 
                 decoded_bytes.extend([
                     u5_to_extended_base32(u5::new(bits0_4)),
@@ -366,17 +500,24 @@ impl ExtendedBase32 {
                     PADDING_CHAR,
                     PADDING_CHAR,
                 ]);
-            },
+            }
             &[byte0, byte1, byte2, byte3] => {
                 let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, byte2, byte3, 0]);
 
-                let bits0_4   = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000) >> 35) as u8;
-                let bits5_9   = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000) >> 30) as u8;
-                let bits10_14 = ((merged_bytes & 0b00000_00000_11111_00000_00000_00000_00000_00000) >> 25) as u8;
-                let bits15_19 = ((merged_bytes & 0b00000_00000_00000_11111_00000_00000_00000_00000) >> 20) as u8;
-                let bits20_24 = ((merged_bytes & 0b00000_00000_00000_00000_11111_00000_00000_00000) >> 15) as u8;
-                let bits25_29 = ((merged_bytes & 0b00000_00000_00000_00000_00000_11111_00000_00000) >> 10) as u8;
-                let bits30_31 = ((merged_bytes & 0b00000_00000_00000_00000_00000_00000_11000_00000) >> 5) as u8;
+                let bits0_4 = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000)
+                    >> 35) as u8;
+                let bits5_9 = ((merged_bytes & 0b00000_11111_00000_00000_00000_00000_00000_00000)
+                    >> 30) as u8;
+                let bits10_14 = ((merged_bytes & 0b00000_00000_11111_00000_00000_00000_00000_00000)
+                    >> 25) as u8;
+                let bits15_19 = ((merged_bytes & 0b00000_00000_00000_11111_00000_00000_00000_00000)
+                    >> 20) as u8;
+                let bits20_24 = ((merged_bytes & 0b00000_00000_00000_00000_11111_00000_00000_00000)
+                    >> 15) as u8;
+                let bits25_29 = ((merged_bytes & 0b00000_00000_00000_00000_00000_11111_00000_00000)
+                    >> 10) as u8;
+                let bits30_31 =
+                    ((merged_bytes & 0b00000_00000_00000_00000_00000_00000_11000_00000) >> 5) as u8;
 
                 decoded_bytes.extend([
                     u5_to_extended_base32(u5::new(bits0_4)),
@@ -388,8 +529,10 @@ impl ExtendedBase32 {
                     u5_to_extended_base32(u5::new(bits30_31)),
                     PADDING_CHAR,
                 ]);
-            },
-            _ => panic!("An impossible remainder length was reached. The length of a remainder can only be 0, 1, 2, 3, or 4.")
+            }
+            _ => panic!(
+                "An impossible remainder length was reached. The length of a remainder can only be 0, 1, 2, 3, or 4."
+            ),
         }
 
         AsciiString::from(&decoded_bytes)
@@ -422,23 +565,67 @@ impl ExtendedBase32 {
                 // 1st character can never be a padding character.
                 &[PADDING_CHAR, _, _, _, _, _, _, _] => return Err(ExtendedBase32Error::Overflow),
                 // Characters 1, 2, & 3 can only be a padding character if every byte that follows is also a padding character.
-                &[_, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => padding_reached = true,
-                &[_, PADDING_CHAR, _, _, _, _, _, _] => return Err(ExtendedBase32Error::BadPadding),
-                &[_, _, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => padding_reached = true,
-                &[_, _, PADDING_CHAR, _, _, _, _, _] => return Err(ExtendedBase32Error::BadPadding),
+                &[
+                    _,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                ] => padding_reached = true,
+                &[_, PADDING_CHAR, _, _, _, _, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
+                &[
+                    _,
+                    _,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                ] => padding_reached = true,
+                &[_, _, PADDING_CHAR, _, _, _, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
                 // 4th character can never be a padding character.
-                &[_, _, _, PADDING_CHAR, _, _, _, _] => return Err(ExtendedBase32Error::BadPadding),
+                &[_, _, _, PADDING_CHAR, _, _, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
                 // Characters 5 & 6 can only be a padding character if every byte that follows is also a padding character.
-                &[_, _, _, _, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => padding_reached = true,
-                &[_, _, _, _, PADDING_CHAR, _, _, _] => return Err(ExtendedBase32Error::BadPadding),
-                &[_, _, _, _, _, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => padding_reached = true,
-                &[_, _, _, _, _, PADDING_CHAR, _, _] => return Err(ExtendedBase32Error::BadPadding),
+                &[
+                    _,
+                    _,
+                    _,
+                    _,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                    PADDING_CHAR,
+                ] => padding_reached = true,
+                &[_, _, _, _, PADDING_CHAR, _, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
+                &[_, _, _, _, _, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => {
+                    padding_reached = true
+                }
+                &[_, _, _, _, _, PADDING_CHAR, _, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
                 // 7th character can never be a padding character.
-                &[_, _, _, _, _, _, PADDING_CHAR, _] => return Err(ExtendedBase32Error::BadPadding),
+                &[_, _, _, _, _, _, PADDING_CHAR, _] => {
+                    return Err(ExtendedBase32Error::BadPadding);
+                }
                 // 8th character can be padding but does not have to be.
                 &[_, _, _, _, _, _, _, PADDING_CHAR] => padding_reached = true,
                 &[_, _, _, _, _, _, _, _] => (),
-                _ => panic!("The pattern was supposed to chunk exactly 8 bytes. However, the chunk contained {} bytes", chunk.len()),
+                _ => panic!(
+                    "The pattern was supposed to chunk exactly 8 bytes. However, the chunk contained {} bytes",
+                    chunk.len()
+                ),
             }
         }
 
@@ -473,7 +660,15 @@ impl BaseConversions for ExtendedBase32 {
 
 impl FromPresentation for ExtendedBase32 {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+        'c: 'd,
+    {
         let (encoded, tokens) = AsciiString::from_token_format(tokens)?;
         Ok((Self::encode(&encoded)?, tokens))
     }
@@ -481,15 +676,20 @@ impl FromPresentation for ExtendedBase32 {
 
 #[cfg(test)]
 mod circular_sanity_tests {
-    use crate::{types::base_conversions::BaseConversions, serde::wire::circular_test::gen_test_circular_serde_sanity_test};
     use super::ExtendedBase32;
+    use crate::{
+        serde::wire::circular_test::gen_test_circular_serde_sanity_test,
+        types::base_conversions::BaseConversions,
+    };
 
     macro_rules! circular_sanity_test {
         ($test_encoding:ident, $test_wire:ident, $input:expr) => {
             #[test]
             fn $test_encoding() {
                 let init_bytes = $input;
-                let input = ExtendedBase32 { bytes: init_bytes.clone() };
+                let input = ExtendedBase32 {
+                    bytes: init_bytes.clone(),
+                };
                 let guessed_string_len = input.string_len();
                 assert_eq!(init_bytes.len(), input.byte_len());
 
@@ -506,24 +706,84 @@ mod circular_sanity_tests {
             }
 
             gen_test_circular_serde_sanity_test!($test_wire, ExtendedBase32::from_bytes($input));
-        }
+        };
     }
 
     circular_sanity_test!(test_0_bytes_encoding_decoding, test_0_bytes_wire, &vec![]);
     circular_sanity_test!(test_1_byte_encoding_decoding, test_1_byte_wire, &vec![1]);
-    circular_sanity_test!(test_2_bytes_encoding_decoding, test_2_bytes_wire, &vec![1, 2]);
-    circular_sanity_test!(test_3_bytes_encoding_decoding, test_3_bytes_wire, &vec![1, 2, 3]);
-    circular_sanity_test!(test_4_bytes_encoding_decoding, test_4_bytes_wire, &vec![1, 2, 3, 4]);
-    circular_sanity_test!(test_5_bytes_encoding_decoding, test_5_bytes_wire, &vec![1, 2, 3, 4, 5]);
-    circular_sanity_test!(test_6_bytes_encoding_decoding, test_6_bytes_wire, &vec![1, 2, 3, 4, 5, 6]);
-    circular_sanity_test!(test_7_bytes_encoding_decoding, test_7_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7]);
-    circular_sanity_test!(test_8_bytes_encoding_decoding, test_8_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8]);
-    circular_sanity_test!(test_9_bytes_encoding_decoding, test_9_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    circular_sanity_test!(test_10_bytes_encoding_decoding, test_10_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    circular_sanity_test!(test_11_bytes_encoding_decoding, test_11_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    circular_sanity_test!(test_12_bytes_encoding_decoding, test_12_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-    circular_sanity_test!(test_13_bytes_encoding_decoding, test_13_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-    circular_sanity_test!(test_14_bytes_encoding_decoding, test_14_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
-    circular_sanity_test!(test_15_bytes_encoding_decoding, test_15_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-    circular_sanity_test!(test_16_bytes_encoding_decoding, test_16_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    circular_sanity_test!(
+        test_2_bytes_encoding_decoding,
+        test_2_bytes_wire,
+        &vec![1, 2]
+    );
+    circular_sanity_test!(
+        test_3_bytes_encoding_decoding,
+        test_3_bytes_wire,
+        &vec![1, 2, 3]
+    );
+    circular_sanity_test!(
+        test_4_bytes_encoding_decoding,
+        test_4_bytes_wire,
+        &vec![1, 2, 3, 4]
+    );
+    circular_sanity_test!(
+        test_5_bytes_encoding_decoding,
+        test_5_bytes_wire,
+        &vec![1, 2, 3, 4, 5]
+    );
+    circular_sanity_test!(
+        test_6_bytes_encoding_decoding,
+        test_6_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6]
+    );
+    circular_sanity_test!(
+        test_7_bytes_encoding_decoding,
+        test_7_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7]
+    );
+    circular_sanity_test!(
+        test_8_bytes_encoding_decoding,
+        test_8_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8]
+    );
+    circular_sanity_test!(
+        test_9_bytes_encoding_decoding,
+        test_9_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+    );
+    circular_sanity_test!(
+        test_10_bytes_encoding_decoding,
+        test_10_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
+    circular_sanity_test!(
+        test_11_bytes_encoding_decoding,
+        test_11_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    );
+    circular_sanity_test!(
+        test_12_bytes_encoding_decoding,
+        test_12_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    );
+    circular_sanity_test!(
+        test_13_bytes_encoding_decoding,
+        test_13_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    );
+    circular_sanity_test!(
+        test_14_bytes_encoding_decoding,
+        test_14_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    );
+    circular_sanity_test!(
+        test_15_bytes_encoding_decoding,
+        test_15_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    );
+    circular_sanity_test!(
+        test_16_bytes_encoding_decoding,
+        test_16_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    );
 }

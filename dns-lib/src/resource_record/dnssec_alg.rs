@@ -1,4 +1,4 @@
-use std::{fmt::Display, error::Error};
+use std::{error::Error, fmt::Display};
 
 use crate::gen_enum::enum_encoding;
 
@@ -10,7 +10,9 @@ impl<'a> Error for DnsSecAlgorithmError {}
 impl<'a> Display for DnsSecAlgorithmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownMnemonic(mnemonic) => write!(f, "unknown dns security algorithm mnemonic '{mnemonic}'"),
+            Self::UnknownMnemonic(mnemonic) => {
+                write!(f, "unknown dns security algorithm mnemonic '{mnemonic}'")
+            }
         }
     }
 }

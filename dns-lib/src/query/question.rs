@@ -1,8 +1,11 @@
 use std::fmt::Display;
 
-use dns_macros::{ToWire, FromWire};
+use dns_macros::{FromWire, ToWire};
 
-use crate::{resource_record::{rtype::RType, rclass::RClass}, types::c_domain_name::CDomainName};
+use crate::{
+    resource_record::{rclass::RClass, rtype::RType},
+    types::c_domain_name::CDomainName,
+};
 
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.2
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire)]
@@ -18,7 +21,7 @@ impl Default for Question {
         Self {
             qname: CDomainName::new_root(),
             qtype: RType::Unknown(0),
-            qclass: RClass::Unknown(0)
+            qclass: RClass::Unknown(0),
         }
     }
 }
@@ -26,17 +29,27 @@ impl Default for Question {
 impl Question {
     #[inline]
     pub const fn new(qname: CDomainName, qtype: RType, qclass: RClass) -> Question {
-        Question { qname, qtype, qclass }
+        Question {
+            qname,
+            qtype,
+            qclass,
+        }
     }
 
     #[inline]
-    pub const fn qname(&self) -> &CDomainName { &self.qname }
+    pub const fn qname(&self) -> &CDomainName {
+        &self.qname
+    }
 
     #[inline]
-    pub const fn qtype(&self) -> RType { self.qtype }
+    pub const fn qtype(&self) -> RType {
+        self.qtype
+    }
 
     #[inline]
-    pub const fn qclass(&self) -> RClass { self.qclass }
+    pub const fn qclass(&self) -> RClass {
+        self.qclass
+    }
 
     pub fn with_new_qname(&self, qname: CDomainName) -> Self {
         Question {
@@ -81,6 +94,10 @@ impl Question {
 
 impl Display for Question {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Question: {{qname: '{}', qtype: {}, qclass: {}}}", self.qname, self.qtype, self.qclass)
+        write!(
+            f,
+            "Question: {{qname: '{}', qtype: {}, qclass: {}}}",
+            self.qname, self.qtype, self.qclass
+        )
     }
 }

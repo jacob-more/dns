@@ -1,4 +1,7 @@
-use std::{fmt::Debug, ops::{Deref, DerefMut}};
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+};
 
 use dns_macros::{FromWire, RData, ToPresentation, ToWire};
 
@@ -6,11 +9,10 @@ use crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData;
 
 use super::ds::DS;
 
-
 /// (Original) https://datatracker.ietf.org/doc/html/rfc4034#section-5
 #[derive(Clone, PartialEq, Eq, Hash, ToWire, FromWire, ToPresentation, RData)]
 pub struct CDS {
-    ds: DS
+    ds: DS,
 }
 
 impl Debug for CDS {
@@ -39,13 +41,26 @@ impl DerefMut for CDS {
 }
 
 impl FromTokenizedRData for CDS {
-    fn from_tokenized_rdata(record: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
-        Ok(Self { ds: DS::from_tokenized_rdata(record)? })
+    fn from_tokenized_rdata(
+        record: &Vec<&str>,
+    ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
+    where
+        Self: Sized,
+    {
+        Ok(Self {
+            ds: DS::from_tokenized_rdata(record)?,
+        })
     }
 }
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::{resource_record::{digest_alg::DigestAlgorithm, dnssec_alg::DnsSecAlgorithm, types::ds::DS}, serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::base16::Base16};
+    use crate::{
+        resource_record::{
+            digest_alg::DigestAlgorithm, dnssec_alg::DnsSecAlgorithm, types::ds::DS,
+        },
+        serde::wire::circular_test::gen_test_circular_serde_sanity_test,
+        types::base16::Base16,
+    };
 
     use super::CDS;
 

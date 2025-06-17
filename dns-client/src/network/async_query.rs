@@ -7,7 +7,6 @@ use pin_project::pin_project;
 
 use crate::network::errors;
 
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum QueryOpt {
     UdpTcp,
@@ -48,7 +47,10 @@ impl QInitQuery {
     }
 
     #[inline]
-    pub fn set_following(mut self: std::pin::Pin<&mut Self>, receiver: once_watch::Receiver<Result<Message, errors::QueryError>>) {
+    pub fn set_following(
+        mut self: std::pin::Pin<&mut Self>,
+        receiver: once_watch::Receiver<Result<Message, errors::QueryError>>,
+    ) {
         self.set(QInitQuery::Following(receiver));
     }
 
@@ -61,7 +63,7 @@ impl QInitQuery {
 #[pin_project(project = QSendProj)]
 pub(crate) enum QSend<'t, MetaT, ErrorT>
 where
-    MetaT: Copy
+    MetaT: Copy,
 {
     Fresh(MetaT),
     SendQuery(MetaT, BoxFuture<'t, Result<(), ErrorT>>),
@@ -70,7 +72,7 @@ where
 
 impl<'t, MetaT, ErrorT> QSend<'t, MetaT, ErrorT>
 where
-    MetaT: Copy
+    MetaT: Copy,
 {
     #[inline]
     pub fn meta(&self) -> MetaT {
@@ -87,7 +89,10 @@ where
     }
 
     #[inline]
-    pub fn set_send_query(mut self: std::pin::Pin<&mut Self>, send: BoxFuture<'t, Result<(), ErrorT>>) {
+    pub fn set_send_query(
+        mut self: std::pin::Pin<&mut Self>,
+        send: BoxFuture<'t, Result<(), ErrorT>>,
+    ) {
         let meta = self.meta();
 
         self.set(Self::SendQuery(meta, send));

@@ -2,9 +2,12 @@ use std::fmt::Debug;
 
 use crate::{serde::wire::write_wire::WriteWire, types::c_domain_name::CompressionMap};
 
-use super::{to_wire::ToWire, from_wire::FromWire};
+use super::{from_wire::FromWire, to_wire::ToWire};
 
-pub(crate) fn circular_serde_sanity_test<T>(input: T) where T: Debug + ToWire + FromWire + PartialEq {
+pub(crate) fn circular_serde_sanity_test<T>(input: T)
+where
+    T: Debug + ToWire + FromWire + PartialEq,
+{
     // PART 1: No Compression Map
 
     // Setup
@@ -23,7 +26,8 @@ pub(crate) fn circular_serde_sanity_test<T>(input: T) where T: Debug + ToWire + 
         result.unwrap_err(),
     );
     assert_eq!(
-        expected_serial_length, wire.current_len() as u16,
+        expected_serial_length,
+        wire.current_len() as u16,
         "The expected serial length did not match the actual serial length.\nExpected Serial Length: {}\nActual Serial Length: {}\n",
         expected_serial_length,
         wire.current_len(),
@@ -47,12 +51,14 @@ pub(crate) fn circular_serde_sanity_test<T>(input: T) where T: Debug + ToWire + 
     assert!(
         input == output,
         "The output does not match the input record.\nExpected Output:\n{:#?}\nActual Output:\n{:#?}\n",
-        input, output,
+        input,
+        output,
     );
     assert!(
         wire.is_end_reached(),
         "The wire was not fully consumed during deserialization.\nExpected Offset: {}\nActual Offset: {}\n",
-        wire.wire_len(), wire.current_offset(),
+        wire.wire_len(),
+        wire.current_offset(),
     );
     let calculated_serial_length = output.serial_length();
     assert_eq!(
@@ -102,12 +108,14 @@ pub(crate) fn circular_serde_sanity_test<T>(input: T) where T: Debug + ToWire + 
     assert!(
         input == output,
         "The output does not match the input record.\nExpected Output:\n{:#?}\nActual Output:\n{:#?}\n",
-        input, output,
+        input,
+        output,
     );
     assert!(
         wire.is_end_reached(),
         "The wire was not fully consumed during deserialization.\nExpected Offset: {}\nActual Offset: {}\n",
-        wire.wire_len(), wire.current_offset(),
+        wire.wire_len(),
+        wire.current_offset(),
     );
     let calculated_serial_length = output.serial_length();
     assert_eq!(
@@ -123,6 +131,6 @@ macro_rules! gen_test_circular_serde_sanity_test {
         fn $test_name() {
             $crate::serde::wire::circular_test::circular_serde_sanity_test($test_case)
         }
-    }
+    };
 }
 pub(crate) use gen_test_circular_serde_sanity_test;

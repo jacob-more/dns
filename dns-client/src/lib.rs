@@ -3,17 +3,20 @@ use std::{collections::HashMap, sync::Arc};
 use async_lib::once_watch;
 use async_trait::async_trait;
 use dns_cache::asynchronous::{async_cache::AsyncTreeCache, async_main_cache::AsyncMainTreeCache};
-use dns_lib::{interface::client::{Answer, AsyncClient, Context, Response}, query::question::Question, resource_record::rcode::RCode};
+use dns_lib::{
+    interface::client::{Answer, AsyncClient, Context, Response},
+    query::question::Question,
+    resource_record::rcode::RCode,
+};
 use log::info;
 use network::socket_manager::SocketManager;
 use query::recursive_query::recursive_query;
 use result::{QOk, QResult};
 
+mod network;
 mod qname_minimizer;
 mod query;
-mod network;
 mod result;
-
 
 pub struct DNSAsyncClient {
     cache: Arc<AsyncMainTreeCache>,
@@ -32,7 +35,9 @@ impl DNSAsyncClient {
     }
 
     #[inline]
-    pub fn cache(&self) -> Arc<AsyncMainTreeCache> { self.cache.clone() }
+    pub fn cache(&self) -> Arc<AsyncMainTreeCache> {
+        self.cache.clone()
+    }
 
     #[inline]
     pub async fn close(&self) {
@@ -48,7 +53,16 @@ impl AsyncClient for DNSAsyncClient {
         match recursive_query(client, joined_cache, context).await {
             QResult::Err(_) => Response::Error(RCode::ServFail),
             QResult::Fail(rcode) => Response::Error(rcode),
-            QResult::Ok(QOk { answer, name_servers, additional }) => Response::Answer(Answer { answer, name_servers, additional, authoritative: false }),
+            QResult::Ok(QOk {
+                answer,
+                name_servers,
+                additional,
+            }) => Response::Answer(Answer {
+                answer,
+                name_servers,
+                additional,
+                authoritative: false,
+            }),
         }
     }
 }

@@ -5,25 +5,37 @@ use super::char_token::EscapableChar;
 /// Converts from an internal sequence of raw ascii characters, with no escape sequences, and
 /// converts it into printable ascii, with escaped backslashes and octal sequences for non-printable
 /// characters.
-pub struct NonEscapedIntoEscapedIter<T> where T: Iterator<Item = AsciiChar> {
-    chars: T
+pub struct NonEscapedIntoEscapedIter<T>
+where
+    T: Iterator<Item = AsciiChar>,
+{
+    chars: T,
 }
 
-impl<T> NonEscapedIntoEscapedIter<T> where T: Iterator<Item = AsciiChar> {
+impl<T> NonEscapedIntoEscapedIter<T>
+where
+    T: Iterator<Item = AsciiChar>,
+{
     #[inline]
     pub fn new(iterator: T) -> Self {
         NonEscapedIntoEscapedIter { chars: iterator }
     }
 }
 
-impl<T> From<T> for NonEscapedIntoEscapedIter<T> where T: Iterator<Item = AsciiChar> {
+impl<T> From<T> for NonEscapedIntoEscapedIter<T>
+where
+    T: Iterator<Item = AsciiChar>,
+{
     #[inline]
     fn from(value: T) -> Self {
         Self::new(value)
     }
 }
 
-impl<T> Iterator for NonEscapedIntoEscapedIter<T> where T: Iterator<Item = AsciiChar> {
+impl<T> Iterator for NonEscapedIntoEscapedIter<T>
+where
+    T: Iterator<Item = AsciiChar>,
+{
     type Item = EscapableChar;
 
     #[inline]
@@ -31,28 +43,38 @@ impl<T> Iterator for NonEscapedIntoEscapedIter<T> where T: Iterator<Item = Ascii
         match self.chars.next() {
             None => None,
             Some(ASCII_BACKSLASH) => Some(EscapableChar::EscapedAscii(ASCII_BACKSLASH)),
-            Some(character) if is_ascii_control(&character) => Some(EscapableChar::EscapedOctal(character)),
+            Some(character) if is_ascii_control(&character) => {
+                Some(EscapableChar::EscapedOctal(character))
+            }
             Some(character @ 128..) => Some(EscapableChar::EscapedOctal(character)),
             Some(character) => Some(EscapableChar::Ascii(character)),
         }
     }
 }
 
-
 #[cfg(test)]
 mod non_escaped_to_escaped_tests {
-    use crate::{serde::presentation::parse_chars::char_token::EscapableChar, types::ascii::AsciiChar};
+    use crate::{
+        serde::presentation::parse_chars::char_token::EscapableChar, types::ascii::AsciiChar,
+    };
 
     use super::NonEscapedIntoEscapedIter;
 
     fn test_character_escape_mapping(input: AsciiChar, output: EscapableChar) {
         let character_iter = [input];
-        let mut escapable_character_iter = NonEscapedIntoEscapedIter::new(character_iter.into_iter());
+        let mut escapable_character_iter =
+            NonEscapedIntoEscapedIter::new(character_iter.into_iter());
 
         let first_escapable_character = escapable_character_iter.next();
-        assert!(first_escapable_character.is_some(), "At least one character was expected to be output by the NonEscapedIntoEscapedIter but none were");
+        assert!(
+            first_escapable_character.is_some(),
+            "At least one character was expected to be output by the NonEscapedIntoEscapedIter but none were"
+        );
         let first_escapable_character = first_escapable_character.unwrap();
-        assert_eq!(first_escapable_character, output, "The escaped character was expected to be {output:?} but was {first_escapable_character:?}");
+        assert_eq!(
+            first_escapable_character, output,
+            "The escaped character was expected to be {output:?} but was {first_escapable_character:?}"
+        );
     }
 
     #[test]

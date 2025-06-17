@@ -1,6 +1,6 @@
 use proc_macro;
-use syn::DeriveInput;
 use quote::quote;
+use syn::DeriveInput;
 
 pub fn impl_rdata_macro(ast: &DeriveInput) -> proc_macro::TokenStream {
     let name = &ast.ident;

@@ -1,22 +1,46 @@
 use std::{error::Error, fmt::Display, hash::Hash, ops::Deref};
 
-use crate::{serde::{presentation::{errors::TokenizedRecordError, from_presentation::FromPresentation, from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation}, wire::{from_wire::FromWire, read_wire::{ReadWireError, SliceWireVisibility}, to_wire::ToWire}}, types::c_domain_name::CDomainName};
+use crate::{
+    serde::{
+        presentation::{
+            errors::TokenizedRecordError, from_presentation::FromPresentation,
+            from_tokenized_rdata::FromTokenizedRData, to_presentation::ToPresentation,
+        },
+        wire::{
+            from_wire::FromWire,
+            read_wire::{ReadWireError, SliceWireVisibility},
+            to_wire::ToWire,
+        },
+    },
+    types::c_domain_name::CDomainName,
+};
 
-use super::{rclass::RClass, rtype::RType, time::Time, types::{a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR, caa::CAA, cdnskey::CDNSKEY, cds::CDS, cert::CERT, cname::CNAME, csync::CSYNC, dname::DNAME, dnskey::DNSKEY, ds::DS, eui48::EUI48, eui64::EUI64, hinfo::HINFO, maila::MAILA, mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, naptr::NAPTR, ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, srv::SRV, tlsa::TLSA, tsig::TSIG, txt::TXT, wks::WKS}};
-
+use super::{
+    rclass::RClass,
+    rtype::RType,
+    time::Time,
+    types::{
+        a::A, a6::A6, aaaa::AAAA, afsdb::AFSDB, amtrelay::AMTRELAY, any::ANY, apl::APL, axfr::AXFR,
+        caa::CAA, cdnskey::CDNSKEY, cds::CDS, cert::CERT, cname::CNAME, csync::CSYNC, dname::DNAME,
+        dnskey::DNSKEY, ds::DS, eui48::EUI48, eui64::EUI64, hinfo::HINFO, maila::MAILA,
+        mailb::MAILB, mb::MB, md::MD, mf::MF, mg::MG, minfo::MINFO, mr::MR, mx::MX, naptr::NAPTR,
+        ns::NS, nsec::NSEC, null::NULL, ptr::PTR, rrsig::RRSIG, soa::SOA, srv::SRV, tlsa::TLSA,
+        tsig::TSIG, txt::TXT, wks::WKS,
+    },
+};
 
 #[derive(Debug)]
 pub enum TryFromResourceRecordError {
-    UnexpectedRType {
-        expected: RType,
-        actual: RType,
-    }
+    UnexpectedRType { expected: RType, actual: RType },
 }
 impl Error for TryFromResourceRecordError {}
 impl Display for TryFromResourceRecordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnexpectedRType { expected, actual} => write!(f, "Expected Resource Record Type {expected} but was {actual}"),
+            Self::UnexpectedRType { expected, actual } => write!(
+                f,
+                "Expected Resource Record Type {expected} but was {actual}"
+            ),
         }
     }
 }
@@ -36,14 +60,19 @@ pub struct ResourceRecord<RDataT: RData = RecordData> {
 impl<RDataT: RData> ResourceRecord<RDataT> {
     #[inline]
     pub const fn new(name: CDomainName, rclass: RClass, ttl: Time, rdata: RDataT) -> Self {
-        Self { name, rclass, ttl, rdata }
+        Self {
+            name,
+            rclass,
+            ttl,
+            rdata,
+        }
     }
 
     #[inline]
     pub const fn get_name(&self) -> &CDomainName {
         &self.name
     }
-    
+
     #[inline]
     pub fn into_name(self) -> CDomainName {
         self.name
@@ -58,7 +87,7 @@ impl<RDataT: RData> ResourceRecord<RDataT> {
     pub const fn get_ttl(&self) -> &Time {
         &self.ttl
     }
-    
+
     #[inline]
     pub fn into_ttl(self) -> Time {
         self.ttl
@@ -78,7 +107,7 @@ impl<RDataT: RData> ResourceRecord<RDataT> {
     pub const fn get_rdata(&self) -> &RDataT {
         &self.rdata
     }
-    
+
     #[inline]
     pub fn into_rdata(self) -> RDataT {
         self.rdata
@@ -103,9 +132,7 @@ impl<RDataT: RData> PartialEq for ResourceRecord<RDataT> {
     ///  3. `rdata`
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        (self.name == other.name)
-        && (self.rclass == other.rclass)
-        && (self.rdata == other.rdata)
+        (self.name == other.name) && (self.rclass == other.rclass) && (self.rdata == other.rdata)
     }
 }
 
@@ -118,7 +145,14 @@ impl<RDataT: RData> Hash for ResourceRecord<RDataT> {
 }
 
 impl<RDataT: RData> ToWire for ResourceRecord<RDataT> {
-    fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+    fn to_wire_format<'a, 'b>(
+        &self,
+        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
+        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
+    where
+        'a: 'b,
+    {
         self.name.to_wire_format(wire, compression)?;
         self.rdata.get_rtype().to_wire_format(wire, compression)?;
         self.rclass.to_wire_format(wire, compression)?;
@@ -374,14 +408,12 @@ macro_rules! gen_record_data {
 }
 
 macro_rules! gen_to_presentation {
-    ($record:ident, $rtype_var:expr, $rdata_var:expr, $out_buffer_var:expr, presentation_forbidden) => {
-        {
-            // clears the warning generated because the `rdata` field is unused.
-            let _ = $rdata_var;
+    ($record:ident, $rtype_var:expr, $rdata_var:expr, $out_buffer_var:expr, presentation_forbidden) => {{
+        // clears the warning generated because the `rdata` field is unused.
+        let _ = $rdata_var;
 
-            panic!("Cannot convert {} to presentation", $rtype_var);
-        }
-    };
+        panic!("Cannot convert {} to presentation", $rtype_var);
+    }};
     ($record:ident, $rtype_var:expr, $rdata_var:expr, $out_buffer_var:expr, presentation_allowed) => {
         $rdata_var.to_presentation_format($out_buffer_var)
     };

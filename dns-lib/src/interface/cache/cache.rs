@@ -21,7 +21,9 @@ pub trait AsyncCache {
     async fn get(&self, query: &CacheQuery<'_>) -> CacheResponse;
     async fn insert_record(&self, record: CacheRecord);
     async fn insert_stream(&self, records: impl Stream<Item = CacheRecord> + Send) {
-        records.for_each_concurrent(None, |record| self.insert_record(record)).await;
+        records
+            .for_each_concurrent(None, |record| self.insert_record(record))
+            .await;
     }
     async fn insert_iter(&self, records: impl Iterator<Item = CacheRecord> + Send) {
         self.insert_stream(futures::stream::iter(records)).await;
@@ -30,14 +32,22 @@ pub trait AsyncCache {
     async fn insert_message(&self, message: &Message) {
         let insertion_time = Instant::now();
         match message.question.get(0) {
-            None => println!("Message could not be added to cache because it was missing a question section. {message:?}"),
+            None => println!(
+                "Message could not be added to cache because it was missing a question section. {message:?}"
+            ),
             Some(question) => {
                 let qname = question.qname();
                 // TODO: Verify and validate authority.
                 join!(
                     self.insert_iter(message.answer.iter().map(|answer| CacheRecord {
                         meta: CacheMeta {
-                            auth: if message.authoritative_answer && answer.get_name().matches(qname) { MetaAuth::Authoritative } else { MetaAuth::NotAuthoritative },
+                            auth: if message.authoritative_answer
+                                && answer.get_name().matches(qname)
+                            {
+                                MetaAuth::Authoritative
+                            } else {
+                                MetaAuth::NotAuthoritative
+                            },
                             insertion_time,
                         },
                         record: answer.clone(),
@@ -57,7 +67,7 @@ pub trait AsyncCache {
                         record: additional.clone()
                     })),
                 );
-            },
+            }
         }
     }
 }

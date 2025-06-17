@@ -2,14 +2,16 @@ use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
 use crate::{resource_record::dnssec_alg::DnsSecAlgorithm, types::base64::Base64};
 
-const DNS_ZONE_KEY_FLAG_MASK: u16       = 0b0000_0001_0000_0000;
+const DNS_ZONE_KEY_FLAG_MASK: u16 = 0b0000_0001_0000_0000;
 const SECURE_ENTRY_POINT_FLAG_MASK: u16 = 0b0000_0000_0000_0001;
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc4034#section-2
 /// (Update) https://datatracker.ietf.org/doc/html/rfc3225
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6840
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6944
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
+#[derive(
+    Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData,
+)]
 pub struct DNSKEY {
     ///                     1 1 1 1 1 1
     /// 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
@@ -73,12 +75,14 @@ impl DNSKEY {
     pub fn into_key(self) -> Base64 {
         self.key
     }
-
 }
 
 #[cfg(test)]
 mod circular_serde_sanity_test {
-    use crate::{resource_record::dnssec_alg::DnsSecAlgorithm, serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::base64::Base64};
+    use crate::{
+        resource_record::dnssec_alg::DnsSecAlgorithm,
+        serde::wire::circular_test::gen_test_circular_serde_sanity_test, types::base64::Base64,
+    };
 
     use super::DNSKEY;
 

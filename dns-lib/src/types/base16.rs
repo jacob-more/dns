@@ -1,8 +1,17 @@
-use std::{error::Error, fmt::{Display, Debug}};
+use std::{
+    error::Error,
+    fmt::{Debug, Display},
+};
 
 use ux::u4;
 
-use crate::{serde::presentation::{errors::TokenError, from_presentation::FromPresentation}, types::{ascii::{constants::*, AsciiChar, AsciiError, AsciiString}, base_conversions::BaseConversions}};
+use crate::{
+    serde::presentation::{errors::TokenError, from_presentation::FromPresentation},
+    types::{
+        ascii::{AsciiChar, AsciiError, AsciiString, constants::*},
+        base_conversions::BaseConversions,
+    },
+};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Base16Error {
@@ -19,12 +28,18 @@ impl Display for Base16Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             // TODO: error messages could be improved
-            Self::BadChar(character) => write!(f, "Character '{character}' is not a valid base 16 character"),
+            Self::BadChar(character) => write!(
+                f,
+                "Character '{character}' is not a valid base 16 character"
+            ),
             Self::IncorrectBufferSize => write!(f, "Buffer size is incorrect"),
             Self::Overflow => write!(f, "Overflow"),
             Self::Underflow => write!(f, "Underflow"),
-            Self::BadPadding => write!(f, "Padding can only occur at the end of the encoding and must be exact"),
-            Self::AsciiError(ascii_err) => write!(f, "{ascii_err}")
+            Self::BadPadding => write!(
+                f,
+                "Padding can only occur at the end of the encoding and must be exact"
+            ),
+            Self::AsciiError(ascii_err) => write!(f, "{ascii_err}"),
         }
     }
 }
@@ -54,23 +69,25 @@ fn u4_to_base16(bits: u4) -> AsciiChar {
         0b0000_1110 => ASCII_UPPERCASE_E,
         0b0000_1111 => ASCII_UPPERCASE_F,
 
-        _ => unreachable!("Illegal State Reached: This should not be possible. The value should convert to a u4 and exhaustively match those values.")
+        _ => unreachable!(
+            "Illegal State Reached: This should not be possible. The value should convert to a u4 and exhaustively match those values."
+        ),
     }
 }
 
 #[inline]
 const fn base16_to_u4(character: AsciiChar) -> Result<u8, Base16Error> {
     match character {
-        ASCII_ZERO        => Ok(0b0000_0000),
-        ASCII_ONE         => Ok(0b0000_0001),
-        ASCII_TWO         => Ok(0b0000_0010),
-        ASCII_THREE       => Ok(0b0000_0011),
-        ASCII_FOUR        => Ok(0b0000_0100),
-        ASCII_FIVE        => Ok(0b0000_0101),
-        ASCII_SIX         => Ok(0b0000_0110),
-        ASCII_SEVEN       => Ok(0b0000_0111),
-        ASCII_EIGHT       => Ok(0b0000_1000),
-        ASCII_NINE        => Ok(0b0000_1001),
+        ASCII_ZERO => Ok(0b0000_0000),
+        ASCII_ONE => Ok(0b0000_0001),
+        ASCII_TWO => Ok(0b0000_0010),
+        ASCII_THREE => Ok(0b0000_0011),
+        ASCII_FOUR => Ok(0b0000_0100),
+        ASCII_FIVE => Ok(0b0000_0101),
+        ASCII_SIX => Ok(0b0000_0110),
+        ASCII_SEVEN => Ok(0b0000_0111),
+        ASCII_EIGHT => Ok(0b0000_1000),
+        ASCII_NINE => Ok(0b0000_1001),
         ASCII_UPPERCASE_A => Ok(0b0000_1010),
         ASCII_UPPERCASE_B => Ok(0b0000_1011),
         ASCII_UPPERCASE_C => Ok(0b0000_1100),
@@ -117,23 +134,17 @@ impl Base16 {
 
     #[inline]
     pub fn from_case_insensitive_ascii(string: &AsciiString) -> Result<Self, Base16Error> {
-        Self::from_ascii(
-            &string.as_uppercase()
-        )
+        Self::from_ascii(&string.as_uppercase())
     }
 
     #[inline]
     pub fn from_utf8(string: &str) -> Result<Self, Base16Error> {
-        Base16::from_ascii(
-            &AsciiString::from_utf8(string)?
-        )
+        Base16::from_ascii(&AsciiString::from_utf8(string)?)
     }
 
     #[inline]
     pub fn from_case_insensitive_utf8(string: &str) -> Result<Self, Base16Error> {
-        Base16::from_case_insensitive_ascii(
-            &AsciiString::from_utf8(string)?
-        )
+        Base16::from_case_insensitive_ascii(&AsciiString::from_utf8(string)?)
     }
 
     #[inline]
@@ -157,11 +168,16 @@ impl Base16 {
 
                     encoded_bytes.push(byte1);
                 }
-                _ => panic!("The pattern was supposed to chunk exactly 2 bytes. However, the chunk contained {} bytes", chunk.len()),
+                _ => panic!(
+                    "The pattern was supposed to chunk exactly 2 bytes. However, the chunk contained {} bytes",
+                    chunk.len()
+                ),
             }
         }
 
-        return Ok(Self { bytes: encoded_bytes });
+        return Ok(Self {
+            bytes: encoded_bytes,
+        });
     }
 
     #[inline]
@@ -229,7 +245,15 @@ impl BaseConversions for Base16 {
 
 impl FromPresentation for Base16 {
     #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(tokens: &'c [&'a str]) -> Result<(Self, &'d [&'a str]), TokenError> where Self: Sized, 'a: 'b, 'c: 'd, 'c: 'd {
+    fn from_token_format<'a, 'b, 'c, 'd>(
+        tokens: &'c [&'a str],
+    ) -> Result<(Self, &'d [&'a str]), TokenError>
+    where
+        Self: Sized,
+        'a: 'b,
+        'c: 'd,
+        'c: 'd,
+    {
         let (encoded, tokens) = AsciiString::from_token_format(tokens)?;
         Ok((Self::encode(&encoded)?, tokens))
     }
@@ -237,15 +261,20 @@ impl FromPresentation for Base16 {
 
 #[cfg(test)]
 mod circular_sanity_tests {
-    use crate::{types::base_conversions::BaseConversions, serde::wire::circular_test::gen_test_circular_serde_sanity_test};
     use super::Base16;
+    use crate::{
+        serde::wire::circular_test::gen_test_circular_serde_sanity_test,
+        types::base_conversions::BaseConversions,
+    };
 
     macro_rules! circular_sanity_test {
         ($test_encoding:ident, $test_wire:ident, $input:expr) => {
             #[test]
             fn $test_encoding() {
                 let init_bytes = $input;
-                let input = Base16 { bytes: init_bytes.clone() };
+                let input = Base16 {
+                    bytes: init_bytes.clone(),
+                };
                 let guessed_string_len = input.string_len();
                 assert_eq!(init_bytes.len(), input.byte_len());
 
@@ -262,24 +291,84 @@ mod circular_sanity_tests {
             }
 
             gen_test_circular_serde_sanity_test!($test_wire, Base16::from_bytes($input));
-        }
+        };
     }
 
     circular_sanity_test!(test_0_bytes_encoding_decoding, test_0_bytes_wire, &vec![]);
     circular_sanity_test!(test_1_byte_encoding_decoding, test_1_byte_wire, &vec![1]);
-    circular_sanity_test!(test_2_bytes_encoding_decoding, test_2_bytes_wire, &vec![1, 2]);
-    circular_sanity_test!(test_3_bytes_encoding_decoding, test_3_bytes_wire, &vec![1, 2, 3]);
-    circular_sanity_test!(test_4_bytes_encoding_decoding, test_4_bytes_wire, &vec![1, 2, 3, 4]);
-    circular_sanity_test!(test_5_bytes_encoding_decoding, test_5_bytes_wire, &vec![1, 2, 3, 4, 5]);
-    circular_sanity_test!(test_6_bytes_encoding_decoding, test_6_bytes_wire, &vec![1, 2, 3, 4, 5, 6]);
-    circular_sanity_test!(test_7_bytes_encoding_decoding, test_7_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7]);
-    circular_sanity_test!(test_8_bytes_encoding_decoding, test_8_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8]);
-    circular_sanity_test!(test_9_bytes_encoding_decoding, test_9_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    circular_sanity_test!(test_10_bytes_encoding_decoding, test_10_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    circular_sanity_test!(test_11_bytes_encoding_decoding, test_11_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    circular_sanity_test!(test_12_bytes_encoding_decoding, test_12_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-    circular_sanity_test!(test_13_bytes_encoding_decoding, test_13_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-    circular_sanity_test!(test_14_bytes_encoding_decoding, test_14_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
-    circular_sanity_test!(test_15_bytes_encoding_decoding, test_15_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-    circular_sanity_test!(test_16_bytes_encoding_decoding, test_16_bytes_wire, &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    circular_sanity_test!(
+        test_2_bytes_encoding_decoding,
+        test_2_bytes_wire,
+        &vec![1, 2]
+    );
+    circular_sanity_test!(
+        test_3_bytes_encoding_decoding,
+        test_3_bytes_wire,
+        &vec![1, 2, 3]
+    );
+    circular_sanity_test!(
+        test_4_bytes_encoding_decoding,
+        test_4_bytes_wire,
+        &vec![1, 2, 3, 4]
+    );
+    circular_sanity_test!(
+        test_5_bytes_encoding_decoding,
+        test_5_bytes_wire,
+        &vec![1, 2, 3, 4, 5]
+    );
+    circular_sanity_test!(
+        test_6_bytes_encoding_decoding,
+        test_6_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6]
+    );
+    circular_sanity_test!(
+        test_7_bytes_encoding_decoding,
+        test_7_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7]
+    );
+    circular_sanity_test!(
+        test_8_bytes_encoding_decoding,
+        test_8_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8]
+    );
+    circular_sanity_test!(
+        test_9_bytes_encoding_decoding,
+        test_9_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+    );
+    circular_sanity_test!(
+        test_10_bytes_encoding_decoding,
+        test_10_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    );
+    circular_sanity_test!(
+        test_11_bytes_encoding_decoding,
+        test_11_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    );
+    circular_sanity_test!(
+        test_12_bytes_encoding_decoding,
+        test_12_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    );
+    circular_sanity_test!(
+        test_13_bytes_encoding_decoding,
+        test_13_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    );
+    circular_sanity_test!(
+        test_14_bytes_encoding_decoding,
+        test_14_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+    );
+    circular_sanity_test!(
+        test_15_bytes_encoding_decoding,
+        test_15_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    );
+    circular_sanity_test!(
+        test_16_bytes_encoding_decoding,
+        test_16_bytes_wire,
+        &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    );
 }

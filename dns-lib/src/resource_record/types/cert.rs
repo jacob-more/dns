@@ -2,11 +2,15 @@ use std::{error::Error, fmt::Display};
 
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::{gen_enum::enum_encoding, resource_record::dnssec_alg::DnsSecAlgorithm, types::base64::Base64};
+use crate::{
+    gen_enum::enum_encoding, resource_record::dnssec_alg::DnsSecAlgorithm, types::base64::Base64,
+};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc4398#section-2
 /// (Updated) https://datatracker.ietf.org/doc/html/rfc6944
-#[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData)]
+#[derive(
+    Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData,
+)]
 pub struct CERT {
     cert_type: CertificateType,
     key_tag: u16,
@@ -23,7 +27,9 @@ impl<'a> Error for CertificateTypeError {}
 impl<'a> Display for CertificateTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnknownMnemonic(mnemonic) => write!(f, "unknown certificate type mnemonic '{mnemonic}'"),
+            Self::UnknownMnemonic(mnemonic) => {
+                write!(f, "unknown certificate type mnemonic '{mnemonic}'")
+            }
         }
     }
 }

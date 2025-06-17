@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-use super::{raw_literals::{RawLiteral, RawLiteralIter}, errors::TokenizerError};
+use super::{
+    errors::TokenizerError,
+    raw_literals::{RawLiteral, RawLiteralIter},
+};
 
 /// A version of [RawLiteral] that has fewer variants. This way, impossible states cannot be
 /// represented. This version only has [RawItem::Text], [RawItem::QuotedText], &
@@ -58,11 +61,13 @@ impl<'a> Into<&'a str> for &RawItem<'a> {
 /// tokens in a single entry could span multiple lines.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct RawEntry<'a> {
-    raw_items: Vec<RawItem<'a>>
+    raw_items: Vec<RawItem<'a>>,
 }
 
 impl<'a> RawEntry<'a> {
-    pub fn as_slice(&self) -> &[RawItem<'a>] { self.raw_items.as_slice() }
+    pub fn as_slice(&self) -> &[RawItem<'a>] {
+        self.raw_items.as_slice()
+    }
 }
 
 impl<'a> Display for RawEntry<'a> {
@@ -79,13 +84,15 @@ impl<'a> Display for RawEntry<'a> {
 /// basic entries. The output is an iterator of [RawLiteralEntry], where each [RawLiteralEntry]
 /// represents something like a raw resource record.
 pub struct RawEntryIter<'a> {
-    raw_literal_iter: RawLiteralIter<'a>
+    raw_literal_iter: RawLiteralIter<'a>,
 }
 
 impl<'a> RawEntryIter<'a> {
     #[inline]
     pub fn new(feed: &'a str) -> Self {
-        Self { raw_literal_iter: RawLiteralIter::new(feed) }
+        Self {
+            raw_literal_iter: RawLiteralIter::new(feed),
+        }
     }
 }
 
@@ -99,17 +106,25 @@ impl<'a> Iterator for RawEntryIter<'a> {
         loop {
             match (self.raw_literal_iter.next(), ignore_new_line) {
                 // Open parenthesis is used to indicate that newlines should be ignored
-                (Some(Ok(RawLiteral::Text("("))), true) => return Some(Err(TokenizerError::NestedOpenParenthesis)),
+                (Some(Ok(RawLiteral::Text("("))), true) => {
+                    return Some(Err(TokenizerError::NestedOpenParenthesis));
+                }
                 (Some(Ok(RawLiteral::Text("("))), false) => ignore_new_line = true,
 
                 // Closing parenthesis is used to end the indication that newlines should be ignored
                 (Some(Ok(RawLiteral::Text(")"))), true) => ignore_new_line = false,
-                (Some(Ok(RawLiteral::Text(")"))), false) => return Some(Err(TokenizerError::UnopenedClosingParenthesis)),
+                (Some(Ok(RawLiteral::Text(")"))), false) => {
+                    return Some(Err(TokenizerError::UnopenedClosingParenthesis));
+                }
 
                 // Any text literals that are not a part of a comment should be included as part
                 // of the entry
-                (Some(Ok(RawLiteral::Text(token_str))), _) => entry_items.push(RawItem::Text(token_str)),
-                (Some(Ok(RawLiteral::QuotedText(token_str))), _) => entry_items.push(RawItem::QuotedText(token_str)),
+                (Some(Ok(RawLiteral::Text(token_str))), _) => {
+                    entry_items.push(RawItem::Text(token_str))
+                }
+                (Some(Ok(RawLiteral::QuotedText(token_str))), _) => {
+                    entry_items.push(RawItem::QuotedText(token_str))
+                }
 
                 // Comments have no meaning
                 (Some(Ok(RawLiteral::Comment(_))), _) => (),
@@ -117,7 +132,9 @@ impl<'a> Iterator for RawEntryIter<'a> {
                 // Separators are removed at this step. We should only care about the text
                 // literals from this point onwards. The only time they matter is if they are
                 // the first token.
-                (Some(Ok(RawLiteral::Separator(token_str))), _) if entry_items.is_empty() => entry_items.push(RawItem::Separator(token_str)),
+                (Some(Ok(RawLiteral::Separator(token_str))), _) if entry_items.is_empty() => {
+                    entry_items.push(RawItem::Separator(token_str))
+                }
                 (Some(Ok(RawLiteral::Separator(_))), _) => (),
 
                 (Some(Ok(RawLiteral::NewLine(_))), true) => (),
@@ -130,6 +147,8 @@ impl<'a> Iterator for RawEntryIter<'a> {
             }
         }
 
-        return Some(Ok(RawEntry { raw_items: entry_items }));
+        return Some(Ok(RawEntry {
+            raw_items: entry_items,
+        }));
     }
 }
