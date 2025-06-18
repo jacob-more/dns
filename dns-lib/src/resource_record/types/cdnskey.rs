@@ -42,7 +42,7 @@ impl DerefMut for CDNSKEY {
 
 impl FromTokenizedRData for CDNSKEY {
     fn from_tokenized_rdata(
-        record: &Vec<&str>,
+        record: &[&str],
     ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
     where
         Self: Sized,

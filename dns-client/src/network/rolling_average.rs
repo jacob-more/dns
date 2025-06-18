@@ -56,11 +56,11 @@ impl RollingAverage {
         match u32::try_from(total.saturating_sub(average)) {
             Ok(total) => {
                 self.total = total;
-                return self;
+                self
             }
             Err(_) => {
                 self.total = u32::MAX;
-                return self;
+                self
             }
         }
     }
@@ -71,9 +71,11 @@ impl RollingAverage {
 }
 
 /// Similar to `Atomic::fetch_update()` except...
+///
 /// 1. it returns the updated value, not the previous value.
 /// 2. the input function returns `T`, not `Option<T>`.
 /// 3. the return value is never an `Err(T)`.
+///
 /// This allows it to work better when updating `RollingAverage`.
 pub fn fetch_update<T, F>(atomic: &Atomic<T>, success: Ordering, failure: Ordering, f: F) -> T
 where
@@ -83,7 +85,7 @@ where
     let mut prev = atomic.load(Ordering::Relaxed);
     loop {
         let next = f(prev);
-        match atomic.compare_exchange_weak(prev, next.clone(), success, failure) {
+        match atomic.compare_exchange_weak(prev, next, success, failure) {
             Ok(_) => return next,
             Err(next_prev) => {
                 prev = next_prev;

@@ -15,7 +15,7 @@ pub enum Entry<'a> {
     Origin { origin: StringLiteral<'a> },
     /// Using the "$TTL" string, sets the ttl that will be used from this point forwards while
     /// parsing (unless changed by another TTL entry).
-    TTL { ttl: &'a str },
+    Ttl { ttl: &'a str },
     /// Using the "$RCLASS" string, sets the rclass that will be used from this point forwards while
     /// parsing (unless changed by another RCLASS entry).
     RClass { rclass: &'a str },
@@ -45,7 +45,7 @@ impl<'a> Display for Entry<'a> {
                 writeln!(f, "Origin")?;
                 writeln!(f, "\tDomain Name: {origin}")
             }
-            Entry::TTL { ttl } => {
+            Entry::Ttl { ttl } => {
                 writeln!(f, "TTL")?;
                 writeln!(f, "\tTTL: {ttl}")
             }
@@ -139,45 +139,45 @@ impl<'a> Iterator for EntryIter<'a> {
 
             match entry_tokens.as_slice() {
                 // <blank>[<comment>]
-                &[] => continue, //< Skip entries that are empty
+                [] => continue, //< Skip entries that are empty
 
                 // $ORIGIN <domain-name> [<comment>]
-                &[RawItem::Text("$ORIGIN"), RawItem::Text("@")] => {
+                [RawItem::Text("$ORIGIN"), RawItem::Text("@")] => {
                     return Some(Ok(Entry::Origin {
                         origin: StringLiteral::Origin,
                     }));
                 }
-                &[RawItem::Text("$ORIGIN"), RawItem::Text(domain_name)] => {
+                [RawItem::Text("$ORIGIN"), RawItem::Text(domain_name)] => {
                     return Some(Ok(Entry::Origin {
                         origin: StringLiteral::Raw(domain_name),
                     }));
                 }
-                &[RawItem::Text("$ORIGIN"), RawItem::QuotedText(domain_name)] => {
+                [RawItem::Text("$ORIGIN"), RawItem::QuotedText(domain_name)] => {
                     return Some(Ok(Entry::Origin {
                         origin: StringLiteral::Quoted(domain_name),
                     }));
                 }
 
                 // $TTL <ttl> [<comment>]
-                &[
+                [
                     RawItem::Text("$TTL"),
                     RawItem::Text(ttl_str) | RawItem::QuotedText(ttl_str),
-                ] => return Some(Ok(Entry::TTL { ttl: ttl_str })),
+                ] => return Some(Ok(Entry::Ttl { ttl: ttl_str })),
 
                 // $RCLASS <rclass> [<comment>]
-                &[
+                [
                     RawItem::Text("$RCLASS"),
                     RawItem::Text(rclass_str) | RawItem::QuotedText(rclass_str),
                 ] => return Some(Ok(Entry::RClass { rclass: rclass_str })),
 
                 // $INCLUDE <file-name> [<domain-name>] [<comment>]
-                &[RawItem::Text("$INCLUDE"), RawItem::Text(file_name)] => {
+                [RawItem::Text("$INCLUDE"), RawItem::Text(file_name)] => {
                     return Some(Ok(Entry::Include {
                         file_name,
                         domain_name: None,
                     }));
                 }
-                &[
+                [
                     RawItem::Text("$INCLUDE"),
                     RawItem::Text(file_name) | RawItem::QuotedText(file_name),
                     RawItem::Text("@"),
@@ -187,7 +187,7 @@ impl<'a> Iterator for EntryIter<'a> {
                         domain_name: Some(StringLiteral::Origin),
                     }));
                 }
-                &[
+                [
                     RawItem::Text("$INCLUDE"),
                     RawItem::Text(file_name) | RawItem::QuotedText(file_name),
                     RawItem::Text(domain_name),
@@ -197,7 +197,7 @@ impl<'a> Iterator for EntryIter<'a> {
                         domain_name: Some(StringLiteral::Raw(domain_name)),
                     }));
                 }
-                &[
+                [
                     RawItem::Text("$INCLUDE"),
                     RawItem::Text(file_name) | RawItem::QuotedText(file_name),
                     RawItem::QuotedText(domain_name),
@@ -209,26 +209,26 @@ impl<'a> Iterator for EntryIter<'a> {
                 }
 
                 // <domain-name> [<TTL>] [<class>] <type> <RDATA> [<comment>]
-                &[RawItem::Text("@"), ..] => {
+                [RawItem::Text("@"), ..] => {
                     return Some(Self::parse_rr(
                         Some(StringLiteral::Origin),
                         &entry_tokens.as_slice()[1..],
                     ));
                 }
-                &[RawItem::Text(domain_name), ..] => {
+                [RawItem::Text(domain_name), ..] => {
                     return Some(Self::parse_rr(
                         Some(StringLiteral::Raw(domain_name)),
                         &entry_tokens.as_slice()[1..],
                     ));
                 }
-                &[RawItem::QuotedText(domain_name), ..] => {
+                [RawItem::QuotedText(domain_name), ..] => {
                     return Some(Self::parse_rr(
                         Some(StringLiteral::Quoted(domain_name)),
                         &entry_tokens.as_slice()[1..],
                     ));
                 }
                 // <blank> [<TTL>] [<class>] <type> <RDATA> [<comment>]
-                &[RawItem::Separator(_), ..] => {
+                [RawItem::Separator(_), ..] => {
                     return Some(Self::parse_rr(None, &entry_tokens.as_slice()[1..]));
                 }
             }
@@ -302,12 +302,12 @@ impl<'a> EntryIter<'a> {
                     }
                 }
 
-                return Err(TokenizerError::TwoUnknownTokens(
+                Err(TokenizerError::TwoUnknownTokens(
                     token_1.to_string(),
                     token_2.to_string(),
-                ));
+                ))
             }
-            _ => return Err(TokenizerError::UnknownTokens),
+            _ => Err(TokenizerError::UnknownTokens),
         }
     }
 

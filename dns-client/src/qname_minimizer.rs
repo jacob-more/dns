@@ -52,12 +52,10 @@ where
             QNameMinimizer::None {
                 qname: _,
                 repeat_n: 0,
-            } => {
-                return None;
-            }
+            } => None,
             QNameMinimizer::None { qname, repeat_n } => {
                 *repeat_n -= 1;
-                return Some(qname.clone());
+                Some(qname.clone())
             }
             QNameMinimizer::LimitedMinimizer {
                 qname,
@@ -72,14 +70,14 @@ where
                         qname,
                         repeat_n: remaining_iterations,
                     };
-                    return None;
+                    None
                 } else {
                     let returned_qname = qname.clone();
                     *self = QNameMinimizer::None {
                         qname,
                         repeat_n: remaining_iterations - 1,
                     };
-                    return Some(returned_qname);
+                    Some(returned_qname)
                 }
             }
             QNameMinimizer::LimitedMinimizer {
@@ -88,7 +86,7 @@ where
                 qname_iter,
             } => {
                 *remaining_minimized_qnames -= 1;
-                return qname_iter.next();
+                qname_iter.next()
             }
         }
     }
@@ -130,12 +128,10 @@ where
             QNameMinimizer::None {
                 qname: _,
                 repeat_n: 0,
-            } => {
-                return None;
-            }
+            } => None,
             QNameMinimizer::None { qname, repeat_n } => {
                 *repeat_n -= 1;
-                return Some(qname.clone());
+                Some(qname.clone())
             }
             QNameMinimizer::LimitedMinimizer {
                 qname,
@@ -150,14 +146,14 @@ where
                         qname,
                         repeat_n: remaining_iterations,
                     };
-                    return None;
+                    None
                 } else {
                     let returned_qname = qname.clone();
                     *self = QNameMinimizer::None {
                         qname,
                         repeat_n: remaining_iterations - 1,
                     };
-                    return Some(returned_qname);
+                    Some(returned_qname)
                 }
             }
             QNameMinimizer::LimitedMinimizer {
@@ -166,7 +162,7 @@ where
                 qname_iter,
             } => {
                 *remaining_minimized_qnames -= 1;
-                return qname_iter.next_back();
+                qname_iter.next_back()
             }
         }
     }

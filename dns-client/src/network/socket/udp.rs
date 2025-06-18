@@ -227,7 +227,7 @@ where
                 };
                 return Err(socket_error);
             };
-            return Ok((udp_socket, AwakeToken::new()));
+            Ok((udp_socket, AwakeToken::new()))
         }
         .boxed();
 
@@ -273,7 +273,7 @@ where
                         self.as_mut().set_acquired(udp_socket, kill_udp);
 
                         // Next loop should poll `kill_udp`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     UdpState::None => {
                         drop(r_state);
@@ -281,7 +281,7 @@ where
                         self.as_mut().set_init_udp(socket);
 
                         // Next loop should poll `init_udp`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     UdpState::Blocked => {
                         drop(r_state);
@@ -292,7 +292,7 @@ where
                         );
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
                 }
             }
@@ -322,7 +322,7 @@ where
                                 );
 
                                 // Next loop should poll `kill_udp`
-                                return PollSocket::Continue;
+                                PollSocket::Continue
                             }
                             UdpState::None => {
                                 *w_udp_state =
@@ -332,7 +332,7 @@ where
                                 self.as_mut().set_acquired(udp_socket, kill_udp_token);
 
                                 // Next loop should poll `init_udp`
-                                return PollSocket::Continue;
+                                PollSocket::Continue
                             }
                             UdpState::Blocked => {
                                 drop(w_udp_state);
@@ -344,18 +344,16 @@ where
                                 );
                                 self.as_mut().set_closed(error.clone());
 
-                                return PollSocket::Error(error);
+                                PollSocket::Error(error)
                             }
                         }
                     }
                     Poll::Ready(Err(error)) => {
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    }
+                    Poll::Pending => PollSocket::Pending,
                 }
             }
             QUdpSocketProj::Acquired {
@@ -367,15 +365,11 @@ where
                         errors::SocketError::Shutdown(SOCKET_TYPE, errors::SocketStage::Connected);
                     self.as_mut().set_closed(error.clone());
 
-                    return PollSocket::Error(error);
+                    PollSocket::Error(error)
                 }
-                Poll::Pending => {
-                    return PollSocket::Pending;
-                }
+                Poll::Pending => PollSocket::Pending,
             },
-            QUdpSocketProj::Closed(error) => {
-                return PollSocket::Error(error.clone());
-            }
+            QUdpSocketProj::Closed(error) => PollSocket::Error(error.clone()),
         }
     }
 }

@@ -7,28 +7,24 @@ use async_lib::{
 use async_trait::async_trait;
 use futures::{FutureExt, future::BoxFuture};
 use pin_project::{pin_project, pinned_drop};
-use tokio::{
-    net::{
-        TcpStream,
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-    },
-    task::JoinHandle,
-    time::Sleep,
-};
+use tokio::{net::TcpStream, task::JoinHandle, time::Sleep};
 
 use crate::network::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
 
 use super::{FutureSocket, PollSocket};
 
+pub type TcpWriteHalf = Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>>;
+pub type TcpReadHalf = tokio::net::tcp::OwnedReadHalf;
+
 const SOCKET_TYPE: errors::SocketType = errors::SocketType::Tcp;
 
 pub(crate) enum TcpState {
     Managed {
-        socket: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
+        socket: TcpWriteHalf,
         kill: AwakeToken,
     },
     Establishing {
-        sender: once_watch::Sender<(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, AwakeToken)>,
+        sender: once_watch::Sender<(TcpWriteHalf, AwakeToken)>,
         kill: AwakeToken,
     },
     None,
@@ -60,9 +56,7 @@ where
     /// Start the TCP listener and drive the TCP state to Managed.
     /// Returns a reference to the created TCP stream.
     #[inline]
-    async fn init(
-        self: Arc<Self>,
-    ) -> Result<(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, AwakeToken), errors::SocketError> {
+    async fn init(self: Arc<Self>) -> Result<(TcpWriteHalf, AwakeToken), errors::SocketError> {
         InitTcp::new(&self, None).await
     }
 
@@ -107,12 +101,9 @@ where
         }
 
         // If the socket still initialized, shut it down immediately.
-        match receiver.await {
-            Ok((_, tcp_kill)) => {
-                tcp_kill.awake();
-            }
-            Err(_) => (), //< Successful cancellation
-        }
+        if let Ok((_, kill_tcp)) = receiver.await {
+            kill_tcp.awake();
+        } // else, successful cancellation
     }
 
     /// If the TCP state is Blocked, changes it to None.
@@ -171,18 +162,15 @@ where
         }
 
         // If the socket still initialized, shut it down immediately.
-        match receiver.await {
-            Ok((_, kill_tcp)) => {
-                kill_tcp.awake();
-            }
-            Err(_) => (), //< Successful cancellation
-        }
+        if let Ok((_, kill_tcp)) = receiver.await {
+            kill_tcp.awake();
+        } // else, successful cancellation
     }
 
     /// Starts a TCP listener to read data from the provided socket. This processes should stop
     /// when the `kill_tcp` token is awoken. This function is intended to be run as a
     /// semi-independent background task.
-    async fn listen(self: Arc<Self>, mut tcp_reader: OwnedReadHalf, kill_tcp: AwakeToken);
+    async fn listen(self: Arc<Self>, mut tcp_reader: TcpReadHalf, kill_tcp: AwakeToken);
 }
 
 #[pin_project(project = QTcpSocketProj)]
@@ -190,28 +178,25 @@ pub(crate) enum QTcpSocket {
     Fresh,
     GetTcpEstablishing {
         #[pin]
-        receive_tcp_socket:
-            once_watch::Receiver<(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, AwakeToken)>,
+        receive_tcp_socket: once_watch::Receiver<(TcpWriteHalf, AwakeToken)>,
     },
     InitTcp {
         #[pin]
-        join_handle: JoinHandle<
-            Result<(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, AwakeToken), errors::SocketError>,
-        >,
+        join_handle: JoinHandle<Result<(TcpWriteHalf, AwakeToken), errors::SocketError>>,
     },
     Acquired {
-        tcp_socket: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
+        tcp_socket: TcpWriteHalf,
         #[pin]
         kill_tcp: AwokenToken,
     },
     Closed(errors::SocketError),
 }
 
-impl<'a, 'e> QTcpSocket {
+impl<'a> QTcpSocket {
     #[inline]
     pub fn set_get_tcp_establishing(
         mut self: std::pin::Pin<&mut Self>,
-        receiver: once_watch::Receiver<(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, AwakeToken)>,
+        receiver: once_watch::Receiver<(TcpWriteHalf, AwakeToken)>,
     ) {
         self.set(Self::GetTcpEstablishing {
             receive_tcp_socket: receiver,
@@ -230,7 +215,7 @@ impl<'a, 'e> QTcpSocket {
     #[inline]
     pub fn set_acquired(
         mut self: std::pin::Pin<&mut Self>,
-        tcp_socket: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
+        tcp_socket: TcpWriteHalf,
         kill_tcp_token: AwakeToken,
     ) {
         self.set(Self::Acquired {
@@ -245,10 +230,7 @@ impl<'a, 'e> QTcpSocket {
     }
 }
 
-impl<'a, 'c, 'd, S: TcpSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTcpSocket
-where
-    'a: 'c,
-{
+impl<'a, 'd, S: TcpSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTcpSocket {
     fn poll(
         self: &mut Pin<&mut Self>,
         socket: &'a Arc<S>,
@@ -269,7 +251,7 @@ where
                         self.as_mut().set_acquired(tcp_socket, kill_tcp);
 
                         // Next loop should poll `kill_tcp`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     TcpState::Establishing { sender, kill: _ } => {
                         let receiver = sender.subscribe();
@@ -278,7 +260,7 @@ where
                         self.as_mut().set_get_tcp_establishing(receiver);
 
                         // Next loop should poll `receive_tcp_socket`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     TcpState::None => {
                         drop(r_tcp_state);
@@ -286,7 +268,7 @@ where
                         self.as_mut().set_init_tcp(socket);
 
                         // Next loop should poll `join_handle`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     TcpState::Blocked => {
                         drop(r_tcp_state);
@@ -298,7 +280,7 @@ where
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
                 }
             }
@@ -310,7 +292,7 @@ where
                         self.as_mut().set_acquired(tcp_socket, tcp_kill);
 
                         // Next loop should poll `kill_tcp`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                         let error = errors::SocketError::Shutdown(
@@ -320,11 +302,9 @@ where
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    }
+                    Poll::Pending => PollSocket::Pending,
                 }
             }
             QTcpSocketProj::InitTcp { mut join_handle } => {
@@ -333,14 +313,14 @@ where
                         self.as_mut().set_acquired(tcp_socket, kill_tcp_token);
 
                         // Next loop should poll `kill_tcp`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     Poll::Ready(Ok(Err(error))) => {
-                        let error = errors::SocketError::from(error);
+                        let error = error;
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
                     Poll::Ready(Err(join_error)) => {
                         let error = errors::SocketError::from((
@@ -351,11 +331,9 @@ where
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    }
+                    Poll::Pending => PollSocket::Pending,
                 }
             }
             QTcpSocketProj::Acquired {
@@ -368,15 +346,11 @@ where
 
                     self.as_mut().set_closed(error.clone());
 
-                    return PollSocket::Error(error);
+                    PollSocket::Error(error)
                 }
-                Poll::Pending => {
-                    return PollSocket::Pending;
-                }
+                Poll::Pending => PollSocket::Pending,
             },
-            QTcpSocketProj::Closed(error) => {
-                return PollSocket::Error(error.clone());
-            }
+            QTcpSocketProj::Closed(error) => PollSocket::Error(error.clone()),
         }
     }
 }
@@ -397,7 +371,7 @@ where
     socket: &'a Arc<S>,
     #[pin]
     kill_tcp: AwokenToken,
-    tcp_socket_sender: once_watch::Sender<(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, AwakeToken)>,
+    tcp_socket_sender: once_watch::Sender<(TcpWriteHalf, AwakeToken)>,
     #[pin]
     timeout: Sleep,
     #[pin]
@@ -412,12 +386,11 @@ enum InnerInitTcp<'d> {
         reason: CleanupReason<errors::SocketError>,
     },
     WriteManaged {
-        tcp_socket: Arc<tokio::sync::Mutex<OwnedWriteHalf>>,
+        tcp_socket: TcpWriteHalf,
     },
     GetEstablishing {
         #[pin]
-        receive_tcp_socket:
-            once_watch::Receiver<(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, AwakeToken)>,
+        receive_tcp_socket: once_watch::Receiver<(TcpWriteHalf, AwakeToken)>,
     },
     Complete,
 }
@@ -446,8 +419,7 @@ impl<'a, 'd, S> Future for InitTcp<'a, 'd, S>
 where
     S: TcpSocket,
 {
-    type Output =
-        Result<(Arc<tokio::sync::Mutex<OwnedWriteHalf>>, AwakeToken), errors::SocketError>;
+    type Output = Result<(TcpWriteHalf, AwakeToken), errors::SocketError>;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,

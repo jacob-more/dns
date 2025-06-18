@@ -6,8 +6,8 @@ use crate::gen_enum::enum_encoding;
 pub enum DnsSecAlgorithmError {
     UnknownMnemonic(String),
 }
-impl<'a> Error for DnsSecAlgorithmError {}
-impl<'a> Display for DnsSecAlgorithmError {
+impl Error for DnsSecAlgorithmError {}
+impl Display for DnsSecAlgorithmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownMnemonic(mnemonic) => {

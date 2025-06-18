@@ -6,8 +6,8 @@ use crate::gen_enum::enum_encoding;
 pub enum ProtocolError {
     UnknownMnemonic(String),
 }
-impl<'a> Error for ProtocolError {}
-impl<'a> Display for ProtocolError {
+impl Error for ProtocolError {}
+impl Display for ProtocolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownMnemonic(protocol) => write!(f, "Unknown Protocol Mnemonic: {protocol}"),

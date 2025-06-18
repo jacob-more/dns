@@ -10,7 +10,7 @@ use super::{
 /// [RawItem::Separator].
 /// - [RawItem::Text] is used to represent any string literal that is unquoted.
 /// - [RawItem::QuotedText] to represent any string literal that is quoted (quotation marks are
-///     removed).
+///   removed).
 /// - [RawItem::Separator] is used to represent a non-empty sequence of tab and/or space characters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum RawItem<'a> {
@@ -33,25 +33,19 @@ impl<'a> Display for RawItem<'a> {
     }
 }
 
-impl<'a> Into<&'a str> for RawItem<'a> {
-    #[inline]
-    fn into(self) -> &'a str {
-        match &self {
-            Self::Text(string) => string,
-            Self::QuotedText(string) => string,
-            Self::Separator(string) => string,
-        }
-    }
-}
-
-impl<'a> Into<&'a str> for &RawItem<'a> {
-    #[inline]
-    fn into(self) -> &'a str {
-        match &self {
+impl<'a> From<RawItem<'a>> for &'a str {
+    fn from(value: RawItem<'a>) -> Self {
+        match value {
             RawItem::Text(string) => string,
             RawItem::QuotedText(string) => string,
             RawItem::Separator(string) => string,
         }
+    }
+}
+
+impl<'a> From<&RawItem<'a>> for &'a str {
+    fn from(value: &RawItem<'a>) -> Self {
+        Self::from(*value)
     }
 }
 
@@ -147,8 +141,8 @@ impl<'a> Iterator for RawEntryIter<'a> {
             }
         }
 
-        return Some(Ok(RawEntry {
+        Some(Ok(RawEntry {
             raw_items: entry_items,
-        }));
+        }))
     }
 }

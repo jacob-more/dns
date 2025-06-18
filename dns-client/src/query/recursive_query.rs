@@ -46,7 +46,7 @@ where
     // Initial Cache Check: Check to see if the records we're looking for are already cached.
     trace!(context:?; "Recursive search initial cache response: '{cache_response:?}'");
     match cache_response {
-        CacheResponse::Records(records) if (records.len() == 0) => (),
+        CacheResponse::Records(records) if (records.is_empty()) => (),
         CacheResponse::Records(records) => {
             return QResult::Ok(QOk {
                 answer: records.into_iter().map(|record| record.record).collect(),
@@ -121,21 +121,20 @@ where
             }) => {
                 trace!(context:?; "Recursive search querying name servers '{name_servers:?}' for '{}' with search context response: '{answer:?}'", context.query());
 
-                if (index != 0) || (context.qtype() != RType::DNAME) {
-                    if answer
+                if ((index != 0) || (context.qtype() != RType::DNAME))
+                    && answer
                         .iter()
                         .any(|record| record.get_rtype() == RType::DNAME)
-                    {
-                        return handle_dname(
-                            client,
-                            joined_cache,
-                            context,
-                            answer,
-                            Vec::new(),
-                            Vec::new(),
-                        )
-                        .await;
-                    }
+                {
+                    return handle_dname(
+                        client,
+                        joined_cache,
+                        context,
+                        answer,
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                    .await;
                 }
 
                 if !found_name_servers.is_empty() {
@@ -325,7 +324,7 @@ where
             }
         }
     }
-    return NSResponse::Error(QError::NoClosestNameServerFound(question.qname().clone()));
+    NSResponse::Error(QError::NoClosestNameServerFound(question.qname().clone()))
 }
 
 async fn handle_cname<CCache>(
@@ -378,7 +377,7 @@ where
     }
 
     trace!(context:?; "Recursive search new cname error: no cname record in records '{answer:?}'");
-    return QError::MissingRecord(RType::CNAME).into();
+    QError::MissingRecord(RType::CNAME).into()
 }
 
 async fn handle_dname<CCache>(
@@ -453,5 +452,5 @@ where
     }
 
     trace!(context:?; "Recursive search new cname error: no dname record in records '{answer:?}'");
-    return QError::MissingRecord(RType::DNAME).into();
+    QError::MissingRecord(RType::DNAME).into()
 }

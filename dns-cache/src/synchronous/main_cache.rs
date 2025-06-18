@@ -12,6 +12,12 @@ pub struct MainTreeCache {
     cache: TreeCache<Vec<CacheRecord>>,
 }
 
+impl Default for MainTreeCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MainTreeCache {
     #[inline]
     pub fn new() -> Self {
@@ -24,7 +30,7 @@ impl MainTreeCache {
     fn get_records(&self, query: &CacheQuery) -> Result<Vec<CacheRecord>, TreeCacheError> {
         match query.qtype() {
             RType::ANY => {
-                if let Some(node) = self.cache.get_node(&query.question)? {
+                if let Some(node) = self.cache.get_node(query.question)? {
                     if query.authoritative {
                         return Ok(node
                             .records
@@ -32,7 +38,7 @@ impl MainTreeCache {
                             .flatten()
                             .filter(|record| record.is_authoritative())
                             .filter(|record| !record.is_expired())
-                            .map(|cache_record| cache_record.clone())
+                            .cloned()
                             .collect());
                     } else {
                         return Ok(node
@@ -40,26 +46,26 @@ impl MainTreeCache {
                             .values()
                             .flatten()
                             .filter(|record| !record.is_expired())
-                            .map(|cache_record| cache_record.clone())
+                            .cloned()
                             .collect());
                     }
                 }
             }
             _ => {
-                if let Some(node) = self.cache.get_node(&query.question)? {
+                if let Some(node) = self.cache.get_node(query.question)? {
                     if let Some(records) = node.records.get(&query.qtype()) {
                         if query.authoritative {
                             return Ok(records
                                 .iter()
                                 .filter(|record| record.is_authoritative())
                                 .filter(|record| !record.is_expired())
-                                .map(|cache_record| cache_record.clone())
+                                .cloned()
                                 .collect());
                         } else {
                             return Ok(records
                                 .iter()
                                 .filter(|record| !record.is_expired())
-                                .map(|cache_record| cache_record.clone())
+                                .cloned()
                                 .collect());
                         }
                     }
@@ -67,7 +73,7 @@ impl MainTreeCache {
             }
         }
 
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     #[inline]
@@ -94,10 +100,7 @@ impl MainTreeCache {
                 for (index, cached_record) in cached_records.iter_mut().enumerate() {
                     if record.record == cached_record.record {
                         record_matched = true;
-                        if record.is_authoritative() && cached_record.is_authoritative() {
-                            cached_record.set_ttl(*record.get_ttl());
-                            cached_record.meta.insertion_time = received_time;
-                        } else if !record.is_authoritative() && !cached_record.is_authoritative() {
+                        if record.is_authoritative() == cached_record.is_authoritative() {
                             cached_record.set_ttl(*record.get_ttl());
                             cached_record.meta.insertion_time = received_time;
                         }
@@ -137,7 +140,7 @@ impl MainTreeCache {
 
 impl MainCache for MainTreeCache {
     fn get(&self, query: &CacheQuery) -> CacheResponse {
-        match self.get_records(&query) {
+        match self.get_records(query) {
             Ok(records) => CacheResponse::Records(records),
             Err(_) => CacheResponse::Err(RCode::ServFail),
         }

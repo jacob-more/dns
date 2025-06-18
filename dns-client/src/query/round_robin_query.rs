@@ -55,7 +55,7 @@ where
 {
     let ns_question = context
         .query()
-        .with_new_qname_qtype(ns_domain.clone(), address_rtype.clone());
+        .with_new_qname_qtype(ns_domain.clone(), address_rtype);
 
     let ns_addresses;
     let cache_response;
@@ -149,8 +149,8 @@ where
                         )
                     })
                     .filter(|(average_dropped_udp_packets, average_udp_response_time)| {
-                        (average_dropped_udp_packets.is_finite()
-                            && average_udp_response_time.is_finite())
+                        average_dropped_udp_packets.is_finite()
+                            && average_udp_response_time.is_finite()
                     })
                     // If more than 80% of UDP packets are being dropped, we'd rather explore new
                     // addresses. Otherwise, this address would still be technically better than one
@@ -174,13 +174,10 @@ fn take_random<T>(vec: &mut Vec<T>) -> Option<T> {
     Some(vec.swap_remove(i))
 }
 
-fn take_best_address<'a, 'b, 'c, CCache>(
+fn take_best_address(
     ns_addresses: &mut Vec<IpAddr>,
     sockets: &HashMap<IpAddr, Arc<MixedSocket>>,
-) -> Option<IpAddr>
-where
-    CCache: AsyncCache + Send + Sync,
-{
+) -> Option<IpAddr> {
     match ns_addresses.iter().enumerate().max_by_key(|(_, address)| {
         sockets
             .get(address)
@@ -191,7 +188,7 @@ where
                 )
             })
             .filter(|(average_dropped_udp_packets, average_udp_response_time)| {
-                (average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite())
+                average_dropped_udp_packets.is_finite() && average_udp_response_time.is_finite()
             })
             // If more than 80% of UDP packets are being dropped, we'd rather explore new
             // addresses. Otherwise, this address would still be technically better than one
@@ -242,13 +239,10 @@ where
             query_network(&client, joined_cache, context.query(), &name_server_address).await
         }
 
-        async fn query_for_sockets<CCache>(
+        async fn query_for_sockets(
             client: Arc<DNSAsyncClient>,
             sockets: Vec<IpAddr>,
-        ) -> Vec<Arc<MixedSocket>>
-        where
-            CCache: AsyncCache + Send,
-        {
+        ) -> Vec<Arc<MixedSocket>> {
             client
                 .socket_manager
                 .try_get_all_udp_tcp(sockets.iter())
@@ -259,17 +253,13 @@ where
             let this = self.as_mut().project();
             match this.state {
                 InnerNSQuery::Fresh(NSQueryCacheResponse::Hit) => {
-                    let sockets_addresses = this
-                        .ns_addresses
-                        .iter()
-                        .map(|address| *address)
-                        .collect::<Vec<_>>();
+                    let sockets_addresses = this.ns_addresses.to_vec();
                     let client = this.client.clone();
                     let context = &self.context;
                     trace!(context:?; "NSQuery::Fresh(Hit) -> NSQuery::GettingSocketStats for {:#?}", self.ns_addresses);
 
                     self.state = InnerNSQuery::GettingSocketStats(
-                        query_for_sockets::<CCache>(client, sockets_addresses).boxed(),
+                        query_for_sockets(client, sockets_addresses).boxed(),
                     );
 
                     // TODO
@@ -333,7 +323,7 @@ where
                             additional: _,
                         })) => {
                             this.ns_addresses
-                                .extend(answer.into_iter().filter_map(|record| rr_to_ip(record)));
+                                .extend(answer.into_iter().filter_map(rr_to_ip));
                             if this.ns_addresses.is_empty() {
                                 let context = &self.context;
                                 trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::OutOfAddresses: tried to query first ns address but out of addresses");
@@ -343,17 +333,13 @@ where
                                 // Exit loop. There are no addresses to query.
                                 return Poll::Ready(NSQueryResult::OutOfAddresses);
                             } else {
-                                let sockets_addresses = this
-                                    .ns_addresses
-                                    .iter()
-                                    .map(|address| *address)
-                                    .collect::<Vec<_>>();
+                                let sockets_addresses = this.ns_addresses.to_vec();
                                 let client = this.client.clone();
                                 let context = &self.context;
                                 trace!(context:?; "NSQuery::QueryingNetworkNSAddresses -> NSQuery::GettingSocketStats");
 
                                 self.state = InnerNSQuery::GettingSocketStats(
-                                    query_for_sockets::<CCache>(client, sockets_addresses).boxed(),
+                                    query_for_sockets(client, sockets_addresses).boxed(),
                                 );
 
                                 // TODO
@@ -413,7 +399,7 @@ where
                     }
                 }
                 InnerNSQuery::NetworkQueryStart => {
-                    match take_best_address::<CCache>(this.ns_addresses, &this.sockets) {
+                    match take_best_address(this.ns_addresses, this.sockets) {
                         Some(next_ns_address) => {
                             let context = this.context.as_ref();
                             trace!(context:?; "NSQuery::NetworkQueryStart -> NSQuery::QueryingNetwork: setting up query to next ns {next_ns_address}");
@@ -531,7 +517,7 @@ where
     match ns_queries
         .iter()
         .enumerate()
-        .max_by_key(|(_, ns_query)| ns_query.best_address_stats().map(|stats| Reverse(stats)))
+        .max_by_key(|(_, ns_query)| ns_query.best_address_stats().map(Reverse))
     {
         Some((index, _)) => Some(ns_queries.swap_remove(index)),
         None => take_random(ns_queries),
@@ -632,7 +618,7 @@ where
                         this.ns_queries.push(ns_query);
                     }
                     (None, NSQueryResult::OutOfAddresses) => {
-                        let _ = this.running.swap_remove(index);
+                        drop(this.running.swap_remove(index));
                         // Don't want to be erroneously woken up if there is
                         // nobody else to add.
                         this.add_query_timer.set(None);
@@ -807,8 +793,8 @@ where
                         let mut ns_queries = Vec::with_capacity(
                             name_server_non_cached_queries.len() + name_server_cached_queries.len(),
                         );
-                        ns_queries.extend(name_server_non_cached_queries.drain(..));
-                        ns_queries.extend(name_server_cached_queries.drain(..));
+                        ns_queries.append(name_server_non_cached_queries);
+                        ns_queries.append(name_server_cached_queries);
                         let ns_query_select =
                             NSSelectQuery::new(ns_queries, 3, Duration::from_millis(200));
 
@@ -1153,7 +1139,7 @@ where
                     let mut w_active_queries =
                         this.round_robin.client.active_queries.write().unwrap();
                     if let Some(result_sender) =
-                        w_active_queries.remove(&this.round_robin.context.query())
+                        w_active_queries.remove(this.round_robin.context.query())
                     {
                         // Always make sure the channel is closed. This *should* never have an
                         // effect but will ensure that it is never left open.

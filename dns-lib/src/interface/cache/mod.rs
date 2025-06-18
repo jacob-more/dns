@@ -27,7 +27,7 @@ pub struct CacheQuery<'a> {
 impl<'a> CacheQuery<'a> {
     #[inline]
     pub const fn qname(&self) -> &CDomainName {
-        &self.question.qname()
+        self.question.qname()
     }
 
     #[inline]

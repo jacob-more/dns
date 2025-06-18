@@ -20,17 +20,17 @@ pub struct NSEC {
 
 impl FromTokenizedRData for NSEC {
     fn from_tokenized_rdata(
-        rdata: &Vec<&str>,
+        rdata: &[&str],
     ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
     where
         Self: Sized,
     {
-        match rdata.as_slice() {
-            &[] | &[_] => Err(TokenizedRecordError::TooFewRDataTokensError {
+        match rdata {
+            [] | [_] => Err(TokenizedRecordError::TooFewRDataTokensError {
                 expected: 2,
                 received: rdata.len(),
             }),
-            &[next_domain_name, ..] => {
+            [next_domain_name, ..] => {
                 let (next_domain_name, _) = DomainName::from_token_format(&[next_domain_name])?;
                 let (type_bit_map, _) = RTypeBitmap::from_token_format(&rdata[1..])?;
                 Ok(Self {

@@ -83,8 +83,7 @@ impl<T: BaseConversions> FromWire for T {
         Self: Sized,
         'a: 'b,
     {
-        let base = Self::from_bytes(wire.take_all());
-        return Ok(base);
+        Ok(Self::from_bytes(wire.take_all()))
     }
 }
 

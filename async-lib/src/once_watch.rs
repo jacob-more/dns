@@ -64,18 +64,15 @@ enum SendCellData<T> {
 
 impl<T> SendCellData<T> {
     pub fn is_fresh(&self) -> bool {
-        match self {
-            Self::Fresh => true,
-            _ => false,
-        }
+        matches!(self, Self::Fresh)
     }
 
     pub fn try_close(&mut self) -> bool {
         if self.is_fresh() {
             *self = Self::EmptyClosed;
-            return true;
+            true
         } else {
-            return false;
+            false
         }
     }
 }
@@ -132,6 +129,12 @@ pub struct Sender<T> {
     awake_token: Arc<SharedAwakeToken<SendCell<T>>>,
 }
 
+impl<T> Default for Sender<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Sender<T> {
     fn shared(&self) -> &SendCell<T> {
         &self.awake_token.shared
@@ -148,10 +151,10 @@ impl<T> Sender<T> {
         if w_data.try_close() {
             drop(w_data);
             self.awake_token.awake();
-            return true;
+            true
         } else {
             drop(w_data);
-            return false;
+            false
         }
     }
 
@@ -180,10 +183,10 @@ impl<T> OnceWatchSend<T> for Sender<T> {
             *w_shared = SendCellData::Closed(value);
             drop(w_shared);
             self.awake_token.awake();
-            return Ok(());
+            Ok(())
         } else {
             drop(w_shared);
-            return Err(SendError::Closed);
+            Err(SendError::Closed)
         }
     }
 }
@@ -195,10 +198,10 @@ impl<T: Clone> OnceWatchSend<&T> for Sender<T> {
             *w_shared = SendCellData::Closed(value.clone());
             drop(w_shared);
             self.awake_token.awake();
-            return Ok(());
+            Ok(())
         } else {
             drop(w_shared);
-            return Err(SendError::Closed);
+            Err(SendError::Closed)
         }
     }
 }
@@ -245,6 +248,12 @@ pub struct Receiver<T> {
     awoken_token: SharedAwokenToken<SendCell<T>>,
 }
 
+impl<T> Default for Receiver<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Receiver<T> {
     fn shared(&self) -> &SendCell<T> {
         &self.awoken_token.get_shared_awake_token().shared
@@ -261,10 +270,10 @@ impl<T> Receiver<T> {
         if w_data.try_close() {
             drop(w_data);
             self.awoken_token.get_shared_awake_token().awake();
-            return true;
+            true
         } else {
             drop(w_data);
-            return false;
+            false
         }
     }
 
@@ -319,8 +328,8 @@ impl<T> Clone for Receiver<T> {
 impl<T> PartialEq for Receiver<T> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(
-            &self.awoken_token.get_shared_awake_token(),
-            &other.awoken_token.get_shared_awake_token(),
+            self.awoken_token.get_shared_awake_token(),
+            other.awoken_token.get_shared_awake_token(),
         )
     }
 }
@@ -329,7 +338,7 @@ impl<T> Eq for Receiver<T> {}
 
 impl<T> Hash for Receiver<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.awoken_token.get_shared_awake_token()).hash(state);
+        Arc::as_ptr(self.awoken_token.get_shared_awake_token()).hash(state);
     }
 }
 

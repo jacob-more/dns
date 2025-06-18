@@ -11,6 +11,12 @@ impl MAILB {
     }
 }
 
+impl Default for MAILB {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod circular_serde_sanity_test {
     use super::MAILB;

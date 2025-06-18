@@ -136,7 +136,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                         return Some(Err(TokenizerError::OriginUsedBeforeDefined));
                     }
                 },
-                Some(Ok(Entry::TTL { ttl })) => self.ttl_directive = Some(ttl),
+                Some(Ok(Entry::Ttl { ttl })) => self.ttl_directive = Some(ttl),
                 Some(Ok(Entry::RClass { rclass })) => self.rclass_directive = Some(rclass),
                 Some(Ok(Entry::Include {
                     file_name,

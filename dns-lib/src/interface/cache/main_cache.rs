@@ -70,7 +70,7 @@ pub trait MainCache {
 
     #[inline]
     fn load_from_string(&mut self, string: &str, authoritative: MetaAuth) {
-        self.load_from_tokenizer(ZoneFileReader::new(&string), authoritative)
+        self.load_from_tokenizer(ZoneFileReader::new(string), authoritative)
     }
 
     #[inline]
@@ -160,7 +160,7 @@ pub trait AsyncMainCache {
 
     #[inline]
     async fn load_from_string(&self, string: &str, authoritative: MetaAuth) {
-        self.load_from_tokenizer(ZoneFileReader::new(&string), authoritative)
+        self.load_from_tokenizer(ZoneFileReader::new(string), authoritative)
             .await
     }
 

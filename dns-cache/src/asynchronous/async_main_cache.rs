@@ -17,6 +17,12 @@ pub struct AsyncMainTreeCache {
     cache: AsyncTreeCache<Vec<CacheRecord>>,
 }
 
+impl Default for AsyncMainTreeCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AsyncMainTreeCache {
     #[inline]
     pub fn new() -> Self {
@@ -32,48 +38,46 @@ impl AsyncMainTreeCache {
     ) -> Result<Vec<CacheRecord>, AsyncTreeCacheError> {
         match query.qtype() {
             RType::ANY => {
-                if let Some(node) = self.cache.get_node(&query.question).await? {
+                if let Some(node) = self.cache.get_node(query.question).await? {
                     let read_records = node.records.read().await;
-                    let result;
-                    if query.authoritative {
-                        result = read_records
+                    let result = if query.authoritative {
+                        read_records
                             .values()
                             .flatten()
                             .filter(|record| record.is_authoritative())
                             .filter(|record| !record.is_expired())
-                            .map(|cache_record| cache_record.clone())
-                            .collect();
+                            .cloned()
+                            .collect()
                     } else {
-                        result = read_records
+                        read_records
                             .values()
                             .flatten()
                             .filter(|record| !record.is_expired())
-                            .map(|cache_record| cache_record.clone())
-                            .collect();
-                    }
+                            .cloned()
+                            .collect()
+                    };
                     drop(read_records);
                     return Ok(result);
                 }
             }
             _ => {
-                if let Some(node) = self.cache.get_node(&query.question).await? {
+                if let Some(node) = self.cache.get_node(query.question).await? {
                     let read_records = node.records.read().await;
                     if let Some(records) = read_records.get(&query.qtype()) {
-                        let result;
-                        if query.authoritative {
-                            result = records
+                        let result = if query.authoritative {
+                            records
                                 .iter()
                                 .filter(|record| record.is_authoritative())
                                 .filter(|record| !record.is_expired())
-                                .map(|cache_record| cache_record.clone())
-                                .collect();
+                                .cloned()
+                                .collect()
                         } else {
-                            result = records
+                            records
                                 .iter()
                                 .filter(|record| !record.is_expired())
-                                .map(|cache_record| cache_record.clone())
-                                .collect();
-                        }
+                                .cloned()
+                                .collect()
+                        };
                         drop(read_records);
                         return Ok(result);
                     }
@@ -82,7 +86,7 @@ impl AsyncMainTreeCache {
             }
         }
 
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     #[inline]
@@ -164,7 +168,7 @@ impl AsyncMainTreeCache {
 #[async_trait]
 impl AsyncMainCache for AsyncMainTreeCache {
     async fn get(&self, query: &CacheQuery) -> CacheResponse {
-        match self.get_records(&query).await {
+        match self.get_records(query).await {
             Ok(records) => CacheResponse::Records(records),
             Err(_) => CacheResponse::Err(RCode::ServFail),
         }

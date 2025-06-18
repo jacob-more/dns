@@ -1,6 +1,5 @@
 use std::{
     future::Future,
-    iter::repeat,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -39,7 +38,7 @@ fn append_with_heavy_contention_benchmark(c: &mut Criterion) {
         // until the benchmark is done running.
         let contention_alive = Arc::new(AtomicBool::new(true));
         let mut contention_threads = Vec::with_capacity(thread_count);
-        repeat(0).take(thread_count).for_each(|_| {
+        std::iter::repeat_n(0, thread_count).for_each(|_| {
             let contention_thread = thread::spawn({
                 let awake_token = awake_token.clone();
                 let contention_alive = contention_alive.clone();
@@ -97,7 +96,7 @@ fn append_with_heavy_contention_multiadd_benchmark(c: &mut Criterion) {
         // until the benchmark is done running.
         let contention_alive = Arc::new(AtomicBool::new(true));
         let mut contention_threads = Vec::with_capacity(thread_count);
-        repeat(0).take(thread_count).for_each(|_| {
+        std::iter::repeat_n(0, thread_count).for_each(|_| {
             let contention_thread = thread::spawn({
                 let awake_token = awake_token.clone();
                 let contention_alive = contention_alive.clone();
@@ -158,14 +157,14 @@ fn append_with_heavy_contention_multiadd_benchmark(c: &mut Criterion) {
 fn append_with_light_contention_benchmark(c: &mut Criterion) {
     let mut benchmark_group = c.benchmark_group("Append With Light Contention");
 
-    for thread_count in (1_usize..128_usize).into_iter().filter(|x| x % 2 == 1) {
+    for thread_count in (1_usize..128_usize).filter(|x| x % 2 == 1) {
         let awake_token = AwakeToken::new();
 
         // Start a separate thread that just appends and removes from the list
         // until the benchmark is done running.
         let contention_alive = Arc::new(AtomicBool::new(true));
         let mut contention_threads = Vec::with_capacity(thread_count);
-        repeat(0).take(thread_count).for_each(|_| {
+        std::iter::repeat_n(0, thread_count).for_each(|_| {
             let contention_thread = thread::spawn({
                 let awake_token = awake_token.clone();
                 let contention_alive = contention_alive.clone();
@@ -218,14 +217,14 @@ fn append_with_light_contention_benchmark(c: &mut Criterion) {
 fn append_with_light_contention_multiadd_benchmark(c: &mut Criterion) {
     let mut benchmark_group = c.benchmark_group("Append With Light Contention Multi-Add");
 
-    for thread_count in (1_usize..128_usize).into_iter().filter(|x| x % 2 == 1) {
+    for thread_count in (1_usize..128_usize).filter(|x| x % 2 == 1) {
         let awake_token = AwakeToken::new();
 
         // Start a separate thread that just appends and removes from the list
         // until the benchmark is done running.
         let contention_alive = Arc::new(AtomicBool::new(true));
         let mut contention_threads = Vec::with_capacity(thread_count);
-        repeat(0).take(thread_count).for_each(|_| {
+        std::iter::repeat_n(0, thread_count).for_each(|_| {
             let contention_thread = thread::spawn({
                 let awake_token = awake_token.clone();
                 let contention_alive = contention_alive.clone();

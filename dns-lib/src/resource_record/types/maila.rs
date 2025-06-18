@@ -11,6 +11,12 @@ impl MAILA {
     }
 }
 
+impl Default for MAILA {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod circular_serde_sanity_test {
     use super::MAILA;

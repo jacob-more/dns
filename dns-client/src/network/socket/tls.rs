@@ -9,23 +9,23 @@ use dns_lib::types::c_domain_name::CDomainName;
 use futures::{FutureExt, future::BoxFuture};
 use pin_project::{pin_project, pinned_drop};
 use rustls::pki_types::ServerName;
-use tokio::{net::TcpStream, sync::Mutex, task::JoinHandle, time::Sleep};
+use tokio::{net::TcpStream, task::JoinHandle, time::Sleep};
 use tokio_rustls::{Connect, TlsConnector, client::TlsStream};
 
 use crate::network::{errors, mixed_tcp_udp::TCP_INIT_TIMEOUT};
 
 use super::{FutureSocket, PollSocket};
 
-pub type TlsWriteHalf = tokio::io::WriteHalf<TlsStream<TcpStream>>;
+pub type TlsWriteHalf = Arc<tokio::sync::Mutex<tokio::io::WriteHalf<TlsStream<TcpStream>>>>;
 pub type TlsReadHalf = tokio::io::ReadHalf<TlsStream<TcpStream>>;
 
 pub(crate) enum TlsState {
     Managed {
-        socket: Arc<tokio::sync::Mutex<TlsWriteHalf>>,
+        socket: TlsWriteHalf,
         kill: AwakeToken,
     },
     Establishing {
-        sender: once_watch::Sender<(Arc<tokio::sync::Mutex<TlsWriteHalf>>, AwakeToken)>,
+        sender: once_watch::Sender<(TlsWriteHalf, AwakeToken)>,
         kill: AwakeToken,
     },
     None,
@@ -54,9 +54,7 @@ where
     /// Start the TLS listener and drive the TLS state to Managed.
     /// Returns a reference to the created TLS stream.
     #[inline]
-    async fn init(
-        self: Arc<Self>,
-    ) -> Result<(Arc<tokio::sync::Mutex<TlsWriteHalf>>, AwakeToken), errors::SocketError> {
+    async fn init(self: Arc<Self>) -> Result<(TlsWriteHalf, AwakeToken), errors::SocketError> {
         InitTls::new(&self, None).await
     }
 
@@ -98,12 +96,9 @@ where
         }
 
         // If the socket still initialized, shut it down immediately.
-        match receiver.await {
-            Ok((_, tls_kill)) => {
-                tls_kill.awake();
-            }
-            Err(_) => (), //< Successful cancellation
-        }
+        if let Ok((_, kill_tls)) = receiver.await {
+            kill_tls.awake();
+        } // else, successful cancellation
     }
 
     /// If the TLS state is Blocked, changes it to None.
@@ -162,12 +157,9 @@ where
         }
 
         // If the socket still initialized, shut it down immediately.
-        match receiver.await {
-            Ok((_, kill_tls)) => {
-                kill_tls.awake();
-            }
-            Err(_) => (), //< Successful cancellation
-        }
+        if let Ok((_, kill_tls)) = receiver.await {
+            kill_tls.awake();
+        } // else, successful cancellation
     }
 
     /// Starts a TLS listener to read data from the provided socket. This processes should stop
@@ -181,15 +173,14 @@ pub(crate) enum QTlsSocket {
     Fresh,
     GetTlsEstablishing {
         #[pin]
-        receive_tls_socket: once_watch::Receiver<(Arc<Mutex<TlsWriteHalf>>, AwakeToken)>,
+        receive_tls_socket: once_watch::Receiver<(TlsWriteHalf, AwakeToken)>,
     },
     InitTls {
         #[pin]
-        join_handle:
-            JoinHandle<Result<(Arc<Mutex<TlsWriteHalf>>, AwakeToken), errors::SocketError>>,
+        join_handle: JoinHandle<Result<(TlsWriteHalf, AwakeToken), errors::SocketError>>,
     },
     Acquired {
-        tls_socket: Arc<Mutex<TlsWriteHalf>>,
+        tls_socket: TlsWriteHalf,
         #[pin]
         kill_tls: AwokenToken,
     },
@@ -200,7 +191,7 @@ impl<'a> QTlsSocket {
     #[inline]
     pub fn set_get_tls_establishing(
         mut self: std::pin::Pin<&mut Self>,
-        receiver: once_watch::Receiver<(Arc<tokio::sync::Mutex<TlsWriteHalf>>, AwakeToken)>,
+        receiver: once_watch::Receiver<(TlsWriteHalf, AwakeToken)>,
     ) {
         self.set(Self::GetTlsEstablishing {
             receive_tls_socket: receiver,
@@ -219,7 +210,7 @@ impl<'a> QTlsSocket {
     #[inline]
     pub fn set_acquired(
         mut self: std::pin::Pin<&mut Self>,
-        tls_socket: Arc<tokio::sync::Mutex<TlsWriteHalf>>,
+        tls_socket: TlsWriteHalf,
         kill_tls_token: AwakeToken,
     ) {
         self.set(Self::Acquired {
@@ -255,7 +246,7 @@ impl<'a, 'd, S: TlsSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTls
                         self.as_mut().set_acquired(quic_socket, kill_quic);
 
                         // Next loop should poll `kill_tls`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     TlsState::Establishing { sender, kill: _ } => {
                         let sender = sender.subscribe();
@@ -264,7 +255,7 @@ impl<'a, 'd, S: TlsSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTls
                         self.as_mut().set_get_tls_establishing(sender);
 
                         // Next loop should poll `receive_tls_socket`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     TlsState::None => {
                         drop(r_tls_state);
@@ -272,7 +263,7 @@ impl<'a, 'd, S: TlsSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTls
                         self.as_mut().set_init_tls(socket);
 
                         // Next loop should poll `join_handle`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     TlsState::Blocked => {
                         drop(r_tls_state);
@@ -284,7 +275,7 @@ impl<'a, 'd, S: TlsSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTls
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
                 }
             }
@@ -296,7 +287,7 @@ impl<'a, 'd, S: TlsSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTls
                         self.as_mut().set_acquired(tls_socket, tls_kill);
 
                         // Next loop should poll `kill_tls`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                         let error = errors::SocketError::Shutdown(
@@ -306,11 +297,9 @@ impl<'a, 'd, S: TlsSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTls
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    }
+                    Poll::Pending => PollSocket::Pending,
                 }
             }
             QTlsSocketProj::InitTls { mut join_handle } => {
@@ -319,29 +308,27 @@ impl<'a, 'd, S: TlsSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTls
                         self.as_mut().set_acquired(tls_socket, kill_tls_token);
 
                         // Next loop should poll `kill_tls`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     Poll::Ready(Ok(Err(error))) => {
-                        let error = errors::SocketError::from(error);
+                        let error = error;
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
                     Poll::Ready(Err(join_error)) => {
-                        let error = errors::SocketError::from(errors::SocketError::from((
+                        let error = errors::SocketError::from((
                             errors::SocketType::Tls,
                             errors::SocketStage::Initialization,
                             join_error,
-                        )));
+                        ));
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    }
+                    Poll::Pending => PollSocket::Pending,
                 }
             }
             QTlsSocketProj::Acquired {
@@ -356,15 +343,11 @@ impl<'a, 'd, S: TlsSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QTls
 
                     self.as_mut().set_closed(error.clone());
 
-                    return PollSocket::Error(error);
+                    PollSocket::Error(error)
                 }
-                Poll::Pending => {
-                    return PollSocket::Pending;
-                }
+                Poll::Pending => PollSocket::Pending,
             },
-            QTlsSocketProj::Closed(error) => {
-                return PollSocket::Error(error.clone());
-            }
+            QTlsSocketProj::Closed(error) => PollSocket::Error(error.clone()),
         }
     }
 }
@@ -385,7 +368,7 @@ where
     socket: &'a Arc<S>,
     #[pin]
     kill_tls: AwokenToken,
-    tls_socket_sender: once_watch::Sender<(Arc<Mutex<TlsWriteHalf>>, AwakeToken)>,
+    tls_socket_sender: once_watch::Sender<(TlsWriteHalf, AwakeToken)>,
     #[pin]
     timeout: Sleep,
     #[pin]
@@ -393,6 +376,7 @@ where
 }
 
 #[pin_project(project = InnerInitTlsProj)]
+#[allow(clippy::large_enum_variant)]
 enum InnerInitTls<'d> {
     Fresh,
     WriteEstablishing,
@@ -402,11 +386,11 @@ enum InnerInitTls<'d> {
         reason: CleanupReason<errors::SocketError>,
     },
     WriteManaged {
-        tls_socket: Arc<Mutex<TlsWriteHalf>>,
+        tls_socket: TlsWriteHalf,
     },
     GetEstablishing {
         #[pin]
-        receive_tls_socket: once_watch::Receiver<(Arc<Mutex<TlsWriteHalf>>, AwakeToken)>,
+        receive_tls_socket: once_watch::Receiver<(TlsWriteHalf, AwakeToken)>,
     },
     Complete,
 }
@@ -435,7 +419,7 @@ impl<'a, 'd, S> Future for InitTls<'a, 'd, S>
 where
     S: TlsSocket,
 {
-    type Output = Result<(Arc<Mutex<TlsWriteHalf>>, AwakeToken), errors::SocketError>;
+    type Output = Result<(TlsWriteHalf, AwakeToken), errors::SocketError>;
 
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
@@ -644,7 +628,8 @@ where
                             // FIXME: There is an open issue discussing the safety of splitting the stream.
                             // See https://github.com/tokio-rs/tls/issues/40
                             let (tls_read_socket, tls_write_socket) = tokio::io::split(tls_socket);
-                            let tls_write_socket = Arc::new(Mutex::new(tls_write_socket));
+                            let tls_write_socket =
+                                Arc::new(tokio::sync::Mutex::new(tls_write_socket));
                             tokio::spawn(
                                 this.socket
                                     .clone()

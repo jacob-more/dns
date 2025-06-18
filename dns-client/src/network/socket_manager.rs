@@ -215,21 +215,18 @@ impl SocketManager {
     #[inline]
     pub async fn get_udp_tcp(&self, address: IpAddr) -> Arc<MixedSocket> {
         let r_socket_manager = self.internal.read().await;
-        match r_socket_manager.udp_tcp_sockets.get(&address) {
-            Some((socket, _)) => return socket.clone(),
-            None => (),
+        if let Some((socket, _)) = r_socket_manager.udp_tcp_sockets.get(&address) {
+            return socket.clone();
         }
         drop(r_socket_manager);
 
         let mut w_socket_manager = self.internal.write().await;
         match w_socket_manager.udp_tcp_sockets.entry(address) {
-            Entry::Occupied(occupied_entry) => {
-                return occupied_entry.get().0.clone();
-            }
+            Entry::Occupied(occupied_entry) => occupied_entry.get().0.clone(),
             Entry::Vacant(vacant_entry) => {
-                let socket = MixedSocket::new(address.clone());
+                let socket = MixedSocket::new(address);
                 vacant_entry.insert((socket.clone(), 0));
-                return socket;
+                socket
             }
         }
     }
@@ -242,7 +239,7 @@ impl SocketManager {
         let r_socket_manager = self.internal.read().await;
         let socket = r_socket_manager.udp_tcp_sockets.get(address).cloned();
         drop(r_socket_manager);
-        return socket.map(|(socket, _)| socket);
+        socket.map(|(socket, _)| socket)
     }
 
     /// # Cancel Safety
@@ -257,19 +254,17 @@ impl SocketManager {
         let sockets = addresses
             .map(
                 |address| match w_socket_manager.udp_tcp_sockets.entry(address) {
-                    Entry::Occupied(occupied_entry) => {
-                        return occupied_entry.get().0.clone();
-                    }
+                    Entry::Occupied(occupied_entry) => occupied_entry.get().0.clone(),
                     Entry::Vacant(vacant_entry) => {
-                        let socket = MixedSocket::new(address.clone());
+                        let socket = MixedSocket::new(address);
                         vacant_entry.insert((socket.clone(), 0));
-                        return socket;
+                        socket
                     }
                 },
             )
             .collect::<Vec<_>>();
         drop(w_socket_manager);
-        return sockets;
+        sockets
     }
 
     /// # Cancel Safety
@@ -290,7 +285,7 @@ impl SocketManager {
             })
             .collect::<Vec<_>>();
         drop(r_socket_manager);
-        return sockets;
+        sockets
     }
 
     #[inline]
@@ -314,23 +309,20 @@ impl SocketManager {
     #[inline]
     pub async fn get_tls(&self, address: (IpAddr, CDomainName)) -> Arc<TlsSocket> {
         let r_socket_manager = self.internal.read().await;
-        match r_socket_manager.tls_sockets.get(&address) {
-            Some((socket, _)) => return socket.clone(),
-            None => (),
+        if let Some((socket, _)) = r_socket_manager.tls_sockets.get(&address) {
+            return socket.clone();
         }
         drop(r_socket_manager);
 
         let mut w_socket_manager = self.internal.write().await;
         match w_socket_manager.tls_sockets.entry(address) {
-            Entry::Occupied(occupied_entry) => {
-                return occupied_entry.get().0.clone();
-            }
+            Entry::Occupied(occupied_entry) => occupied_entry.get().0.clone(),
             Entry::Vacant(vacant_entry) => {
-                let address = vacant_entry.key().0.clone();
+                let address = vacant_entry.key().0;
                 let name = vacant_entry.key().1.clone();
                 let socket = TlsSocket::new(address, name, self.tls_client_config.clone());
                 vacant_entry.insert((socket.clone(), 0));
-                return socket;
+                socket
             }
         }
     }
@@ -343,7 +335,7 @@ impl SocketManager {
         let r_socket_manager = self.internal.read().await;
         let socket = r_socket_manager.tls_sockets.get(address).cloned();
         drop(r_socket_manager);
-        return socket.map(|(socket, _)| socket);
+        socket.map(|(socket, _)| socket)
     }
 
     /// # Cancel Safety
@@ -358,21 +350,19 @@ impl SocketManager {
         let sockets = addresses
             .map(
                 |address| match w_socket_manager.tls_sockets.entry(address) {
-                    Entry::Occupied(occupied_entry) => {
-                        return occupied_entry.get().0.clone();
-                    }
+                    Entry::Occupied(occupied_entry) => occupied_entry.get().0.clone(),
                     Entry::Vacant(vacant_entry) => {
-                        let address = vacant_entry.key().0.clone();
+                        let address = vacant_entry.key().0;
                         let name = vacant_entry.key().1.clone();
                         let socket = TlsSocket::new(address, name, self.tls_client_config.clone());
                         vacant_entry.insert((socket.clone(), 0));
-                        return socket;
+                        socket
                     }
                 },
             )
             .collect::<Vec<_>>();
         drop(w_socket_manager);
-        return sockets;
+        sockets
     }
 
     /// # Cancel Safety
@@ -393,7 +383,7 @@ impl SocketManager {
             })
             .collect::<Vec<_>>();
         drop(r_socket_manager);
-        return sockets;
+        sockets
     }
 
     #[inline]
@@ -417,23 +407,20 @@ impl SocketManager {
     #[inline]
     pub async fn get_quic(&self, address: (IpAddr, CDomainName)) -> Arc<QuicSocket> {
         let r_socket_manager = self.internal.read().await;
-        match r_socket_manager.quic_sockets.get(&address) {
-            Some((socket, _)) => return socket.clone(),
-            None => (),
+        if let Some((socket, _)) = r_socket_manager.quic_sockets.get(&address) {
+            return socket.clone();
         }
         drop(r_socket_manager);
 
         let mut w_socket_manager = self.internal.write().await;
         match w_socket_manager.quic_sockets.entry(address) {
-            Entry::Occupied(occupied_entry) => {
-                return occupied_entry.get().0.clone();
-            }
+            Entry::Occupied(occupied_entry) => occupied_entry.get().0.clone(),
             Entry::Vacant(vacant_entry) => {
-                let address = vacant_entry.key().0.clone();
+                let address = vacant_entry.key().0;
                 let name = vacant_entry.key().1.clone();
                 let socket = QuicSocket::new(address, name, self.quic_client_config.clone());
                 vacant_entry.insert((socket.clone(), 0));
-                return socket;
+                socket
             }
         }
     }
@@ -446,7 +433,7 @@ impl SocketManager {
         let r_socket_manager = self.internal.read().await;
         let socket = r_socket_manager.quic_sockets.get(address).cloned();
         drop(r_socket_manager);
-        return socket.map(|(socket, _)| socket);
+        socket.map(|(socket, _)| socket)
     }
 
     /// # Cancel Safety
@@ -461,22 +448,20 @@ impl SocketManager {
         let sockets = addresses
             .map(
                 |address| match w_socket_manager.quic_sockets.entry(address) {
-                    Entry::Occupied(occupied_entry) => {
-                        return occupied_entry.get().0.clone();
-                    }
+                    Entry::Occupied(occupied_entry) => occupied_entry.get().0.clone(),
                     Entry::Vacant(vacant_entry) => {
-                        let address = vacant_entry.key().0.clone();
+                        let address = vacant_entry.key().0;
                         let name = vacant_entry.key().1.clone();
                         let socket =
                             QuicSocket::new(address, name, self.quic_client_config.clone());
                         vacant_entry.insert((socket.clone(), 0));
-                        return socket;
+                        socket
                     }
                 },
             )
             .collect::<Vec<_>>();
         drop(w_socket_manager);
-        return sockets;
+        sockets
     }
 
     /// # Cancel Safety
@@ -497,7 +482,7 @@ impl SocketManager {
             })
             .collect::<Vec<_>>();
         drop(r_socket_manager);
-        return sockets;
+        sockets
     }
 
     #[inline]

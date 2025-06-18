@@ -131,7 +131,7 @@ impl CharacterString {
         }
 
         self.ascii.push(character);
-        return Ok(());
+        Ok(())
     }
 
     #[inline]
@@ -152,7 +152,7 @@ impl CharacterString {
         }
 
         self.ascii.insert(index, character);
-        return Ok(());
+        Ok(())
     }
 
     #[inline]
@@ -333,8 +333,8 @@ impl FromPresentation for CharacterString {
         'c: 'd,
     {
         match tokens {
-            &[] => Err(TokenError::OutOfTokens),
-            &[token, ..] => Ok((Self::from_utf8(token)?, &tokens[1..])),
+            [] => Err(TokenError::OutOfTokens),
+            [token, ..] => Ok((Self::from_utf8(token)?, &tokens[1..])),
         }
     }
 }

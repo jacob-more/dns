@@ -37,6 +37,7 @@ impl Display for AsciiError {
 
 pub type AsciiChar = u8;
 
+#[allow(clippy::zero_prefixed_literal)]
 pub mod constants {
     use super::AsciiChar;
 
@@ -237,9 +238,7 @@ pub struct AsciiString {
 impl Display for AsciiString {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for character in
-            NonEscapedIntoEscapedIter::from(self.string.iter().map(|character| *character))
-        {
+        for character in NonEscapedIntoEscapedIter::from(self.string.iter().copied()) {
             write!(f, "{character}")?;
         }
         Ok(())
@@ -278,9 +277,9 @@ impl AsciiString {
                 ascii_characters.push(character as u8);
             }
         }
-        return Ok(Self {
+        Ok(Self {
             string: ascii_characters,
-        });
+        })
     }
 
     #[inline]
@@ -461,37 +460,27 @@ impl AsciiString {
 
     #[inline]
     pub fn is_alphabetic_or_empty(&self) -> bool {
-        self.string
-            .iter()
-            .all(|character| is_ascii_digit(character))
+        self.string.iter().all(is_ascii_digit)
     }
 
     #[inline]
     pub fn is_numeric_or_empty(&self) -> bool {
-        self.string
-            .iter()
-            .all(|character| is_ascii_digit(character))
+        self.string.iter().all(is_ascii_digit)
     }
 
     #[inline]
     pub fn is_alphanumeric_or_empty(&self) -> bool {
-        self.string
-            .iter()
-            .all(|character| is_ascii_alphanumeric(character))
+        self.string.iter().all(is_ascii_alphanumeric)
     }
 
     #[inline]
     pub fn is_lowercase_alphanumeric_or_empty(&self) -> bool {
-        self.string
-            .iter()
-            .all(|character| is_ascii_lowercase_alphanumeric(character))
+        self.string.iter().all(is_ascii_lowercase_alphanumeric)
     }
 
     #[inline]
     pub fn is_uppercase_alphanumeric_or_empty(&self) -> bool {
-        self.string
-            .iter()
-            .all(|character| is_ascii_uppercase_alphanumeric(character))
+        self.string.iter().all(is_ascii_uppercase_alphanumeric)
     }
 
     #[inline]
@@ -528,7 +517,7 @@ impl Add for AsciiString {
         let mut string = self.string.clone();
         string.extend(rhs.string);
 
-        Self { string: string }
+        Self { string }
     }
 }
 
@@ -560,8 +549,7 @@ impl FromWire for AsciiString {
         Self: Sized,
         'a: 'b,
     {
-        let string = Self::from(wire.take_all());
-        return Ok(string);
+        Ok(Self::from(wire.take_all()))
     }
 }
 
@@ -577,8 +565,8 @@ impl FromPresentation for AsciiString {
         'c: 'd,
     {
         match tokens {
-            &[] => Err(TokenError::OutOfTokens),
-            &[token, ..] => Ok((Self::from_utf8(token)?, &tokens[1..])),
+            [] => Err(TokenError::OutOfTokens),
+            [token, ..] => Ok((Self::from_utf8(token)?, &tokens[1..])),
         }
     }
 }

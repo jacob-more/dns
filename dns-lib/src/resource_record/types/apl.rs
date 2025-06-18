@@ -47,7 +47,7 @@ impl APL {
 impl FromTokenizedRData for APL {
     #[inline]
     fn from_tokenized_rdata(
-        rdata: &Vec<&str>,
+        rdata: &[&str],
     ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
     where
         Self: Sized,
@@ -236,12 +236,11 @@ impl FromWire for APItem {
                 }
 
                 let ipv4_wire_bytes = wire.take_or_err(byte_count, || {
-                    format!(
-                        "there are not enough bytes remaining in the wire to read the ipv4 address"
-                    )
+                    "there are not enough bytes remaining in the wire to read the ipv4 address"
+                        .to_string()
                 })?;
                 let mut ipv4_buffer = [0_u8; 16];
-                ipv4_buffer[..byte_count].copy_from_slice(&ipv4_wire_bytes);
+                ipv4_buffer[..byte_count].copy_from_slice(ipv4_wire_bytes);
                 AFDPart::Ipv4(Ipv4Addr::from_wire_format(&mut ReadWire::from_bytes(
                     &ipv4_buffer,
                 ))?)
@@ -260,12 +259,11 @@ impl FromWire for APItem {
                 }
 
                 let ipv6_wire_bytes = wire.take_or_err(byte_count, || {
-                    format!(
-                        "there are not enough bytes remaining in the wire to read the ipv6 address"
-                    )
+                    "there are not enough bytes remaining in the wire to read the ipv6 address"
+                        .to_string()
                 })?;
                 let mut ipv6_buffer = [0_u8; 16];
-                ipv6_buffer[..byte_count].copy_from_slice(&ipv6_wire_bytes);
+                ipv6_buffer[..byte_count].copy_from_slice(ipv6_wire_bytes);
                 AFDPart::Ipv6(Ipv6Addr::from_wire_format(&mut ReadWire::from_bytes(
                     &ipv6_buffer,
                 ))?)
@@ -316,9 +314,9 @@ impl APItem {
                 AddressFamily::from_code(u16::from_token_format(&[address_family_str])?.0)
             }
             None => {
-                return Err(TokenizedRecordError::ValueError(format!(
-                    "Address family unspecified; must prefix address with digits that specify the address family followed by a colon"
-                )));
+                return Err(TokenizedRecordError::ValueError(
+                    "Address family unspecified; must prefix address with digits that specify the address family followed by a colon".to_string()
+                ));
             }
         };
 
@@ -332,9 +330,9 @@ impl APItem {
                 u8::from_token_format(&[prefix_str])?.0
             }
             None => {
-                return Err(TokenizedRecordError::ValueError(format!(
-                    "Prefix unspecified; the address must be followed by a slash and digits indicating the prefix length"
-                )));
+                return Err(TokenizedRecordError::ValueError(
+                    "Prefix unspecified; the address must be followed by a slash and digits indicating the prefix length".to_string()
+                ));
             }
         };
 
@@ -390,13 +388,13 @@ impl APItem {
             }
         };
 
-        return Ok(Self {
+        Ok(Self {
             address_family,
             prefix,
             negation_flag,
             afd_length,
             afd_part,
-        });
+        })
     }
 }
 

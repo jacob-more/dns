@@ -13,6 +13,12 @@ pub struct AwakeToken {
     shared: Arc<SharedAwakeToken<()>>,
 }
 
+impl Default for AwakeToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AwakeToken {
     #[inline]
     pub fn new() -> Self {
@@ -69,7 +75,7 @@ impl SameAwakeToken<&AwakeToken> for AwakeToken {
 
 impl SameAwakeToken<&AwokenToken> for AwakeToken {
     fn same_awake_token(&self, other: &AwokenToken) -> bool {
-        Arc::ptr_eq(&self.shared, &other.shared.get_shared_awake_token())
+        Arc::ptr_eq(&self.shared, other.shared.get_shared_awake_token())
     }
 }
 
@@ -106,7 +112,7 @@ impl AwokenToken {
     }
 }
 
-impl<'a> Future for AwokenToken {
+impl Future for AwokenToken {
     type Output = ();
 
     #[inline]
@@ -120,15 +126,15 @@ impl<'a> Future for AwokenToken {
 
 impl SameAwakeToken<&AwakeToken> for AwokenToken {
     fn same_awake_token(&self, other: &AwakeToken) -> bool {
-        Arc::ptr_eq(&self.shared.get_shared_awake_token(), &other.shared)
+        Arc::ptr_eq(self.shared.get_shared_awake_token(), &other.shared)
     }
 }
 
 impl SameAwakeToken<&AwokenToken> for AwokenToken {
     fn same_awake_token(&self, other: &AwokenToken) -> bool {
         Arc::ptr_eq(
-            &self.shared.get_shared_awake_token(),
-            &other.shared.get_shared_awake_token(),
+            self.shared.get_shared_awake_token(),
+            other.shared.get_shared_awake_token(),
         )
     }
 }

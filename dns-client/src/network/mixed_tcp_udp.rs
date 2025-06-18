@@ -38,6 +38,7 @@ use tokio::{
 };
 
 use crate::network::{
+    OnceWatchMessageSender,
     async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt},
     errors,
     receive::{read_stream_message, read_udp_message},
@@ -135,18 +136,11 @@ pub(crate) const MAX_UDP_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum allowable UDP timeout.
 pub(crate) const MIN_UDP_TIMEOUT: Duration = Duration::from_millis(50);
 
-// Using the safe checked version of new is not stable. As long as we always use non-zero constants,
-// there should not be any problems with this.
-pub(crate) const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(11) };
-pub(crate) const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(13) };
-pub(crate) const ROLLING_AVERAGE_UDP_MAX_DROPPED: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(11) };
-pub(crate) const ROLLING_AVERAGE_UDP_MAX_RESPONSE_TIMES: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(13) };
-pub(crate) const ROLLING_AVERAGE_UDP_MAX_TRUNCATED: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(50) };
+pub(crate) const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8 = NonZeroU8::new(11).unwrap();
+pub(crate) const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = NonZeroU8::new(13).unwrap();
+pub(crate) const ROLLING_AVERAGE_UDP_MAX_DROPPED: NonZeroU8 = NonZeroU8::new(11).unwrap();
+pub(crate) const ROLLING_AVERAGE_UDP_MAX_RESPONSE_TIMES: NonZeroU8 = NonZeroU8::new(13).unwrap();
+pub(crate) const ROLLING_AVERAGE_UDP_MAX_TRUNCATED: NonZeroU8 = NonZeroU8::new(50).unwrap();
 
 fn bound<T>(value: T, lower_bound: T, upper_bound: T) -> T
 where
@@ -157,7 +151,7 @@ where
 }
 
 #[pin_project(project = MixedQueryProj)]
-pub enum MixedQuery<'a, 'b> {
+enum MixedQuery<'a, 'b> {
     Tcp(#[pin] TcpQuery<'a, 'b>),
     Udp(#[pin] UdpQuery<'a, 'b>),
 }
@@ -213,7 +207,7 @@ struct TcpQueryRunner<'a, 'b, 'e, 'h> {
     inner: InnerTQ<'e>,
 }
 
-impl<'a, 'b, 'e, 'f, 'h> TcpQueryRunner<'a, 'b, 'e, 'h> {
+impl<'a, 'b, 'e, 'h> TcpQueryRunner<'a, 'b, 'e, 'h> {
     #[inline]
     pub fn new(
         socket: &'a Arc<MixedSocket>,
@@ -444,7 +438,7 @@ impl<'a, 'b, 'e, 'h> Future for TcpQueryRunner<'a, 'b, 'e, 'h> {
                                     });
                                 }
 
-                                return Ok(());
+                                Ok(())
                             }
                             .boxed();
 
@@ -600,18 +594,16 @@ impl<'a, 'b, 'e, 'h> Future for TcpQueryRunner<'a, 'b, 'e, 'h> {
                                         MAX_TCP_TIMEOUT,
                                     );
                                 }
-                            } else {
-                                if average_tcp_dropped_packets.current_average()
-                                    >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD
-                                {
-                                    w_active_queries.tcp_timeout = bound(
-                                        w_active_queries.tcp_timeout.saturating_add(
-                                            TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED,
-                                        ),
-                                        MIN_TCP_TIMEOUT,
-                                        MAX_TCP_TIMEOUT,
-                                    );
-                                }
+                            } else if average_tcp_dropped_packets.current_average()
+                                >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD
+                            {
+                                w_active_queries.tcp_timeout = bound(
+                                    w_active_queries.tcp_timeout.saturating_add(
+                                        TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED,
+                                    ),
+                                    MIN_TCP_TIMEOUT,
+                                    MAX_TCP_TIMEOUT,
+                                );
                             }
                         }
                         TcpResponseTime::Responded(response_time) => {
@@ -1330,7 +1322,7 @@ impl<'a, 'b, 'c, 'f, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'f, 'i> {
                                         });
                                     }
 
-                                    return Ok(());
+                                    Ok(())
                                 }
                                 .boxed();
 
@@ -1489,7 +1481,7 @@ impl<'a, 'b, 'c, 'f, 'i> Future for UdpQueryRunner<'a, 'b, 'c, 'f, 'i> {
                                         });
                                     }
 
-                                    return Ok(());
+                                    Ok(())
                                 }
                                 .boxed();
 
@@ -2069,21 +2061,9 @@ struct ActiveQueries {
     udp_timeout: Duration,
     tcp_timeout: Duration,
 
-    in_flight: HashMap<
-        u16,
-        (
-            once_watch::Sender<Result<Message, errors::QueryError>>,
-            JoinHandle<()>,
-        ),
-    >,
-    tcp_only: HashMap<
-        TinyVec<[Question; 1]>,
-        (u16, once_watch::Sender<Result<Message, errors::QueryError>>),
-    >,
-    tcp_or_udp: HashMap<
-        TinyVec<[Question; 1]>,
-        (u16, once_watch::Sender<Result<Message, errors::QueryError>>),
-    >,
+    in_flight: HashMap<u16, (OnceWatchMessageSender, JoinHandle<()>)>,
+    tcp_only: HashMap<TinyVec<[Question; 1]>, (u16, OnceWatchMessageSender)>,
+    tcp_or_udp: HashMap<TinyVec<[Question; 1]>, (u16, OnceWatchMessageSender)>,
 }
 
 impl ActiveQueries {
@@ -2325,8 +2305,8 @@ impl MixedSocket {
             <Self as TcpSocket>::start(self),
         ) {
             (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(tcp_error)) => Err(errors::SocketError::from(tcp_error)),
-            (Err(udp_error), Ok(())) => Err(errors::SocketError::from(udp_error)),
+            (Ok(()), Err(tcp_error)) => Err(tcp_error),
+            (Err(udp_error), Ok(())) => Err(udp_error),
             (Err(udp_error), Err(tcp_error)) => {
                 Err(errors::SocketError::Multiple(vec![udp_error, tcp_error]))
             }
@@ -2357,15 +2337,16 @@ impl MixedSocket {
         );
     }
 
-    pub fn query<'a, 'b>(
-        self: &'a Arc<Self>,
-        query: &'b mut Message,
+    pub fn query(
+        self: &Arc<Self>,
+        query: &mut Message,
         options: QueryOpt,
-    ) -> MixedQuery<'a, 'b> {
+    ) -> impl Future<Output = Result<Message, errors::QueryError>> {
         // If the UDP socket is unreliable, send most data via TCP. Some queries should still use
         // UDP to determine if the network conditions are improving. However, if the TCP connection
         // is also unstable, then we should not rely on it.
-        let query_task = match options {
+
+        match options {
             QueryOpt::UdpTcp => {
                 let average_dropped_udp_packets = self.average_dropped_udp_packets();
                 let average_truncated_udp_packets = self.average_truncated_udp_packets();
@@ -2378,19 +2359,17 @@ impl MixedSocket {
                         || (average_dropped_tcp_packets <= 0.25))
                     && (rand::random::<f32>() >= 0.20)
                 {
-                    MixedQuery::Tcp(TcpQuery::new(&self, query))
+                    MixedQuery::Tcp(TcpQuery::new(self, query))
                 } else {
-                    MixedQuery::Udp(UdpQuery::new(&self, query))
+                    MixedQuery::Udp(UdpQuery::new(self, query))
                 }
             }
-            QueryOpt::Tcp => MixedQuery::Tcp(TcpQuery::new(&self, query)),
+            QueryOpt::Tcp => MixedQuery::Tcp(TcpQuery::new(self, query)),
             QueryOpt::Quic => todo!(),
             QueryOpt::Tls => todo!(),
             QueryOpt::QuicTls => todo!(),
             QueryOpt::Https => todo!(),
-        };
-
-        return query_task;
+        }
     }
 }
 

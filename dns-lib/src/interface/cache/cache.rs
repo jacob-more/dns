@@ -31,7 +31,7 @@ pub trait AsyncCache {
 
     async fn insert_message(&self, message: &Message) {
         let insertion_time = Instant::now();
-        match message.question.get(0) {
+        match message.question.first() {
             None => println!(
                 "Message could not be added to cache because it was missing a question section. {message:?}"
             ),

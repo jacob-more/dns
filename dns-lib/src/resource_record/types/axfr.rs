@@ -12,6 +12,12 @@ impl AXFR {
     }
 }
 
+impl Default for AXFR {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod circular_serde_sanity_test {
     use super::AXFR;

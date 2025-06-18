@@ -98,7 +98,7 @@ impl<Records> TreeCache<Records> {
             }
         }
 
-        return Ok(current_node);
+        Ok(current_node)
     }
 
     #[inline]
@@ -131,7 +131,7 @@ impl<Records> TreeCache<Records> {
             }
         }
 
-        return Ok(Some(current_node));
+        Ok(Some(current_node))
     }
 
     #[inline]
@@ -170,18 +170,16 @@ impl<Records> TreeCache<Records> {
         }
 
         match qname.labels().next() {
-            Some(last_label) => return Ok(parent_node.children.remove(last_label)),
-            None => {
-                return Err(TreeCacheError::InconsistentState(format!(
-                    "Could not determine the last label in the qname '{qname}'"
-                )));
-            }
-        };
+            Some(last_label) => Ok(parent_node.children.remove(last_label)),
+            None => Err(TreeCacheError::InconsistentState(format!(
+                "Could not determine the last label in the qname '{qname}'"
+            ))),
+        }
     }
 
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &TreeNode<Records>> {
-        TreeRootIterator::new(&self)
+        TreeRootIterator::new(self)
     }
 }
 
@@ -228,9 +226,9 @@ impl<'a, Records: 'a> Iterator for TreeRootIterator<'a, Records> {
             Some(next_child) => {
                 self.current_child_iter = Some(TreeChildIterator::new(next_child));
                 self.current_child = Some(next_child);
-                return self.next();
+                self.next()
             }
-            None => return None,
+            None => None,
         }
     }
 }

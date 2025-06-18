@@ -15,6 +15,12 @@ pub struct AsyncTransactionTreeCache {
     cache: AsyncTreeCache<Vec<CacheRecord>>,
 }
 
+impl Default for AsyncTransactionTreeCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AsyncTransactionTreeCache {
     #[inline]
     pub fn new() -> Self {
@@ -30,44 +36,35 @@ impl AsyncTransactionTreeCache {
     ) -> Result<Vec<CacheRecord>, AsyncTreeCacheError> {
         match query.qtype() {
             RType::ANY => {
-                if let Some(node) = self.cache.get_node(&query.question).await? {
+                if let Some(node) = self.cache.get_node(query.question).await? {
                     let read_records = node.records.read().await;
-                    let result;
-                    if query.authoritative {
-                        result = read_records
+                    let result = if query.authoritative {
+                        read_records
                             .values()
                             .flatten()
                             .filter(|cached_record| cached_record.is_authoritative())
-                            .map(|cache_record| cache_record.clone())
-                            .collect();
+                            .cloned()
+                            .collect()
                     } else {
-                        result = read_records
-                            .values()
-                            .flatten()
-                            .map(|cache_record| cache_record.clone())
-                            .collect();
-                    }
+                        read_records.values().flatten().cloned().collect()
+                    };
                     drop(read_records);
                     return Ok(result);
                 }
             }
             _ => {
-                if let Some(node) = self.cache.get_node(&query.question).await? {
+                if let Some(node) = self.cache.get_node(query.question).await? {
                     let read_records = node.records.read().await;
                     if let Some(records) = read_records.get(&query.qtype()) {
-                        let result;
-                        if query.authoritative {
-                            result = records
+                        let result = if query.authoritative {
+                            records
                                 .iter()
                                 .filter(|cached_record| cached_record.is_authoritative())
-                                .map(|cache_record| cache_record.clone())
-                                .collect();
+                                .cloned()
+                                .collect()
                         } else {
-                            result = records
-                                .iter()
-                                .map(|cache_record| cache_record.clone())
-                                .collect();
-                        }
+                            records.to_vec()
+                        };
                         drop(read_records);
                         return Ok(result);
                     }
@@ -76,7 +73,7 @@ impl AsyncTransactionTreeCache {
             }
         }
 
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     #[inline]
@@ -110,7 +107,7 @@ impl AsyncTransactionTreeCache {
 #[async_trait]
 impl AsyncTransactionCache for AsyncTransactionTreeCache {
     async fn get(&self, query: &CacheQuery) -> CacheResponse {
-        match self.get_records(&query).await {
+        match self.get_records(query).await {
             Ok(records) => CacheResponse::Records(records),
             Err(_) => CacheResponse::Err(RCode::ServFail),
         }

@@ -153,12 +153,12 @@ impl FromWire for CAA {
 
 impl FromTokenizedRData for CAA {
     #[inline]
-    fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, TokenizedRecordError>
+    fn from_tokenized_rdata(rdata: &[&str]) -> Result<Self, TokenizedRecordError>
     where
         Self: Sized,
     {
-        match rdata.as_slice() {
-            &[flags, tag, value] => {
+        match rdata {
+            [flags, tag, value] => {
                 // Flags must be between 0 and 255. This is enforced by the type, u8.
                 let (flags, _) = u8::from_token_format(&[flags])?;
 
@@ -186,7 +186,7 @@ impl FromTokenizedRData for CAA {
 
                 Ok(Self { flags, tag, value })
             }
-            &[_, _, _, ..] => Err(TokenizedRecordError::TooManyRDataTokensError {
+            [_, _, _, ..] => Err(TokenizedRecordError::TooManyRDataTokensError {
                 expected: 3,
                 received: rdata.len(),
             }),
@@ -373,23 +373,23 @@ mod tokenizer_tests {
     const ISSUER_CRITICAL_FLAG: u8 = 0b10000000;
     const UNKNOWN_FLAG: u8 = 0b01000000;
 
-    const STR_NO_FLAGS: &'static str = "0";
-    const STR_ISSUER_CRITICAL_FLAG: &'static str = "128";
-    const STR_UNKNOWN_FLAG: &'static str = "64";
+    const STR_NO_FLAGS: &str = "0";
+    const STR_ISSUER_CRITICAL_FLAG: &str = "128";
+    const STR_UNKNOWN_FLAG: &str = "64";
 
+    static STR_OK_TAG: &str = "issue123";
+    static STR_FAIL_TAG_EMPTY: &str = "";
+    static STR_FAIL_TAG_NON_ALPHANUMERIC: &str = "has a space";
     lazy_static! {
-        static ref STR_OK_TAG: &'static str = "issue123";
-        static ref STR_FAIL_TAG_EMPTY: &'static str = "";
         static ref STR_FAIL_TAG_TOO_LONG: String = repeat('a').take(256).collect::<String>();
-        static ref STR_FAIL_TAG_NON_ALPHANUMERIC: &'static str = "has a space";
         static ref OK_TAG: AsciiString = AsciiString::from_utf8(&STR_OK_TAG).unwrap();
     }
 
+    static STR_OK_VALUE: &str = "shortvalue123SHORTVALUE";
+    static STR_OK_VALUE_EMPTY: &str = "";
+    static STR_OK_VALUE_NON_ALPHANUMERIC: &str = "has a space";
     lazy_static! {
-        static ref STR_OK_VALUE: &'static str = "shortvalue123SHORTVALUE";
-        static ref STR_OK_VALUE_EMPTY: &'static str = "";
         static ref STR_OK_VALUE_LONGER_THAN_255: String = repeat('a').take(256).collect::<String>();
-        static ref STR_OK_VALUE_NON_ALPHANUMERIC: &'static str = "has a space";
         static ref OK_VALUE: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE).unwrap().into_vec();
         static ref OK_VALUE_EMPTY: Vec<u8> = AsciiString::from_utf8(&STR_OK_VALUE_EMPTY)
             .unwrap()

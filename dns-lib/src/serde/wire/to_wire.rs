@@ -184,12 +184,7 @@ impl<T: ToWire, const N: usize> ToWire for [T; N] {
 
     #[inline]
     fn serial_length(&self) -> u16 {
-        let mut length = 0;
-        for x in self {
-            length += x.serial_length();
-        }
-
-        return length;
+        self.iter().map(T::serial_length).sum()
     }
 }
 
@@ -291,7 +286,7 @@ impl ToWire for (u1, u7) {
         // | 0  | 0 0 0 0 0 0 0 |
         // | u1 | u7            |
         let bit_7: u8 = (bit_7 << 7) & 0b10000000;
-        let bit_6to0: u8 = (bit_6to0 << 0) & 0b01111111;
+        let bit_6to0: u8 = bit_6to0 & 0b01111111;
         let result = bit_7 | bit_6to0;
 
         result.to_wire_format(wire, compression)
@@ -299,7 +294,7 @@ impl ToWire for (u1, u7) {
 
     #[inline]
     fn serial_length(&self) -> u16 {
-        return U8_BYTE_COUNT;
+        U8_BYTE_COUNT
     }
 }
 
@@ -321,7 +316,7 @@ impl ToWire for (u1, u3, u4) {
         // | u1 | u3    | u4      |
         let bit_7 = (bit_7 << 7) & 0b10000000;
         let bit_6to4 = (bit_6to4 << 4) & 0b01110000;
-        let bit_3to0 = (bit_3to0 << 0) & 0b00001111;
+        let bit_3to0 = bit_3to0 & 0b00001111;
         let result = bit_7 | bit_6to4 | bit_3to0;
 
         result.to_wire_format(wire, compression)
@@ -329,7 +324,7 @@ impl ToWire for (u1, u3, u4) {
 
     #[inline]
     fn serial_length(&self) -> u16 {
-        return U8_BYTE_COUNT;
+        U8_BYTE_COUNT
     }
 }
 
@@ -355,7 +350,7 @@ impl ToWire for (u1, u4, u1, u1, u1) {
         let bit_6to3 = (bit_6to3 << 3) & 0b01111000;
         let bit_2 = (bit_2 << 2) & 0b00000100;
         let bit_1 = (bit_1 << 1) & 0b00000010;
-        let bit_0 = (bit_0 << 0) & 0b00000001;
+        let bit_0 = bit_0 & 0b00000001;
         let result = bit_7 | bit_6to3 | bit_2 | bit_1 | bit_0;
 
         result.to_wire_format(wire, compression)
@@ -363,6 +358,6 @@ impl ToWire for (u1, u4, u1, u1, u1) {
 
     #[inline]
     fn serial_length(&self) -> u16 {
-        return U8_BYTE_COUNT;
+        U8_BYTE_COUNT
     }
 }

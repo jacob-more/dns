@@ -35,8 +35,8 @@ macro_rules! int_from_token_impl {
                 'c: 'd,
             {
                 match tokens {
-                    &[] => Err(TokenError::OutOfTokens),
-                    &[token, ..] => Ok((<$int_type>::from_str_radix(token, 10)?, &tokens[1..])),
+                    [] => Err(TokenError::OutOfTokens),
+                    [token, ..] => Ok((str::parse::<$int_type>(token)?, &tokens[1..])),
                 }
             }
         }
@@ -153,13 +153,11 @@ macro_rules! ux_from_token_impl {
                 'c: 'd,
             {
                 match tokens {
-                    &[] => Err(TokenError::OutOfTokens),
-                    &[token, ..] => {
-                        match <$int_type>::try_from(<$super_type>::from_str_radix(token, 10)?) {
-                            Ok(integer) => Ok((integer, &tokens[1..])),
-                            Err(_) => Err(TokenError::UxTryFromIntError),
-                        }
-                    }
+                    [] => Err(TokenError::OutOfTokens),
+                    [token, ..] => match <$int_type>::try_from(str::parse::<$super_type>(token)?) {
+                        Ok(integer) => Ok((integer, &tokens[1..])),
+                        Err(_) => Err(TokenError::UxTryFromIntError),
+                    },
                 }
             }
         }
@@ -182,9 +180,9 @@ impl FromPresentation for u1 {
         'c: 'd,
     {
         match tokens {
-            &[] => Err(TokenError::OutOfTokens),
-            &["0", ..] => Ok((u1::new(0), &tokens[1..])),
-            &["1", ..] => Ok((u1::new(1), &tokens[1..])),
+            [] => Err(TokenError::OutOfTokens),
+            ["0", ..] => Ok((u1::new(0), &tokens[1..])),
+            ["1", ..] => Ok((u1::new(1), &tokens[1..])),
             _ => Err(TokenError::UxTryFromIntError),
         }
     }
@@ -201,9 +199,9 @@ impl FromPresentation for i1 {
         'c: 'd,
     {
         match tokens {
-            &[] => Err(TokenError::OutOfTokens),
-            &["0", ..] => Ok((i1::new(0), &tokens[1..])),
-            &["-1", ..] => Ok((i1::new(-1), &tokens[1..])),
+            [] => Err(TokenError::OutOfTokens),
+            ["0", ..] => Ok((i1::new(0), &tokens[1..])),
+            ["-1", ..] => Ok((i1::new(-1), &tokens[1..])),
             _ => Err(TokenError::UxTryFromIntError),
         }
     }
@@ -843,8 +841,8 @@ macro_rules! address_from_token_impl {
                 'c: 'd,
             {
                 match tokens {
-                    &[] => Err(TokenError::OutOfTokens),
-                    &[token, ..] => Ok((<$addr_type>::from_str(token)?, &tokens[1..])),
+                    [] => Err(TokenError::OutOfTokens),
+                    [token, ..] => Ok((<$addr_type>::from_str(token)?, &tokens[1..])),
                 }
             }
         }

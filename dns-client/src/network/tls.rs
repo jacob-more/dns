@@ -37,6 +37,7 @@ use tokio::{
 };
 
 use crate::network::{
+    OnceWatchMessageSender,
     async_query::{QInitQuery, QInitQueryProj, QSend, QSendProj, QSendType, QueryOpt},
     errors,
     receive::read_stream_message,
@@ -80,12 +81,8 @@ pub(crate) const MAX_TCP_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum allowable TCP timeout.
 pub(crate) const MIN_TCP_TIMEOUT: Duration = Duration::from_millis(50);
 
-// Using the safe checked version of new is not stable. As long as we always use non-zero constants,
-// there should not be any problems with this.
-pub(crate) const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(11) };
-pub(crate) const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(13) };
+pub(crate) const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8 = NonZeroU8::new(11).unwrap();
+pub(crate) const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = NonZeroU8::new(13).unwrap();
 
 fn bound<T>(value: T, lower_bound: T, upper_bound: T) -> T
 where
@@ -345,7 +342,7 @@ impl<'a, 'b, 'e, 'h> Future for TlsQueryRunner<'a, 'b, 'e, 'h> {
                                     });
                                 }
 
-                                return Ok(());
+                                Ok(())
                             }
                             .boxed();
 
@@ -501,18 +498,16 @@ impl<'a, 'b, 'e, 'h> Future for TlsQueryRunner<'a, 'b, 'e, 'h> {
                                         MAX_TCP_TIMEOUT,
                                     );
                                 }
-                            } else {
-                                if average_tls_dropped_packets.current_average()
-                                    >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD
-                                {
-                                    w_active_queries.tls_timeout = bound(
-                                        w_active_queries.tls_timeout.saturating_add(
-                                            TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED,
-                                        ),
-                                        MIN_TCP_TIMEOUT,
-                                        MAX_TCP_TIMEOUT,
-                                    );
-                                }
+                            } else if average_tls_dropped_packets.current_average()
+                                >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD
+                            {
+                                w_active_queries.tls_timeout = bound(
+                                    w_active_queries.tls_timeout.saturating_add(
+                                        TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED,
+                                    ),
+                                    MIN_TCP_TIMEOUT,
+                                    MAX_TCP_TIMEOUT,
+                                );
                             }
                         }
                         TlsResponseTime::Responded(response_time) => {
@@ -848,17 +843,8 @@ impl TlsSocket {
 struct ActiveQueries {
     tls_timeout: Duration,
 
-    in_flight: HashMap<
-        u16,
-        (
-            once_watch::Sender<Result<Message, errors::QueryError>>,
-            JoinHandle<()>,
-        ),
-    >,
-    active: HashMap<
-        TinyVec<[Question; 1]>,
-        (u16, once_watch::Sender<Result<Message, errors::QueryError>>),
-    >,
+    in_flight: HashMap<u16, (OnceWatchMessageSender, JoinHandle<()>)>,
+    active: HashMap<TinyVec<[Question; 1]>, (u16, OnceWatchMessageSender)>,
 }
 
 impl ActiveQueries {
@@ -1037,15 +1023,14 @@ impl TlsSocket {
         // If the UDP socket is unreliable, send most data via TLS. Some queries should still use
         // UDP to determine if the network conditions are improving. However, if the TLS connection
         // is also unstable, then we should not rely on it.
-        let query_task = match options {
+
+        match options {
             QueryOpt::UdpTcp => todo!(),
             QueryOpt::Tcp => todo!(),
             QueryOpt::Quic => todo!(),
-            QueryOpt::Tls => TlsQuery::new(&self, query),
+            QueryOpt::Tls => TlsQuery::new(self, query),
             QueryOpt::QuicTls => todo!(),
             QueryOpt::Https => todo!(),
-        };
-
-        return query_task;
+        }
     }
 }

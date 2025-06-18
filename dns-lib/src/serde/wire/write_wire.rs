@@ -121,7 +121,7 @@ impl<'a> WriteWire<'a> {
         self.wire[self.offset..(self.offset + bytes.len())].copy_from_slice(bytes);
         self.offset += bytes.len();
 
-        return Ok(());
+        Ok(())
     }
 
     #[inline]
@@ -135,7 +135,7 @@ impl<'a> WriteWire<'a> {
         self.wire[self.offset] = byte;
         self.offset += 1;
 
-        return Ok(());
+        Ok(())
     }
 
     #[inline]
@@ -150,7 +150,7 @@ impl<'a> WriteWire<'a> {
         self.wire[index..(index + bytes.len())].copy_from_slice(bytes);
         self.offset = new_len;
 
-        return Ok(());
+        Ok(())
     }
 
     #[inline]
@@ -165,7 +165,7 @@ impl<'a> WriteWire<'a> {
         self.wire[index] = byte;
         self.offset = new_len;
 
-        return Ok(());
+        Ok(())
     }
 
     #[inline]

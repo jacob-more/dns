@@ -42,7 +42,7 @@ pub async fn read_udp_message<const BUFFER_SIZE: usize>(
         }
     };
 
-    return Ok(message);
+    Ok(message)
 }
 
 #[inline]
@@ -108,7 +108,7 @@ pub async fn read_stream_message<const BUFFER_SIZE: usize>(
     }
 
     // Step 3: Deserialize the Message from the buffer.
-    let mut wire = ReadWire::from_bytes(&mut tcp_buffer[..expected_message_size as usize]);
+    let mut wire = ReadWire::from_bytes(&tcp_buffer[..expected_message_size as usize]);
     match Message::from_wire_format(&mut wire) {
         Ok(message) => Ok(message),
         Err(read_wire_error) => Err(errors::ReceiveError::Deserialization {

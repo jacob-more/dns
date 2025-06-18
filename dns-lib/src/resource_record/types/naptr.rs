@@ -92,9 +92,9 @@ impl FromWire for NAPTR {
 
         let flags = CharacterString::from_wire_format(wire)?;
         if !flags.is_alphanumeric_or_empty() {
-            return Err(ReadWireError::FormatError(format!(
-                "The 'flags' field is required to be alphanumeric"
-            )));
+            return Err(ReadWireError::FormatError(
+                "The 'flags' field is required to be alphanumeric".to_string(),
+            ));
         }
 
         let service = CharacterString::from_wire_format(wire)?;
@@ -107,10 +107,10 @@ impl FromWire for NAPTR {
             ));
         }
 
-        if (regexp.len() > 0) && (!replacement.is_root()) {
-            return Err(ReadWireError::FormatError(format!(
-                "The 'regexp' and 'replacement' fields are mutually exclusive but both were non-empty"
-            )));
+        if !regexp.is_empty() && (!replacement.is_root()) {
+            return Err(ReadWireError::FormatError(
+                "The 'regexp' and 'replacement' fields are mutually exclusive but both were non-empty".to_string()
+            ));
         }
 
         Ok(Self {
@@ -127,21 +127,21 @@ impl FromWire for NAPTR {
 impl FromTokenizedRData for NAPTR {
     #[inline]
     fn from_tokenized_rdata(
-        record: &Vec<&str>,
+        record: &[&str],
     ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
     where
         Self: Sized,
     {
-        match record.as_slice() {
-            &[order, preference, flags, service, replacement, regexp] => {
+        match record {
+            [order, preference, flags, service, replacement, regexp] => {
                 let (order, _) = u16::from_token_format(&[order])?;
                 let (preference, _) = u16::from_token_format(&[preference])?;
 
                 let (flags, _) = CharacterString::from_token_format(&[flags])?;
                 if !flags.is_alphanumeric_or_empty() {
-                    return Err(TokenizedRecordError::ValueError(format!(
-                        "The 'flags' field is required to be alphanumeric"
-                    )));
+                    return Err(TokenizedRecordError::ValueError(
+                        "The 'flags' field is required to be alphanumeric".to_string(),
+                    ));
                 }
 
                 let (service, _) = CharacterString::from_token_format(&[service])?;
@@ -156,10 +156,10 @@ impl FromTokenizedRData for NAPTR {
                     ));
                 }
 
-                if (regexp.len() > 0) && (!replacement.is_root()) {
-                    return Err(TokenizedRecordError::ValueError(format!(
-                        "The 'regexp' and 'replacement' fields are mutually exclusive but both were non-empty"
-                    )));
+                if !regexp.is_empty() && (!replacement.is_root()) {
+                    return Err(TokenizedRecordError::ValueError(
+                        "The 'regexp' and 'replacement' fields are mutually exclusive but both were non-empty".to_string()
+                    ));
                 }
 
                 Ok(Self {
@@ -171,7 +171,7 @@ impl FromTokenizedRData for NAPTR {
                     replacement,
                 })
             }
-            &[_, _, _, _, _, _, ..] => Err(TokenizedRecordError::TooManyRDataTokensError {
+            [_, _, _, _, _, _, ..] => Err(TokenizedRecordError::TooManyRDataTokensError {
                 expected: 6,
                 received: record.len(),
             }),

@@ -62,9 +62,7 @@ where
 {
     fn clone(&self) -> Self {
         self.ref_count().fetch_add(1, Ordering::Release);
-        Self {
-            ptr: self.ptr.clone(),
-        }
+        Self { ptr: self.ptr }
     }
 }
 
@@ -113,10 +111,7 @@ where
     /// There is no guarantee that the loaded pointer does not point to a dropped value unless an
     /// ArcPtr of that value is already held for the returned pointer.
     pub unsafe fn load(&self, ordering: Ordering) -> Option<ArcPtr<T>> {
-        match NonNull::new(self.ptr.load(ordering)) {
-            Some(ptr) => Some(ArcPtr::from_ptr(ptr)),
-            None => None,
-        }
+        unsafe { NonNull::new(self.ptr.load(ordering)).map(|ptr| ArcPtr::from_ptr(ptr)) }
     }
 
     pub fn take(&self, ordering: Ordering) -> Option<ArcPtr<T>> {
@@ -127,14 +122,12 @@ where
         match new {
             Some(new) => {
                 let new = ManuallyDrop::new(new);
-                match NonNull::new(self.ptr.swap(new.as_ptr(), ordering)) {
-                    // Safety: We have swapped the ptr with another reference counted ptr. That
-                    // means we are in charge of managing the old pointer's reference count and the
-                    // reference count we were previously in charge of is now managed by this
-                    // AtomicArcPtr.
-                    Some(old_ptr) => Some(unsafe { ArcPtr::from_ptr(old_ptr) }),
-                    None => None,
-                }
+                // Safety: We have swapped the ptr with another reference counted ptr. That
+                // means we are in charge of managing the old pointer's reference count and the
+                // reference count we were previously in charge of is now managed by this
+                // AtomicArcPtr.
+                NonNull::new(self.ptr.swap(new.as_ptr(), ordering))
+                    .map(|old_ptr| unsafe { ArcPtr::from_ptr(old_ptr) })
             }
             None => self.take(ordering),
         }
@@ -165,7 +158,7 @@ where
                     // `current` variable so that the compiler can optimize it
                     // more easily.
                     Ok(_) => {
-                        ManuallyDrop::new(new);
+                        let _ = ManuallyDrop::new(new);
                         match NonNull::new(current) {
                             Some(current) => Ok(Some(unsafe { ArcPtr::from_ptr(current) })),
                             None => Ok(None),
@@ -236,8 +229,10 @@ where
     /// non-null pointer passes the responsibility of decrementing the reference count to the
     /// AtomicArcPtr.
     pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
-        Self {
-            arc: AtomicArcPtr::from_ptr(ptr),
+        unsafe {
+            Self {
+                arc: AtomicArcPtr::from_ptr(ptr),
+            }
         }
     }
 
@@ -299,7 +294,7 @@ where
     pub fn try_into_arc_ptr(self) -> Result<ArcPtr<T>, Self> {
         if self.atomic_arc_follow.is_followed.load(Ordering::Acquire) == 0 {
             let this = ManuallyDrop::new(self);
-            Ok(unsafe { ArcPtr::from_ptr(this.arc.ptr.clone()) })
+            Ok(unsafe { ArcPtr::from_ptr(this.arc.ptr) })
         } else {
             Err(self)
         }
@@ -310,7 +305,7 @@ where
             spin_loop();
         }
         let this = ManuallyDrop::new(self);
-        unsafe { ArcPtr::from_ptr(this.arc.ptr.clone()) }
+        unsafe { ArcPtr::from_ptr(this.arc.ptr) }
     }
 }
 
@@ -357,9 +352,11 @@ where
     /// non-null pointer passes the responsibility of decrementing the reference count to the
     /// AtomicArcPtr.
     pub unsafe fn from_ptr(ptr: NonNull<T>) -> Self {
-        Self {
-            arc: AtomicArcPtr::from_ptr(ptr),
-            is_followed: AtomicUsize::new(0),
+        unsafe {
+            Self {
+                arc: AtomicArcPtr::from_ptr(ptr),
+                is_followed: AtomicUsize::new(0),
+            }
         }
     }
 
@@ -373,7 +370,7 @@ where
     pub fn take<'a>(&'a self, ordering: Ordering) -> Option<ArcFollowPtr<'a, T>> {
         match self.arc.take(ordering) {
             Some(arc) => Some(ArcFollowPtr {
-                atomic_arc_follow: &self,
+                atomic_arc_follow: self,
                 arc,
             }),
             None => None,
@@ -387,7 +384,7 @@ where
     ) -> Option<ArcFollowPtr<'a, T>> {
         match self.arc.swap(new, ordering) {
             Some(arc) => Some(ArcFollowPtr {
-                atomic_arc_follow: &self,
+                atomic_arc_follow: self,
                 arc,
             }),
             None => None,
@@ -411,7 +408,7 @@ where
     ) -> Result<Option<ArcFollowPtr<'a, T>>, (*mut T, Option<ArcPtr<T>>)> {
         match self.arc.compare_exchange(current, new, success, failure) {
             Ok(Some(previous_ptr)) => Ok(Some(ArcFollowPtr {
-                atomic_arc_follow: &self,
+                atomic_arc_follow: self,
                 arc: previous_ptr,
             })),
             Ok(None) => Ok(None),

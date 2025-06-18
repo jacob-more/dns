@@ -1,4 +1,3 @@
-use proc_macro;
 use quote::quote;
 use syn::{Data, DataStruct, DeriveInput};
 
@@ -26,10 +25,10 @@ fn impl_from_tokenized_rdata_struct_macro(
         quote! {
             impl crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData for #name {
                 #[inline]
-                fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
-                    match rdata.as_slice() {
-                        &[] => Ok(Self {}),
-                        &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError(0, rdata.len())),
+                fn from_tokenized_rdata(rdata: &[&str]) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
+                    match rdata {
+                        [] => Ok(Self {}),
+                        [..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError(0, rdata.len())),
                     }
                 }
             }
@@ -39,15 +38,15 @@ fn impl_from_tokenized_rdata_struct_macro(
         quote! {
             impl crate::serde::presentation::from_tokenized_rdata::FromTokenizedRData for #name {
                 #[inline]
-                fn from_tokenized_rdata(rdata: &Vec<&str>) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
-                    match rdata.as_slice() {
-                        &[ #( #pattern_match),* ] => {
+                fn from_tokenized_rdata(rdata: &[&str]) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError> where Self: Sized {
+                    match rdata {
+                        [ #( #pattern_match),* ] => {
                             Ok(Self {
                                 #( #field_name: <#field_type as crate::serde::presentation::from_presentation::FromPresentation>::from_token_format(&[#field_name])?.0 ),*
                             })
                         },
-                        &[ #( #ignored_pattern_match, )* ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: #field_count, received: rdata.len()}),
-                        &[..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: #field_count, received: rdata.len()}),
+                        [ #( #ignored_pattern_match, )* ..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError{expected: #field_count, received: rdata.len()}),
+                        [..] => Err(crate::serde::presentation::errors::TokenizedRecordError::TooFewRDataTokensError{expected: #field_count, received: rdata.len()}),
                     }
                 }
             }

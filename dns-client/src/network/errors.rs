@@ -399,10 +399,10 @@ impl Display for IoError {
 impl Error for IoError {}
 impl From<io::Error> for IoError {
     fn from(error: io::Error) -> Self {
-        if let Some(_) = error.raw_os_error() {
-            return Self::OsError(error.kind());
+        if error.raw_os_error().is_some() {
+            Self::OsError(error.kind())
         } else {
-            return Self::Message(error.kind());
+            Self::Message(error.kind())
         }
     }
 }

@@ -4,16 +4,17 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     fs::File,
     io::{self, BufReader, Read},
+    str::FromStr,
     time::Instant,
 };
 
 use lazy_static::lazy_static;
 use xml::{EventReader, ParserConfig, reader::XmlEvent};
 
-const RECORD_LOCAL_NAME: &'static str = "record";
-const NAME_LOCAL_NAME: &'static str = "name";
-const PROTOCOL_LOCAL_NAME: &'static str = "protocol";
-const NUMBER_LOCAL_NAME: &'static str = "number";
+const RECORD_LOCAL_NAME: &str = "record";
+const NAME_LOCAL_NAME: &str = "name";
+const PROTOCOL_LOCAL_NAME: &str = "protocol";
+const NUMBER_LOCAL_NAME: &str = "number";
 
 fn parse_protocol<R>(parser: &mut EventReader<R>) -> io::Result<Option<Protocol>>
 where
@@ -72,11 +73,11 @@ where
                 break;
             }
             Ok(_) => (),
-            Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
+            Err(error) => return Err(io::Error::other(error)),
         }
     }
 
-    return Ok(protocol);
+    Ok(protocol)
 }
 
 fn parse_name<R>(parser: &mut EventReader<R>) -> io::Result<Option<String>>
@@ -123,11 +124,11 @@ where
                 break;
             }
             Ok(_) => (),
-            Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
+            Err(error) => return Err(io::Error::other(error)),
         }
     }
 
-    return Ok(name);
+    Ok(name)
 }
 
 fn parse_ports<R>(parser: &mut EventReader<R>) -> io::Result<Option<Vec<u16>>>
@@ -163,8 +164,8 @@ where
                     ));
                 }
                 None => match characters.split("-").collect::<Vec<&str>>().as_slice() {
-                    &[port] => {
-                        let port = match u16::from_str_radix(port, 10) {
+                    [port] => {
+                        let port = match str::parse(port) {
                             Ok(port) => port,
                             Err(int_error) => {
                                 return Err(io::Error::new(io::ErrorKind::InvalidData, int_error));
@@ -172,14 +173,14 @@ where
                         };
                         ports = Some(vec![port]);
                     }
-                    &[lower_bound, upper_bound] => {
-                        let lower_bound = match u16::from_str_radix(lower_bound, 10) {
+                    [lower_bound, upper_bound] => {
+                        let lower_bound = match str::parse(lower_bound) {
                             Ok(lower_bound) => lower_bound,
                             Err(int_error) => {
                                 return Err(io::Error::new(io::ErrorKind::InvalidData, int_error));
                             }
                         };
-                        let upper_bound = match u16::from_str_radix(upper_bound, 10) {
+                        let upper_bound = match str::parse(upper_bound) {
                             Ok(upper_bound) => upper_bound,
                             Err(int_error) => {
                                 return Err(io::Error::new(io::ErrorKind::InvalidData, int_error));
@@ -218,11 +219,11 @@ where
                 break;
             }
             Ok(_) => (),
-            Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
+            Err(error) => return Err(io::Error::other(error)),
         }
     }
 
-    return Ok(ports);
+    Ok(ports)
 }
 
 fn parse_record<R>(parser: &mut EventReader<R>) -> io::Result<Option<(String, Protocol, Vec<u16>)>>
@@ -246,9 +247,7 @@ where
                     (Some(_), _) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
-                            format!(
-                                "The name entry was found twice within a record. It can only appear once."
-                            ),
+                            "The name entry was found twice within a record. It can only appear once.",
                         ));
                     }
                     (None, Ok(name)) => record_name = name,
@@ -258,9 +257,7 @@ where
                     (Some(_), _) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
-                            format!(
-                                "The protocol entry was found twice within a record. It can only appear once."
-                            ),
+                            "The protocol entry was found twice within a record. It can only appear once.",
                         ));
                     }
                     (None, Ok(protocol)) => record_protocol = protocol,
@@ -270,9 +267,7 @@ where
                     (Some(_), _) => {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
-                            format!(
-                                "The port (number) entry was found twice within a record. It can only appear once."
-                            ),
+                            "The port (number) entry was found twice within a record. It can only appear once.",
                         ));
                     }
                     (None, Ok(ports)) => record_ports = ports,
@@ -287,15 +282,15 @@ where
                 break;
             }
             Ok(_) => (),
-            Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
+            Err(error) => return Err(io::Error::other(error)),
         }
     }
 
     match (record_name, record_protocol, record_ports) {
-        (None, _, _) => return Ok(None),
-        (_, None, _) => return Ok(None),
-        (_, _, None) => return Ok(None),
-        (Some(name), Some(protocol), Some(ports)) => return Ok(Some((name, protocol, ports))),
+        (None, _, _) => Ok(None),
+        (_, None, _) => Ok(None),
+        (_, _, None) => Ok(None),
+        (Some(name), Some(protocol), Some(ports)) => Ok(Some((name, protocol, ports))),
     }
 }
 
@@ -332,27 +327,28 @@ fn load_port_service_map() -> io::Result<HashMap<(String, Protocol), Vec<u16>>> 
                     name,
                     attributes: _,
                     namespace: _,
-                } => match name.local_name.as_str() {
-                    RECORD_LOCAL_NAME => match parse_record(&mut parser) {
-                        Ok(Some((name, protocol, ports))) => {
-                            match port_service_map.entry((name, protocol)) {
-                                Entry::Occupied(mut entry) => {
-                                    let stored_ports = entry.get_mut();
-                                    stored_ports.extend(ports);
-                                }
-                                Entry::Vacant(entry) => {
-                                    entry.insert(ports);
+                } => {
+                    if name.local_name.as_str() == RECORD_LOCAL_NAME {
+                        match parse_record(&mut parser) {
+                            Ok(Some((name, protocol, ports))) => {
+                                match port_service_map.entry((name, protocol)) {
+                                    Entry::Occupied(mut entry) => {
+                                        let stored_ports = entry.get_mut();
+                                        stored_ports.extend(ports);
+                                    }
+                                    Entry::Vacant(entry) => {
+                                        entry.insert(ports);
+                                    }
                                 }
                             }
+                            Ok(None) => (),
+                            Err(error) => println!("Failed to parse port: {error}"),
                         }
-                        Ok(None) => (),
-                        Err(error) => println!("Failed to parse port: {error}"),
-                    },
-                    _ => (),
-                },
+                    }
+                }
                 _ => (),
             },
-            Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
+            Err(error) => return Err(io::Error::other(error)),
         }
     }
 
@@ -373,7 +369,7 @@ lazy_static! {
 
 #[inline]
 pub fn port_from_service(service: String, protocol: Protocol) -> Result<&'static [u16], PortError> {
-    match PORT_SERVICE_MAP.get(&(service.clone(), protocol.clone())) {
+    match PORT_SERVICE_MAP.get(&(service.clone(), protocol)) {
         Some(ports) => Ok(ports),
         None => Err(PortError::UnknownMnemonic(service, protocol)),
     }

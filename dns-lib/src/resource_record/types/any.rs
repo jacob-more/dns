@@ -14,6 +14,12 @@ impl ANY {
     }
 }
 
+impl Default for ANY {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod circular_serde_sanity_test {
     use super::ANY;

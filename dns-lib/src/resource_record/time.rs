@@ -193,9 +193,9 @@ impl Time {
                 // Note: no need to check lower bound (zero) because durations
                 //       have the same lower bound.
                 if seconds > TTL_MAX {
-                    return None;
+                    None
                 } else {
-                    return Some(Self { ttl: seconds });
+                    Some(Self { ttl: seconds })
                 }
             }
             None => None,
@@ -357,8 +357,8 @@ impl FromPresentation for Time {
         'c: 'd,
     {
         match tokens {
-            &[] => Err(TokenError::OutOfTokens),
-            &[token, ..] => {
+            [] => Err(TokenError::OutOfTokens),
+            [token, ..] => {
                 let (seconds, tokens) = match token.len() {
                     ..=U32_MAX_DIGITS => TimeInt::from_token_format(tokens)?,
                     DATE_TIME_DIGITS => (datetime_parse(token)?, &tokens[1..]),
@@ -468,10 +468,7 @@ fn month_to_days(month: TimeInt, year: TimeInt) -> TimeInt {
 
 #[inline]
 fn months_to_seconds(months: TimeInt, year: TimeInt) -> Option<TimeInt> {
-    let days = (1..=months)
-        .into_iter()
-        .map(|month| month_to_days(month, year))
-        .sum();
+    let days = (1..=months).map(|month| month_to_days(month, year)).sum();
     days_to_seconds(days)
 }
 

@@ -47,23 +47,20 @@ impl ToWire for A6 {
         self.prefix_length.to_wire_format(wire, compression)?;
 
         // Serialize the IpV6 Address
-        match self.ipv6_address {
-            Some(ip_address) => {
-                let ip_bytes = &mut [0_u8; IPV6_ADDRESS_LENGTH];
-                let mut ip_bytes = WriteWire::from_bytes(ip_bytes);
-                ip_address.to_wire_format(&mut ip_bytes, compression)?;
-                let mut byte_count = (Self::MAX_PREFIX_LENGTH - self.prefix_length) / 8;
-                let remaining_bits = (Self::MAX_PREFIX_LENGTH - self.prefix_length) % 8;
-                if remaining_bits != 0 {
-                    byte_count += 1;
-                }
-                wire.write_bytes(
-                    &ip_bytes.current()
-                        [(IPV6_ADDRESS_LENGTH - (byte_count as usize))..ip_bytes.current_len()],
-                )?;
+        if let Some(ip_address) = self.ipv6_address {
+            let ip_bytes = &mut [0_u8; IPV6_ADDRESS_LENGTH];
+            let mut ip_bytes = WriteWire::from_bytes(ip_bytes);
+            ip_address.to_wire_format(&mut ip_bytes, compression)?;
+            let mut byte_count = (Self::MAX_PREFIX_LENGTH - self.prefix_length) / 8;
+            let remaining_bits = (Self::MAX_PREFIX_LENGTH - self.prefix_length) % 8;
+            if remaining_bits != 0 {
+                byte_count += 1;
             }
-            None => (),
-        };
+            wire.write_bytes(
+                &ip_bytes.current()
+                    [(IPV6_ADDRESS_LENGTH - (byte_count as usize))..ip_bytes.current_len()],
+            )?;
+        }
 
         self.domain_name.to_wire_format(wire, compression)?;
 
@@ -92,9 +89,9 @@ impl FromWire for A6 {
         let prefix_length = u8::from_wire_format(wire)?;
         // Lower bound does not need to be checked for an unsigned number.
         if prefix_length > Self::MAX_PREFIX_LENGTH {
-            return Err(ReadWireError::OutOfBoundsError(String::from(
-                "prefix length is outside of bounds 0 - 128 (inclusive)",
-            )));
+            return Err(ReadWireError::OutOfBoundsError(
+                "prefix length is outside of bounds 0 - 128 (inclusive)".to_string(),
+            ));
         }
 
         // prefix length is the number of bits.
@@ -110,14 +107,13 @@ impl FromWire for A6 {
             Self::MAX_PREFIX_LENGTH => None,
             _ => {
                 let ipv6_wire_bytes = wire.take_or_err(byte_count as usize, || {
-                    format!("IPv6 length is greater than the number of bytes left on the wire")
+                    "IPv6 length is greater than the number of bytes left on the wire".to_string()
                 })?;
                 let mut ipv6_address_buffer = [0; IPV6_ADDRESS_LENGTH];
                 let index_offset: usize = IPV6_ADDRESS_LENGTH - byte_count as usize;
-                ipv6_address_buffer[index_offset..].copy_from_slice(&ipv6_wire_bytes);
-                let ipv6_address = Ipv6Addr::from_wire_format(&mut ReadWire::from_bytes(
-                    &mut ipv6_address_buffer,
-                ))?;
+                ipv6_address_buffer[index_offset..].copy_from_slice(ipv6_wire_bytes);
+                let ipv6_address =
+                    Ipv6Addr::from_wire_format(&mut ReadWire::from_bytes(&ipv6_address_buffer))?;
                 Some(ipv6_address)
             }
         };
@@ -140,13 +136,13 @@ impl FromWire for A6 {
 impl FromTokenizedRData for A6 {
     #[inline]
     fn from_tokenized_rdata(
-        rdata: &Vec<&str>,
+        rdata: &[&str],
     ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
     where
         Self: Sized,
     {
-        match rdata.as_slice() {
-            &[token1, token2] => {
+        match rdata {
+            [token1, token2] => {
                 let (prefix_length, _) = u8::from_token_format(&[token1])?;
                 if prefix_length > Self::MAX_PREFIX_LENGTH {
                     return Err(
@@ -159,32 +155,30 @@ impl FromTokenizedRData for A6 {
                 match prefix_length {
                     0 => {
                         let (address, _) = Ipv6Addr::from_token_format(&[token2])?;
-                        return Ok(Self {
+                        Ok(Self {
                             prefix_length,
                             ipv6_address: Some(address),
                             domain_name: None,
-                        });
+                        })
                     }
                     128 => {
                         let (domain_name, _) = DomainName::from_token_format(&[token2])?;
-                        return Ok(Self {
+                        Ok(Self {
                             prefix_length,
                             ipv6_address: None,
                             domain_name: Some(domain_name),
-                        });
+                        })
                     }
-                    _ => {
-                        return Err(
-                            crate::serde::presentation::errors::TokenizedRecordError::ValueError(
-                                format!(
-                                    "With two tokens, the prefix length for an A6 record must be 128 or 0. Instead, it was {prefix_length}"
-                                ),
+                    _ => Err(
+                        crate::serde::presentation::errors::TokenizedRecordError::ValueError(
+                            format!(
+                                "With two tokens, the prefix length for an A6 record must be 128 or 0. Instead, it was {prefix_length}"
                             ),
-                        );
-                    }
+                        ),
+                    ),
                 }
             }
-            &[token1, token2, token3] => {
+            [token1, token2, token3] => {
                 let (prefix_length, _) = u8::from_token_format(&[token1])?;
                 if prefix_length > Self::MAX_PREFIX_LENGTH {
                     return Err(
@@ -207,20 +201,18 @@ impl FromTokenizedRData for A6 {
                 let (address, _) = Ipv6Addr::from_token_format(&[token2])?;
                 let (domain_name, _) = DomainName::from_token_format(&[token3])?;
 
-                return Ok(Self {
+                Ok(Self {
                     prefix_length,
                     ipv6_address: Some(address),
                     domain_name: Some(domain_name),
-                });
+                })
             }
-            _ => {
-                return Err(
-                    crate::serde::presentation::errors::TokenizedRecordError::ValueError(format!(
-                        "An A6 record must have either 2 or 3 rdata tokens. It has {}",
-                        rdata.len()
-                    )),
-                );
-            }
+            _ => Err(
+                crate::serde::presentation::errors::TokenizedRecordError::ValueError(format!(
+                    "An A6 record must have either 2 or 3 rdata tokens. It has {}",
+                    rdata.len()
+                )),
+            ),
         }
     }
 }

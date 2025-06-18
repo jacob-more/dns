@@ -175,12 +175,12 @@ impl<RDataT: RData> ToWire for ResourceRecord<RDataT> {
 
     fn serial_length(&self) -> u16 {
         let rd_length = self.rdata.serial_length();
-        return self.name.serial_length()
+        self.name.serial_length()
             + self.rdata.get_rtype().serial_length()
             + self.rclass.serial_length()
             + self.ttl.serial_length()
             + rd_length.serial_length()
-            + rd_length;
+            + rd_length
     }
 }
 
@@ -246,7 +246,7 @@ macro_rules! gen_record_data {
 
                 wire.shift(wire_rd_length as usize)?;
 
-                return Ok(Self { name, rclass, ttl, rdata });
+                Ok(Self { name, rclass, ttl, rdata })
             }
         }
 
@@ -287,7 +287,7 @@ macro_rules! gen_record_data {
 
                     wire.shift(wire_rd_length as usize)?;
 
-                    return Ok(Self { name, rclass, ttl, rdata });
+                    Ok(Self { name, rclass, ttl, rdata })
                 }
             }
         )+
@@ -304,7 +304,7 @@ macro_rules! gen_record_data {
                     _ => return Err(TokenizedRecordError::UnsupportedRType(rtype)),
                 };
 
-                return Ok(record)
+                Ok(record)
             }
         }
 
@@ -371,7 +371,7 @@ macro_rules! gen_record_data {
                                 rdata,
                             })
                         },
-                        rdata @ _ => {
+                        rdata => {
                             Err(TryFromResourceRecordError::UnexpectedRType {
                                 expected: RType::$record,
                                 actual: rdata.get_rtype(),
@@ -394,7 +394,7 @@ macro_rules! gen_record_data {
                                 rdata: rdata.clone(),
                             })
                         },
-                        rdata @ _ => {
+                        rdata => {
                             Err(TryFromResourceRecordError::UnexpectedRType {
                                 expected: RType::$record,
                                 actual: rdata.get_rtype(),

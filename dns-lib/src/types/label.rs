@@ -70,6 +70,11 @@ pub trait Label<C: CaseSensitivity> {
     }
 
     #[inline]
+    fn is_empty(&self) -> bool {
+        self.octets().is_empty()
+    }
+
+    #[inline]
     fn is_root(&self) -> bool {
         self.octets().is_empty()
     }
@@ -91,14 +96,13 @@ pub trait Label<C: CaseSensitivity> {
 
     #[inline]
     fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
-        non_escaped_to_escaped::NonEscapedIntoEscapedIter::from(
-            self.octets().iter().map(|character| *character),
+        non_escaped_to_escaped::NonEscapedIntoEscapedIter::from(self.octets().iter().copied()).map(
+            |character| match character {
+                EscapableChar::Ascii(ASCII_PERIOD) => EscapableChar::EscapedAscii(ASCII_PERIOD),
+                EscapableChar::Ascii(character) => EscapableChar::Ascii(character),
+                _ => character,
+            },
         )
-        .map(|character| match character {
-            EscapableChar::Ascii(ASCII_PERIOD) => EscapableChar::EscapedAscii(ASCII_PERIOD),
-            EscapableChar::Ascii(character) => EscapableChar::Ascii(character),
-            _ => character,
-        })
     }
 }
 
@@ -106,7 +110,7 @@ impl<C: CaseSensitivity> Clone for OwnedLabel<C> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
-            case: self.case.clone(),
+            case: self.case,
             octets: self.octets.clone(),
         }
     }
@@ -166,14 +170,17 @@ impl<C1: CaseSensitivity, C2: CaseSensitivity> AsRef<RefLabel<C2>> for RefLabel<
 impl<C: CaseSensitivity> Borrow<RefLabel<C>> for OwnedLabel<C> {
     #[inline]
     fn borrow(&self) -> &RefLabel<C> {
-        &self
+        self
     }
 }
 
-impl<C: CaseSensitivity> Display for OwnedLabel<C> {
+impl<C: CaseSensitivity> Display for OwnedLabel<C>
+where
+    <OwnedLabel<C> as Deref>::Target: Display,
+{
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self)
+        write!(f, "{}", self.deref())
     }
 }
 
@@ -297,13 +304,13 @@ impl<C: CaseSensitivity> OwnedLabel<C> {
     }
 }
 
-static ROOT_LABEL: &'static [AsciiChar] = &[];
+static ROOT_LABEL: &[AsciiChar] = &[];
 
 // TODO: The unsafe blocks for the ref labels are based on code in the standard library. Need to go through and make sure I am upholding the safety guarantees in this particular case.
 
 impl<C: CaseSensitivity> RefLabel<C> {
     pub fn new_root() -> &'static Self {
-        Self::from_octets(&ROOT_LABEL)
+        Self::from_octets(ROOT_LABEL)
     }
 
     pub(super) fn from_octets(octets: &[AsciiChar]) -> &Self {

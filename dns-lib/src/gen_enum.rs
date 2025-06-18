@@ -98,12 +98,12 @@ macro_rules! impl_enum_code {
             }
         }
 
-        impl std::convert::Into<$int_ty> for $enum_name {
+        impl std::convert::From<$enum_name> for $int_ty {
             #[inline]
-            fn into(self) -> $int_ty {
-                match self {
-                    Self::Unknown(x) => x,
-                    $(Self::$item_name => $item_code,)+
+            fn from(value: $enum_name) -> Self {
+                match value {
+                    $enum_name::Unknown(x) => x,
+                    $($enum_name::$item_name => $item_code,)+
                 }
             }
         }
@@ -172,10 +172,10 @@ macro_rules! impl_enum_mnemonic {
 
 macro_rules! impl_enum_mnemonic_into_string {
     ($enum_name:ident, $int_ty:ty$(,)?) => {
-        impl std::convert::Into<std::string::String> for $enum_name {
+        impl std::convert::From<$enum_name> for std::string::String {
             #[inline]
-            fn into(self) -> std::string::String {
-                self.mnemonic()
+            fn from(value: $enum_name) -> Self {
+                value.mnemonic()
             }
         }
     };
@@ -202,9 +202,11 @@ macro_rules! impl_enum_display {
 
 macro_rules! impl_enum_from_str {
     ($enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($item_name:ident, $item_mnemonic:literal)),+$(,)?), mnemonic_from_str) => {
-        impl $enum_name {
+        impl std::str::FromStr for $enum_name {
+            type Err = $error_ty;
+
             #[inline]
-            pub fn from_str(string: &str) -> std::result::Result<Self, $error_ty> {
+            fn from_str(string: &str) -> std::result::Result<Self, $error_ty> {
                 match string {
                     $($item_mnemonic => std::result::Result::Ok(Self::$item_name),)+
                     _ => std::result::Result::Err(<$error_ty>::UnknownMnemonic(string.to_string())),
@@ -215,13 +217,15 @@ macro_rules! impl_enum_from_str {
         $crate::gen_enum::impl_enum_from_string!($enum_name, $int_ty, $error_ty);
     };
     ($enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($item_name:ident, $item_mnemonic:literal)),+$(,)?), code_or_mnemonic_from_str) => {
-        impl $enum_name {
+        impl std::str::FromStr for $enum_name {
+            type Err = $error_ty;
+
             #[inline]
-            pub fn from_str(string: &str) -> std::result::Result<Self, $error_ty> {
+            fn from_str(string: &str) -> std::result::Result<Self, $error_ty> {
                 match string {
                     $($item_mnemonic => std::result::Result::Ok(Self::$item_name),)+
                     _ => {
-                        let protocol = match <$int_ty>::from_str_radix(string, 10) {
+                        let protocol = match str::parse(string) {
                             std::result::Result::Ok(protocol) => protocol,
                             std::result::Result::Err(_) => return std::result::Result::Err(<$error_ty>::UnknownMnemonic(string.to_string())),
                         };
@@ -236,9 +240,11 @@ macro_rules! impl_enum_from_str {
         $crate::gen_enum::impl_enum_from_string!($enum_name, $int_ty, $error_ty);
     };
     ($enum_name:ident, $int_ty:ty, $error_ty:ty, ($(($item_name:ident, $item_mnemonic:literal)),+$(,)?), (wildcard_or_mnemonic_from_str, $wildcard:literal)) => {
-        impl $enum_name {
+        impl std::str::FromStr for $enum_name {
+            type Err = $error_ty;
+
             #[inline]
-            pub fn from_str(string: &str) -> std::result::Result<Self, $error_ty> {
+            fn from_str(string: &str) -> std::result::Result<Self, $error_ty> {
                 match string {
                     $($item_mnemonic => std::result::Result::Ok(Self::$item_name),)+
                     _ => {
@@ -246,7 +252,7 @@ macro_rules! impl_enum_from_str {
                         if !string.starts_with(WILDCARD) {
                             return std::result::Result::Err(<$error_ty>::UnknownMnemonic(string.to_string()));
                         }
-                        let code_str = match u16::from_str_radix(&string[WILDCARD.len()..], 10) {
+                        let code_str = match str::parse(&string[WILDCARD.len()..]) {
                             std::result::Result::Ok(code_str) => code_str,
                             std::result::Result::Err(_) => return std::result::Result::Err(<$error_ty>::UnknownMnemonic(string.to_string())),
                         };
@@ -269,7 +275,7 @@ macro_rules! impl_enum_from_string {
 
             #[inline]
             fn try_from(value: &str) -> std::result::Result<Self, $error_ty> {
-                Self::from_str(value)
+                <Self as std::str::FromStr>::from_str(value)
             }
         }
     };
@@ -398,7 +404,10 @@ macro_rules! impl_enum_from_presentation {
                     &[] => std::result::Result::Err(
                         $crate::serde::presentation::errors::TokenError::OutOfTokens,
                     ),
-                    &[token, ..] => std::result::Result::Ok((Self::from_str(token)?, &tokens[1..])),
+                    &[token, ..] => std::result::Result::Ok((
+                        <Self as std::str::FromStr>::from_str(token)?,
+                        &tokens[1..],
+                    )),
                 }
             }
         }

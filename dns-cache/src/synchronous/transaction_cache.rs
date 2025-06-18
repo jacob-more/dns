@@ -15,6 +15,12 @@ pub struct TransactionTreeCache {
     cache: TreeCache<Vec<CacheRecord>>,
 }
 
+impl Default for TransactionTreeCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransactionTreeCache {
     #[inline]
     pub fn new() -> Self {
@@ -27,7 +33,7 @@ impl TransactionTreeCache {
     fn get_records(&self, query: &CacheQuery) -> Result<Vec<CacheRecord>, TreeCacheError> {
         match query.qtype() {
             RType::ANY => {
-                if let Some(node) = self.cache.get_node(&query.question)? {
+                if let Some(node) = self.cache.get_node(query.question)? {
                     if query.authoritative {
                         return Ok(node
                             .records
@@ -35,35 +41,35 @@ impl TransactionTreeCache {
                             .flat_map(|records| {
                                 records.iter().filter(|record| record.is_authoritative())
                             })
-                            .map(|record| record.clone())
+                            .cloned()
                             .collect());
                     } else {
                         return Ok(node
                             .records
                             .values()
-                            .flat_map(|records| records.iter().map(|record| record.clone()))
+                            .flat_map(|records| records.iter().cloned())
                             .collect());
                     }
                 }
             }
             _ => {
-                if let Some(node) = self.cache.get_node(&query.question)? {
+                if let Some(node) = self.cache.get_node(query.question)? {
                     if let Some(records) = node.records.get(&query.qtype()) {
                         if query.authoritative {
                             return Ok(records
                                 .iter()
                                 .filter(|record| record.is_authoritative())
-                                .map(|record| record.clone())
+                                .cloned()
                                 .collect());
                         } else {
-                            return Ok(records.iter().map(|record| record.clone()).collect());
+                            return Ok(records.to_vec());
                         }
                     }
                 }
             }
         }
 
-        return Ok(vec![]);
+        Ok(vec![])
     }
 
     #[inline]
@@ -100,7 +106,7 @@ impl TransactionTreeCache {
 
 impl TransactionCache for TransactionTreeCache {
     fn get(&self, query: &CacheQuery) -> CacheResponse {
-        match self.get_records(&query) {
+        match self.get_records(query) {
             Ok(records) => CacheResponse::Records(records),
             Err(_) => CacheResponse::Err(RCode::ServFail),
         }

@@ -100,12 +100,9 @@ where
         }
 
         // If the socket still initialized, shut it down immediately.
-        match receiver.await {
-            Ok((_, quic_kill)) => {
-                quic_kill.awake();
-            }
-            Err(_) => (), //< Successful cancellation
-        }
+        if let Ok((_, kill_quic)) = receiver.await {
+            kill_quic.awake();
+        } // else, successful cancellation
     }
 
     /// If the QUIC state is Blocked, changes it to None.
@@ -164,12 +161,9 @@ where
         }
 
         // If the socket still initialized, shut it down immediately.
-        match receiver.await {
-            Ok((_, kill_quic)) => {
-                kill_quic.awake();
-            }
-            Err(_) => (), //< Successful cancellation
-        }
+        if let Ok((_, kill_quic)) = receiver.await {
+            kill_quic.awake();
+        } // else, successful cancellation
     }
 
     /// Starts a QUIC listener to listen for the kill token or for the socket to be closed. This
@@ -256,7 +250,7 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
                         self.as_mut().set_acquired(udp_socket, kill_udp);
 
                         // Next loop should poll `kill_quic`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     QuicState::Establishing { sender, kill: _ } => {
                         let sender = sender.subscribe();
@@ -265,7 +259,7 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
                         self.as_mut().set_get_quic_establishing(sender);
 
                         // Next loop should poll `receive_quic_socket`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     QuicState::None => {
                         drop(r_quic_state);
@@ -273,7 +267,7 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
                         self.as_mut().set_init_quic(socket);
 
                         // Next loop should poll `join_handle`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     QuicState::Blocked => {
                         drop(r_quic_state);
@@ -285,7 +279,7 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
                 }
             }
@@ -297,7 +291,7 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
                         self.as_mut().set_acquired(quic_socket, quic_kill);
 
                         // Next loop should poll `kill_quic`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     Poll::Ready(Err(once_watch::RecvError::Closed)) => {
                         let error = errors::SocketError::Shutdown(
@@ -307,11 +301,9 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    }
+                    Poll::Pending => PollSocket::Pending,
                 }
             }
             QQuicSocketProj::InitQuic { mut join_handle } => {
@@ -320,12 +312,12 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
                         self.as_mut().set_acquired(quic_socket, kill_quic_token);
 
                         // Next loop should poll `kill_quic`
-                        return PollSocket::Continue;
+                        PollSocket::Continue
                     }
                     Poll::Ready(Ok(Err(error))) => {
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
                     Poll::Ready(Err(join_error)) => {
                         let error = errors::SocketError::from((
@@ -336,11 +328,9 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
 
                         self.as_mut().set_closed(error.clone());
 
-                        return PollSocket::Error(error);
+                        PollSocket::Error(error)
                     }
-                    Poll::Pending => {
-                        return PollSocket::Pending;
-                    }
+                    Poll::Pending => PollSocket::Pending,
                 }
             }
             QQuicSocketProj::Acquired {
@@ -355,15 +345,11 @@ impl<'a, 'd, S: QuicSocket> FutureSocket<'a, 'd, S, errors::SocketError> for QQu
 
                     self.as_mut().set_closed(error.clone());
 
-                    return PollSocket::Error(error);
+                    PollSocket::Error(error)
                 }
-                Poll::Pending => {
-                    return PollSocket::Pending;
-                }
+                Poll::Pending => PollSocket::Pending,
             },
-            QQuicSocketProj::Closed(error) => {
-                return PollSocket::Error(error.clone());
-            }
+            QQuicSocketProj::Closed(error) => PollSocket::Error(error.clone()),
         }
     }
 }
@@ -463,7 +449,7 @@ where
                     return Err(error);
                 }
 
-                return Ok(());
+                Ok(())
             }
             InnerInitQuicProj::ConnectingQuic(_) => {
                 if let Poll::Ready(()) = this.kill_quic.as_mut().poll(cx) {
@@ -482,7 +468,7 @@ where
                     return Ok(());
                 }
 
-                return Ok(());
+                Ok(())
             }
             InnerInitQuicProj::GetEstablishing {
                 receive_quic_socket: _,
@@ -503,14 +489,14 @@ where
                     return Err(error);
                 }
 
-                return Ok(());
+                Ok(())
             }
             InnerInitQuicProj::WriteNone { reason: _ }
             | InnerInitQuicProj::WriteManaged { quic_socket: _ }
             | InnerInitQuicProj::Complete => {
                 // Not allowed to timeout or be killed. These are cleanup
                 // states.
-                return Ok(());
+                Ok(())
             }
         }
     }

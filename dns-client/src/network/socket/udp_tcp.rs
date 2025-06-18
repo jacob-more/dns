@@ -41,12 +41,12 @@ where
                 mut uq_socket,
                 retransmits: _,
             } => match uq_socket.poll(socket, cx) {
-                PollSocket::Error(error) => PollSocket::Error(errors::SocketError::from(error)),
+                PollSocket::Error(error) => PollSocket::Error(error),
                 PollSocket::Continue => PollSocket::Continue,
                 PollSocket::Pending => PollSocket::Pending,
             },
             QUdpTcpSocketProj::Tcp { mut tq_socket } => match tq_socket.poll(socket, cx) {
-                PollSocket::Error(error) => PollSocket::Error(errors::SocketError::from(error)),
+                PollSocket::Error(error) => PollSocket::Error(error),
                 PollSocket::Continue => PollSocket::Continue,
                 PollSocket::Pending => PollSocket::Pending,
             },

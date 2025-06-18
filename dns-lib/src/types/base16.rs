@@ -101,11 +101,11 @@ const fn base16_to_u4(character: AsciiChar) -> Result<u8, Base16Error> {
 
 #[inline]
 const fn is_base16_char(encoded: AsciiChar) -> bool {
-    match encoded {
-        ASCII_ZERO..=ASCII_NINE => true,
-        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_F => true,
-        _ => false,
-    }
+    matches!(
+        encoded,
+        ASCII_ZERO..=ASCII_NINE
+        | ASCII_UPPERCASE_A..=ASCII_UPPERCASE_F
+    )
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -153,15 +153,15 @@ impl Base16 {
         let string_chunks = string.as_slice().chunks_exact(2);
 
         let remainder = string_chunks.remainder();
-        if remainder.len() != 0 {
+        if !remainder.is_empty() {
             return Err(Base16Error::Overflow);
         }
 
         for chunk in string_chunks {
             match chunk {
                 &[char1, char2] => {
-                    let bits0_3 = (u8::from(base16_to_u4(char1)?) << 4) & 0b1111_0000;
-                    let bits4_7 = (u8::from(base16_to_u4(char2)?) << 0) & 0b0000_1111;
+                    let bits0_3 = ((base16_to_u4(char1)?) << 4) & 0b1111_0000;
+                    let bits4_7 = base16_to_u4(char2)? & 0b0000_1111;
                     let merged_bytes = bits0_3 | bits4_7;
 
                     let [byte1] = u8::to_be_bytes(merged_bytes);
@@ -175,9 +175,9 @@ impl Base16 {
             }
         }
 
-        return Ok(Self {
+        Ok(Self {
             bytes: encoded_bytes,
-        });
+        })
     }
 
     #[inline]
@@ -187,8 +187,8 @@ impl Base16 {
         self.bytes.iter().for_each(|chunk| {
             let merged_bytes = *chunk;
 
-            let bits0_3 = ((merged_bytes & 0b1111_0000) >> 4) as u8;
-            let bits4_7 = ((merged_bytes & 0b0000_1111) >> 0) as u8;
+            let bits0_3 = (merged_bytes & 0b1111_0000) >> 4;
+            let bits4_7 = merged_bytes & 0b0000_1111;
 
             decoded_bytes.extend([
                 u4_to_base16(u4::new(bits0_3)),
@@ -210,11 +210,11 @@ impl Base16 {
 
         // Verify that the format does not contain padding characters where they are not allowed.
         let remainder = string.as_slice().chunks_exact(2).remainder();
-        if remainder.len() != 0 {
+        if !remainder.is_empty() {
             return Err(Base16Error::Overflow);
         }
 
-        return Ok(());
+        Ok(())
     }
 }
 

@@ -197,10 +197,7 @@ const fn bool_to_u1(boolean: bool) -> u1 {
 
 #[inline]
 fn u1_to_bool(integer: u1) -> bool {
-    match u16::from(integer) {
-        1 => true,
-        _ => false,
-    }
+    u8::from(integer) == 1
 }
 
 impl Message {
@@ -389,8 +386,8 @@ impl FromWire for Message {
             truncation: tc,
             recursion_desired: rd,
             recursion_available: ra,
-            z: z,
-            rcode: rcode,
+            z,
+            rcode,
 
             // Data
             question,

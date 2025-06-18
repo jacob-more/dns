@@ -216,7 +216,7 @@ impl CDomainName {
         let mut length_octet_index = 0;
 
         for escaped_char_result in
-            EscapedCharsEnumerateIter::from(string.iter().map(|character| *character).enumerate())
+            EscapedCharsEnumerateIter::from(string.iter().copied().enumerate())
         {
             match (escaped_char_result, (octets.len() - length_octet_index)) {
                 (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), _) => {
@@ -261,7 +261,7 @@ impl CDomainName {
             }
         }
 
-        if octets.len() >= (length_octet_index + 1) && (&octets != &[0]) {
+        if octets.len() >= (length_octet_index + 1) && (octets != [0]) {
             length_octets.push(octets[length_octet_index]);
         }
 
@@ -278,14 +278,13 @@ impl CDomainName {
     }
 
     #[inline]
-    pub fn from_labels<'a, C: CaseSensitivity, T: Label<C>>(
+    pub fn from_labels<C: CaseSensitivity, T: Label<C>>(
         labels: Vec<T>,
     ) -> Result<Self, CDomainNameError> {
         if labels.is_empty() {
             return Err(CDomainNameError::EmptyString);
         }
-        let total_octets =
-            labels.len() + (labels.iter().map(|label| label.len()).sum::<u16>() as usize);
+        let total_octets = labels.len() + (labels.iter().map(T::len).sum::<u16>() as usize);
         if total_octets > Self::MAX_OCTETS as usize {
             return Err(CDomainNameError::LongDomain);
         }
@@ -311,7 +310,7 @@ impl CDomainName {
             return Err(CDomainNameError::EmptyString);
         }
         let total_octets =
-            labels.len() + (labels.iter().map(|label| label.len()).sum::<u16>() as usize);
+            labels.len() + (labels.iter().map(OwnedLabel::len).sum::<u16>() as usize);
         if total_octets > Self::MAX_OCTETS as usize {
             return Err(CDomainNameError::LongDomain);
         }
@@ -337,7 +336,7 @@ impl CDomainName {
     /// A domain name is root if it is made up of only 1 label, that has a length of zero.
     #[inline]
     pub fn is_root(&self) -> bool {
-        &self.octets == &[0]
+        self.octets == [0]
     }
 
     /// A domain name is fully qualified if it ends with a root label.
@@ -351,14 +350,14 @@ impl CDomainName {
     #[inline]
     pub fn make_fully_qualified(&mut self) -> Result<(), CDomainNameError> {
         if self.is_fully_qualified() {
-            return Ok(());
+            Ok(())
         // aka. Would adding a byte exceed the limit?
         } else if self.serial_length() >= Self::MAX_OCTETS {
-            return Err(CDomainNameError::LongDomain);
+            Err(CDomainNameError::LongDomain)
         } else {
             self.octets.push(0);
             self.length_octets.push(0);
-            return Ok(());
+            Ok(())
         }
     }
 
@@ -366,19 +365,19 @@ impl CDomainName {
     #[inline]
     pub fn as_fully_qualified(&self) -> Result<Self, CDomainNameError> {
         if self.is_fully_qualified() {
-            return Ok(self.clone());
+            Ok(self.clone())
         // aka. Would adding a byte exceed the limit?
         } else if self.octets.len() >= Self::MAX_OCTETS as usize {
-            return Err(CDomainNameError::LongDomain);
+            Err(CDomainNameError::LongDomain)
         } else {
             let mut octets = self.octets.clone();
             octets.push(0);
             let mut length_octets = self.length_octets.clone();
             length_octets.push(0);
-            return Ok(Self {
+            Ok(Self {
                 octets,
                 length_octets,
-            });
+            })
         }
     }
 
@@ -391,30 +390,30 @@ impl CDomainName {
     /// For the purposes of DNS security, the canonical form of an RR is the
     /// wire format of the RR where:
     ///
-    /// 1.  every domain name in the RR is fully expanded (no DNS name
-    ///        compression) and fully qualified;
+    /// 1. every domain name in the RR is fully expanded (no DNS name
+    ///    compression) and fully qualified;
     ///
-    /// 2.  all uppercase US-ASCII letters in the owner name of the RR are
-    ///        replaced by the corresponding lowercase US-ASCII letters;
+    /// 2. all uppercase US-ASCII letters in the owner name of the RR are
+    ///    replaced by the corresponding lowercase US-ASCII letters;
     ///
-    /// 3.  if the type of the RR is NS, MD, MF, CNAME, SOA, MB, MG, MR, PTR,
-    ///        HINFO, MINFO, MX, HINFO, RP, AFSDB, RT, SIG, PX, NXT, NAPTR, KX,
-    ///        SRV, DNAME, A6, RRSIG, or NSEC, all uppercase US-ASCII letters in
-    ///        the DNS names contained within the RDATA are replaced by the
-    ///        corresponding lowercase US-ASCII letters;
+    /// 3. if the type of the RR is NS, MD, MF, CNAME, SOA, MB, MG, MR, PTR,
+    ///    HINFO, MINFO, MX, HINFO, RP, AFSDB, RT, SIG, PX, NXT, NAPTR, KX,
+    ///    SRV, DNAME, A6, RRSIG, or NSEC, all uppercase US-ASCII letters in
+    ///    the DNS names contained within the RDATA are replaced by the
+    ///    corresponding lowercase US-ASCII letters;
     ///
-    /// 4.  if the owner name of the RR is a wildcard name, the owner name is
-    ///        in its original unexpanded form, including the "*" label (no
-    ///        wildcard substitution); and
+    /// 4. if the owner name of the RR is a wildcard name, the owner name is
+    ///    in its original unexpanded form, including the "*" label (no
+    ///    wildcard substitution); and
     ///
-    /// 5.  the RR's TTL is set to its original value as it appears in the
-    ///        originating authoritative zone or the Original TTL field of the
-    ///        covering RRSIG RR.
+    /// 5. the RR's TTL is set to its original value as it appears in the
+    ///    originating authoritative zone or the Original TTL field of the
+    ///    covering RRSIG RR.
     #[inline]
     pub fn as_canonical_name(&self) -> Result<Self, CDomainNameError> {
         let mut dn = self.as_lowercase();
         dn.make_fully_qualified()?;
-        return Ok(dn);
+        Ok(dn)
     }
 
     #[inline]
@@ -481,7 +480,7 @@ impl<'a, C: CaseSensitivity> CDomainLabelIter<'a, C> {
     pub fn new(c_domain_name: &'a CDomainName) -> Self {
         Self {
             case: PhantomData,
-            name: &c_domain_name,
+            name: c_domain_name,
             next_octet_index: 0,
             next_length_index: 0,
             last_octet_index: c_domain_name.octets.len() as u8,
@@ -502,9 +501,9 @@ impl<'a, C: 'a + CaseSensitivity> Iterator for CDomainLabelIter<'a, C> {
             );
             self.next_octet_index += length + 1;
             self.next_length_index += 1;
-            return Some(label);
+            Some(label)
         } else {
-            return None;
+            None
         }
     }
 
@@ -524,9 +523,9 @@ impl<'a, C: 'a + CaseSensitivity> DoubleEndedIterator for CDomainLabelIter<'a, C
             );
             self.last_octet_index -= length + 1;
             self.last_length_index -= 1;
-            return Some(label);
+            Some(label)
         } else {
-            return None;
+            None
         }
     }
 }
@@ -545,7 +544,7 @@ struct CDomainSearchNameIter<'a> {
 impl<'a> CDomainSearchNameIter<'a> {
     pub fn new(c_domain_name: &'a CDomainName) -> Self {
         Self {
-            name: &c_domain_name,
+            name: c_domain_name,
             next_octet_index: 0,
             next_length_index: 0,
             last_octet_index: c_domain_name.octets.len() as u8,
@@ -563,14 +562,14 @@ impl<'a> Iterator for CDomainSearchNameIter<'a> {
             let length_octet_index = self.next_length_index;
             self.next_octet_index += self.name.length_octets[length_octet_index as usize] + 1;
             self.next_length_index += 1;
-            return Some(CDomainName {
+            Some(CDomainName {
                 octets: self.name.octets[(octet_index as usize)..].to_vec(),
                 length_octets: TinyVec::from(
                     &self.name.length_octets[(length_octet_index as usize)..],
                 ),
-            });
+            })
         } else {
-            return None;
+            None
         }
     }
 
@@ -586,14 +585,14 @@ impl<'a> DoubleEndedIterator for CDomainSearchNameIter<'a> {
             self.last_octet_index -=
                 self.name.length_octets[(self.last_length_index as usize) - 1] + 1;
             self.last_length_index -= 1;
-            return Some(CDomainName {
+            Some(CDomainName {
                 octets: self.name.octets[(self.last_octet_index as usize)..].to_vec(),
                 length_octets: TinyVec::from(
                     &self.name.length_octets[(self.last_length_index as usize)..],
                 ),
-            });
+            })
         } else {
-            return None;
+            None
         }
     }
 }
@@ -612,8 +611,8 @@ impl Display for CDomainName {
         if let Some(label) = labels.next() {
             write!(f, "{label}")?;
         }
-        while let Some(labels) = labels.next() {
-            write!(f, ".{labels}")?;
+        for label in labels {
+            write!(f, ".{label}")?;
         }
 
         Ok(())
@@ -649,10 +648,10 @@ impl Add for CDomainName {
         let mut length_octets = self.length_octets.clone();
         length_octets.extend(rhs.length_octets);
 
-        return Ok(Self {
+        Ok(Self {
             octets,
             length_octets,
-        });
+        })
     }
 }
 
@@ -730,7 +729,7 @@ impl ToWire for CDomainName {
                     // formed.
                     let pointer = wire.current_len() as u16;
                     if ((pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000)
-                        || (&self.octets[length_byte_index..] != &[0])
+                        || (self.octets[length_byte_index..] != [0])
                     {
                         break;
                     }
@@ -811,7 +810,7 @@ impl FromWire for CDomainName {
         }
 
         if pointer_count != 0 {
-            wire.set_offset(final_offset as usize)?;
+            wire.set_offset(final_offset)?;
         }
 
         let octets = octets.to_vec();

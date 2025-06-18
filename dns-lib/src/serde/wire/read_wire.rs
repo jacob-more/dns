@@ -339,7 +339,9 @@ impl<'a> ReadWire<'a> {
 
     #[inline]
     pub fn get_byte(&self) -> Result<u8, ReadWireError> {
-        self.get_byte_or_err(|| format!("getting a byte would have read past the end of the wire"))
+        self.get_byte_or_err(|| {
+            "getting a byte would have read past the end of the wire".to_string()
+        })
     }
 
     #[inline]
@@ -358,7 +360,9 @@ impl<'a> ReadWire<'a> {
 
     #[inline]
     pub fn take_byte(&mut self) -> Result<u8, ReadWireError> {
-        self.take_byte_or_err(|| format!("getting a byte would have read past the end of the wire"))
+        self.take_byte_or_err(|| {
+            "getting a byte would have read past the end of the wire".to_string()
+        })
     }
 
     /// Gets a slice of `self` for the given range. The amount of wire that is visible to the

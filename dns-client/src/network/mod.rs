@@ -1,3 +1,6 @@
+type OnceWatchMessageSender =
+    async_lib::once_watch::Sender<Result<dns_lib::query::message::Message, errors::QueryError>>;
+
 pub mod async_query;
 pub mod receive;
 pub mod rolling_average;

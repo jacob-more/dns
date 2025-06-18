@@ -67,7 +67,7 @@ impl DomainName {
     }
 
     #[inline]
-    pub fn from_labels<'a, C: CaseSensitivity, T: Label<C>>(
+    pub fn from_labels<C: CaseSensitivity, T: Label<C>>(
         labels: Vec<T>,
     ) -> Result<Self, DomainNameError> {
         Ok(Self {
@@ -176,7 +176,7 @@ impl Add for DomainName {
     #[inline]
     fn add(mut self, rhs: Self) -> Self::Output {
         self.domain_name = (self.domain_name + rhs.domain_name)?;
-        return Ok(self);
+        Ok(self)
     }
 }
 

@@ -40,5 +40,5 @@ where
     let message = MixedSocket::query(&socket, &mut message_question, QueryOpt::Tcp).await?;
     trace!(question:?; "Querying network '{name_server_address}' (TCP Only), got response '{message:?}'");
     cache.insert_message(&message).await;
-    return Ok(message);
+    Ok(message)
 }

@@ -97,7 +97,7 @@ impl ToWire for AMTRELAY {
             RelayType::Ipv6(address) => address.to_wire_format(wire, compression),
             RelayType::DomainName(dn) => dn.to_wire_format(wire, compression),
             RelayType::Unknown(_, data) => {
-                wire.write_bytes(&data)?;
+                wire.write_bytes(data)?;
                 Ok(())
             }
         }
@@ -152,13 +152,13 @@ impl FromWire for AMTRELAY {
 impl FromTokenizedRData for AMTRELAY {
     #[inline]
     fn from_tokenized_rdata(
-        rdata: &Vec<&str>,
+        rdata: &[&str],
     ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
     where
         Self: Sized,
     {
-        match rdata.as_slice() {
-            &[precedence, discovery_optional, relay_type, relay] => {
+        match rdata {
+            [precedence, discovery_optional, relay_type, relay] => {
                 let (precedence, _) = u8::from_token_format(&[precedence])?;
                 let (discovery_optional, _) = u1::from_token_format(&[discovery_optional])?;
                 let (relay_type, _) = u7::from_token_format(&[relay_type])?;
@@ -193,7 +193,7 @@ impl FromTokenizedRData for AMTRELAY {
                     relay,
                 })
             }
-            &[_, _, _, _, ..] => Err(
+            [_, _, _, _, ..] => Err(
                 crate::serde::presentation::errors::TokenizedRecordError::TooManyRDataTokensError {
                     expected: 4,
                     received: rdata.len(),

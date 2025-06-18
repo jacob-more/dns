@@ -29,13 +29,13 @@ impl TXT {
 impl FromTokenizedRData for TXT {
     #[inline]
     fn from_tokenized_rdata(
-        rdata: &Vec<&str>,
+        rdata: &[&str],
     ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
     where
         Self: Sized,
     {
-        match rdata.as_slice() {
-            &[_, ..] => {
+        match rdata {
+            [_, ..] => {
                 let mut strings = Vec::with_capacity(rdata.len());
                 for string_token in rdata {
                     strings.push(CharacterString::from_token_format(&[string_token])?.0);

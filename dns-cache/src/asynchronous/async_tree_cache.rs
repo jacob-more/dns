@@ -142,7 +142,7 @@ where
             }
         }
 
-        return Ok(current_node);
+        Ok(current_node)
     }
 
     #[inline]
@@ -182,7 +182,7 @@ where
             }
         }
 
-        return Ok(Some(current_node));
+        Ok(Some(current_node))
     }
 
     #[inline]
@@ -243,7 +243,7 @@ where
         let mut write_children = parent_node.children.write().await;
         let result = write_children.remove(last_label);
         drop(write_children);
-        return Ok(result);
+        Ok(result)
     }
 
     async fn get_subdomains(
@@ -298,10 +298,7 @@ where
                                 subdomain_name
                             })
                             .filter_map(|domain_name| {
-                                match CDomainName::from_owned_labels(domain_name) {
-                                    Ok(domain_name) => Some(domain_name),
-                                    Err(_) => None,
-                                }
+                                CDomainName::from_owned_labels(domain_name).ok()
                             }),
                     );
                     write_domains.insert(CDomainName::new_root());

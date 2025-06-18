@@ -380,7 +380,7 @@ where
                 char3,
             })),
 
-            (char1, Some((_, char2 @ _)), Some((_, char3 @ ASCII_ZERO..=ASCII_NINE))) => {
+            (char1, Some((_, char2)), Some((_, char3 @ ASCII_ZERO..=ASCII_NINE))) => {
                 Some(Err(ParseError::FirstAndSecondEscapedCharactersNotDigits {
                     char1,
                     char2,

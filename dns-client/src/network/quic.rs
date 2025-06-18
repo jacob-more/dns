@@ -36,6 +36,7 @@ use tokio::{
 };
 
 use crate::network::{
+    OnceWatchMessageSender,
     async_query::{QInitQuery, QInitQueryProj, QueryOpt},
     errors::{self, QueryError},
     receive::read_stream_message,
@@ -78,12 +79,8 @@ pub(crate) const MAX_TCP_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum allowable TCP timeout.
 pub(crate) const MIN_TCP_TIMEOUT: Duration = Duration::from_millis(50);
 
-// Using the safe checked version of new is not stable. As long as we always use non-zero constants,
-// there should not be any problems with this.
-pub(crate) const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(11) };
-pub(crate) const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 =
-    unsafe { NonZeroU8::new_unchecked(13) };
+pub(crate) const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8 = NonZeroU8::new(11).unwrap();
+pub(crate) const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = NonZeroU8::new(13).unwrap();
 
 fn bound<T>(value: T, lower_bound: T, upper_bound: T) -> T
 where
@@ -110,7 +107,7 @@ struct QuicQueryRunner<'a, 'b, 'e, 'h> {
     #[pin]
     timeout: Sleep,
     #[pin]
-    result_sender: once_watch::Sender<Result<Message, errors::QueryError>>,
+    result_sender: OnceWatchMessageSender,
     #[pin]
     inner: InnerQQ<'e>,
 }
@@ -120,7 +117,7 @@ impl<'a, 'b, 'e, 'h> QuicQueryRunner<'a, 'b, 'e, 'h> {
     pub fn new(
         socket: &'a Arc<QuicSocket>,
         query: &'b mut Message,
-        result_sender: once_watch::Sender<Result<Message, errors::QueryError>>,
+        result_sender: OnceWatchMessageSender,
         quic_timeout: &'h Duration,
     ) -> Self {
         Self {
@@ -331,8 +328,8 @@ impl<'a, 'b, 'e, 'h> Future for QuicQueryRunner<'a, 'b, 'e, 'h> {
                                 }
 
                                 match result {
-                                    Ok(message) => return Ok(message),
-                                    Err(error) => return Err(QueryError::from(error)),
+                                    Ok(message) => Ok(message),
+                                    Err(error) => Err(QueryError::from(error)),
                                 }
                             }
                             .boxed();
@@ -355,9 +352,7 @@ impl<'a, 'b, 'e, 'h> Future for QuicQueryRunner<'a, 'b, 'e, 'h> {
                                     continue;
                                 }
                                 Poll::Ready(Err(recv_error)) => {
-                                    let _ = this
-                                        .result_sender
-                                        .send(Err(errors::QueryError::from(recv_error)));
+                                    let _ = this.result_sender.send(Err(recv_error));
 
                                     this.inner.set_cleanup(QuicResponseTime::None);
 
@@ -429,18 +424,16 @@ impl<'a, 'b, 'e, 'h> Future for QuicQueryRunner<'a, 'b, 'e, 'h> {
                                         MAX_TCP_TIMEOUT,
                                     );
                                 }
-                            } else {
-                                if average_quic_dropped_packets.current_average()
-                                    >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD
-                                {
-                                    w_active_queries.quic_timeout = bound(
-                                        w_active_queries.quic_timeout.saturating_add(
-                                            TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED,
-                                        ),
-                                        MIN_TCP_TIMEOUT,
-                                        MAX_TCP_TIMEOUT,
-                                    );
-                                }
+                            } else if average_quic_dropped_packets.current_average()
+                                >= INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD
+                            {
+                                w_active_queries.quic_timeout = bound(
+                                    w_active_queries.quic_timeout.saturating_add(
+                                        TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED,
+                                    ),
+                                    MIN_TCP_TIMEOUT,
+                                    MAX_TCP_TIMEOUT,
+                                );
                             }
                         }
                         QuicResponseTime::Responded(response_time) => {
@@ -755,17 +748,8 @@ impl QuicSocket {
 struct ActiveQueries {
     quic_timeout: Duration,
 
-    in_flight: HashMap<
-        u16,
-        (
-            once_watch::Sender<Result<Message, errors::QueryError>>,
-            JoinHandle<()>,
-        ),
-    >,
-    active: HashMap<
-        TinyVec<[Question; 1]>,
-        (u16, once_watch::Sender<Result<Message, errors::QueryError>>),
-    >,
+    in_flight: HashMap<u16, (OnceWatchMessageSender, JoinHandle<()>)>,
+    active: HashMap<TinyVec<[Question; 1]>, (u16, OnceWatchMessageSender)>,
 }
 
 impl ActiveQueries {
@@ -944,15 +928,14 @@ impl QuicSocket {
         // If the UDP socket is unreliable, send most data via QUIC. Some queries should still use
         // UDP to determine if the network conditions are improving. However, if the QUIC connection
         // is also unstable, then we should not rely on it.
-        let query_task = match options {
+
+        match options {
             QueryOpt::UdpTcp => todo!(),
             QueryOpt::Tcp => todo!(),
-            QueryOpt::Quic => QuicQuery::new(&self, query),
+            QueryOpt::Quic => QuicQuery::new(self, query),
             QueryOpt::Tls => todo!(),
             QueryOpt::QuicTls => todo!(),
             QueryOpt::Https => todo!(),
-        };
-
-        return query_task;
+        }
     }
 }

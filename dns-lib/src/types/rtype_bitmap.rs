@@ -91,7 +91,7 @@ impl FromWire for WindowBlock {
         let window_block_number = u8::from_wire_format(wire)?;
         let bitmap_length = u8::from_wire_format(wire)?;
 
-        if (bitmap_length < Self::MIN_BITMAP_LENGTH) || (bitmap_length > Self::MAX_BITMAP_LENGTH) {
+        if !(Self::MIN_BITMAP_LENGTH..=Self::MAX_BITMAP_LENGTH).contains(&bitmap_length) {
             return Err(ReadWireError::OutOfBoundsError(format!(
                 "the bitmap length must be between {0} and {1} (inclusive)",
                 Self::MIN_BITMAP_LENGTH,
@@ -103,11 +103,11 @@ impl FromWire for WindowBlock {
             &mut wire.take_as_read_wire(bitmap_length as usize)?,
         )?;
 
-        return Ok(WindowBlock {
+        Ok(WindowBlock {
             window_block_number,
             bitmap_length,
             map,
-        });
+        })
     }
 }
 
@@ -182,7 +182,7 @@ impl RTypeBitmap {
                 }
             }
         }
-        return false;
+        false
     }
 }
 

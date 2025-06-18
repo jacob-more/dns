@@ -53,7 +53,7 @@ pub const fn ascii_to_octal(character: AsciiChar) -> (AsciiChar, AsciiChar, Asci
     (
         ((character >> 6) & 0b00000011) + ASCII_ZERO,
         ((character >> 3) & 0b00000111) + ASCII_ZERO,
-        ((character >> 0) & 0b00000111) + ASCII_ZERO,
+        (character & 0b00000111) + ASCII_ZERO,
     )
 }
 
@@ -61,7 +61,7 @@ pub const fn ascii_to_octal(character: AsciiChar) -> (AsciiChar, AsciiChar, Asci
 pub const fn octal_to_ascii(char1: AsciiChar, char2: AsciiChar, char3: AsciiChar) -> AsciiChar {
     (((char1 - ASCII_ZERO) << 6) & 0b11000000)
         + (((char2 - ASCII_ZERO) << 3) & 0b00111000)
-        + (((char3 - ASCII_ZERO) << 0) & 0b00000111)
+        + ((char3 - ASCII_ZERO) & 0b00000111)
 }
 
 #[cfg(test)]

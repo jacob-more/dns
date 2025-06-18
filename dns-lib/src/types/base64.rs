@@ -198,15 +198,15 @@ const fn base64_to_u6(character: AsciiChar) -> Result<u6, Base64Error> {
 
 #[inline]
 const fn is_base64_char(encoded: AsciiChar) -> bool {
-    match encoded {
-        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
-        ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z => true,
-        ASCII_ZERO..=ASCII_NINE => true,
-        ASCII_PLUS => true,
-        ASCII_SLASH => true,
-        PADDING_CHAR => true,
-        _ => false,
-    }
+    matches!(
+        encoded,
+        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z
+        | ASCII_LOWERCASE_A..=ASCII_LOWERCASE_Z
+        | ASCII_ZERO..=ASCII_NINE
+        | ASCII_PLUS
+        | ASCII_SLASH
+        | PADDING_CHAR
+    )
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -244,17 +244,17 @@ impl Base64 {
         let string_chunks = string.as_slice().chunks_exact(4);
 
         let remainder = string_chunks.remainder();
-        if remainder.len() != 0 {
+        if !remainder.is_empty() {
             return Err(Base64Error::Overflow);
         }
 
         for chunk in string_chunks {
-            match chunk {
+            match *chunk {
                 // 1st & 2nd character can never be a padding character.
-                &[PADDING_CHAR, _, _, _] => return Err(Base64Error::Overflow),
-                &[_, PADDING_CHAR, _, _] => return Err(Base64Error::Overflow),
+                [PADDING_CHAR, _, _, _] => return Err(Base64Error::Overflow),
+                [_, PADDING_CHAR, _, _] => return Err(Base64Error::Overflow),
                 // 3rd character can only be padding if 4th is as well
-                &[char1, char2, PADDING_CHAR, PADDING_CHAR] => {
+                [char1, char2, PADDING_CHAR, PADDING_CHAR] => {
                     let bits0_5 =
                         (u32::from(base64_to_u6(char1)?) << 18) & 0b111111_000000_000000_000000;
                     let bits6_11 =
@@ -266,9 +266,9 @@ impl Base64 {
                     encoded_bytes.push(byte1);
                     break;
                 }
-                &[_, _, PADDING_CHAR, _] => return Err(Base64Error::Overflow),
+                [_, _, PADDING_CHAR, _] => return Err(Base64Error::Overflow),
                 // 4th character can be padding
-                &[char1, char2, char3, PADDING_CHAR] => {
+                [char1, char2, char3, PADDING_CHAR] => {
                     let bits0_5 =
                         (u32::from(base64_to_u6(char1)?) << 18) & 0b111111_000000_000000_000000;
                     let bits6_11 =
@@ -281,15 +281,14 @@ impl Base64 {
                     encoded_bytes.extend([byte1, byte2]);
                     break;
                 }
-                &[char1, char2, char3, char4] => {
+                [char1, char2, char3, char4] => {
                     let bits0_5 =
                         (u32::from(base64_to_u6(char1)?) << 18) & 0b111111_000000_000000_000000;
                     let bits6_11 =
                         (u32::from(base64_to_u6(char2)?) << 12) & 0b000000_111111_000000_000000;
                     let bits12_17 =
                         (u32::from(base64_to_u6(char3)?) << 6) & 0b000000_000000_111111_000000;
-                    let bits18_23 =
-                        (u32::from(base64_to_u6(char4)?) << 0) & 0b000000_000000_000000_111111;
+                    let bits18_23 = u32::from(base64_to_u6(char4)?) & 0b000000_000000_000000_111111;
                     let merged_bytes = bits0_5 | bits6_11 | bits12_17 | bits18_23;
 
                     let [_, byte1, byte2, byte3] = u32::to_be_bytes(merged_bytes);
@@ -302,9 +301,9 @@ impl Base64 {
             }
         }
 
-        return Ok(Self {
+        Ok(Self {
             bytes: encoded_bytes,
-        });
+        })
     }
 
     #[inline]
@@ -319,7 +318,7 @@ impl Base64 {
             let bits0_5 = ((merged_bytes & 0b111111_000000_000000_000000) >> 18) as u8;
             let bits6_11 = ((merged_bytes & 0b000000_111111_000000_000000) >> 12) as u8;
             let bits12_17 = ((merged_bytes & 0b000000_000000_111111_000000) >> 6) as u8;
-            let bits18_23 = ((merged_bytes & 0b000000_000000_000000_111111) >> 0) as u8;
+            let bits18_23 = (merged_bytes & 0b000000_000000_000000_111111) as u8;
 
             decoded_chars.extend([
                 u6_to_base64(u6::new(bits0_5)),
@@ -329,9 +328,9 @@ impl Base64 {
             ]);
         });
 
-        match remainder {
-            &[] => (),
-            &[byte0] => {
+        match *remainder {
+            [] => (),
+            [byte0] => {
                 let merged_bytes = u32::from_be_bytes([0, byte0, 0, 0]);
 
                 let bits0_5 = ((merged_bytes & 0b111111_000000_000000_000000) >> 18) as u8;
@@ -344,7 +343,7 @@ impl Base64 {
                     PADDING_CHAR,
                 ]);
             }
-            &[byte0, byte1] => {
+            [byte0, byte1] => {
                 let merged_bytes = u32::from_be_bytes([0, byte0, byte1, 0]);
 
                 let bits0_5 = ((merged_bytes & 0b111111_000000_000000_000000) >> 18) as u8;
@@ -389,16 +388,16 @@ impl Base64 {
                 return Err(Base64Error::Overflow);
             }
 
-            match chunk {
+            match *chunk {
                 // 1st & 2nd character can never be a padding character.
-                &[PADDING_CHAR, _, _, _] => return Err(Base64Error::Overflow),
-                &[_, PADDING_CHAR, _, _] => return Err(Base64Error::Overflow),
+                [PADDING_CHAR, _, _, _] => return Err(Base64Error::Overflow),
+                [_, PADDING_CHAR, _, _] => return Err(Base64Error::Overflow),
                 // 3rd character can only be padding if 4th is as well
-                &[_, _, PADDING_CHAR, PADDING_CHAR] => padding_reached = true,
-                &[_, _, PADDING_CHAR, _] => return Err(Base64Error::Overflow),
+                [_, _, PADDING_CHAR, PADDING_CHAR] => padding_reached = true,
+                [_, _, PADDING_CHAR, _] => return Err(Base64Error::Overflow),
                 // 4th character can be padding
-                &[_, _, _, PADDING_CHAR] => padding_reached = true,
-                &[_, _, _, _] => (),
+                [_, _, _, PADDING_CHAR] => padding_reached = true,
+                [_, _, _, _] => (),
                 _ => panic!(
                     "The pattern was supposed to chunk exactly 4 bytes. However, the chunk contained {} bytes",
                     chunk.len()
@@ -406,7 +405,7 @@ impl Base64 {
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 }
 

@@ -142,7 +142,7 @@ impl<T> SharedAwokenToken<T> {
     }
 }
 
-impl<'a, T> Future for SharedAwokenToken<T> {
+impl<T> Future for SharedAwokenToken<T> {
     type Output = ();
 
     #[inline]

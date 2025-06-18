@@ -134,12 +134,12 @@ const fn base32_to_u5(character: AsciiChar) -> Result<u5, Base32Error> {
 
 #[inline]
 const fn is_base32_char(encoded: AsciiChar) -> bool {
-    match encoded {
-        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z => true,
-        ASCII_TWO..=ASCII_SEVEN => true,
-        PADDING_CHAR => true,
-        _ => false,
-    }
+    matches!(
+        encoded,
+        ASCII_UPPERCASE_A..=ASCII_UPPERCASE_Z
+        | ASCII_TWO..=ASCII_SEVEN
+        | PADDING_CHAR
+    )
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -187,17 +187,17 @@ impl Base32 {
         let string_chunks = string.as_slice().chunks_exact(8);
 
         let remainder = string_chunks.remainder();
-        if remainder.len() != 0 {
+        if !remainder.is_empty() {
             return Err(Base32Error::Overflow);
         }
 
         for chunk in string_chunks {
-            match chunk {
+            match *chunk {
                 // 1st character can never be a padding character.
-                &[PADDING_CHAR, _, _, _, _, _, _, _] => return Err(Base32Error::Overflow),
+                [PADDING_CHAR, _, _, _, _, _, _, _] => return Err(Base32Error::Overflow),
 
                 // Characters 1, 2, & 3 can only be a padding character if every byte that follows is also a padding character.
-                &[
+                [
                     char1,
                     PADDING_CHAR,
                     PADDING_CHAR,
@@ -216,9 +216,9 @@ impl Base32 {
                     encoded_bytes.push(byte1);
                     break;
                 }
-                &[_, PADDING_CHAR, _, _, _, _, _, _] => return Err(Base32Error::BadPadding),
+                [_, PADDING_CHAR, _, _, _, _, _, _] => return Err(Base32Error::BadPadding),
 
-                &[
+                [
                     char1,
                     char2,
                     PADDING_CHAR,
@@ -239,13 +239,13 @@ impl Base32 {
                     encoded_bytes.push(byte1);
                     break;
                 }
-                &[_, _, PADDING_CHAR, _, _, _, _, _] => return Err(Base32Error::BadPadding),
+                [_, _, PADDING_CHAR, _, _, _, _, _] => return Err(Base32Error::BadPadding),
 
                 // 4th character can never be a padding character.
-                &[_, _, _, PADDING_CHAR, _, _, _, _] => return Err(Base32Error::BadPadding),
+                [_, _, _, PADDING_CHAR, _, _, _, _] => return Err(Base32Error::BadPadding),
 
                 // Characters 5 & 6 can only be a padding character if every byte that follows is also a padding character.
-                &[
+                [
                     char1,
                     char2,
                     char3,
@@ -269,8 +269,8 @@ impl Base32 {
                     encoded_bytes.extend([byte1, byte2]);
                     break;
                 }
-                &[_, _, _, _, PADDING_CHAR, _, _, _] => return Err(Base32Error::BadPadding),
-                &[
+                [_, _, _, _, PADDING_CHAR, _, _, _] => return Err(Base32Error::BadPadding),
+                [
                     char1,
                     char2,
                     char3,
@@ -296,13 +296,13 @@ impl Base32 {
                     encoded_bytes.extend([byte1, byte2, byte3]);
                     break;
                 }
-                &[_, _, _, _, _, PADDING_CHAR, _, _] => return Err(Base32Error::BadPadding),
+                [_, _, _, _, _, PADDING_CHAR, _, _] => return Err(Base32Error::BadPadding),
 
                 // 7th character can never be a padding character.
-                &[_, _, _, _, _, _, PADDING_CHAR, _] => return Err(Base32Error::BadPadding),
+                [_, _, _, _, _, _, PADDING_CHAR, _] => return Err(Base32Error::BadPadding),
 
                 // 8th character can be padding but does not have to be.
-                &[
+                [
                     char1,
                     char2,
                     char3,
@@ -339,7 +339,7 @@ impl Base32 {
                     break;
                 }
 
-                &[char1, char2, char3, char4, char5, char6, char7, char8] => {
+                [char1, char2, char3, char4, char5, char6, char7, char8] => {
                     let bits0_4 = (u64::from(base32_to_u5(char1)?) << 35)
                         & 0b11111_00000_00000_00000_00000_00000_00000_00000;
                     let bits5_9 = (u64::from(base32_to_u5(char2)?) << 30)
@@ -354,7 +354,7 @@ impl Base32 {
                         & 0b00000_00000_00000_00000_00000_11111_00000_00000;
                     let bits30_34 = (u64::from(base32_to_u5(char7)?) << 5)
                         & 0b00000_00000_00000_00000_00000_00000_11111_00000;
-                    let bits35_39 = (u64::from(base32_to_u5(char8)?) << 0)
+                    let bits35_39 = u64::from(base32_to_u5(char8)?)
                         & 0b00000_00000_00000_00000_00000_00000_00000_11111;
                     let merged_bytes = bits0_4
                         | bits5_9
@@ -376,9 +376,9 @@ impl Base32 {
             }
         }
 
-        return Ok(Self {
+        Ok(Self {
             bytes: encoded_bytes,
-        });
+        })
     }
 
     #[inline]
@@ -406,7 +406,7 @@ impl Base32 {
             let bits30_34 =
                 ((merged_bytes & 0b00000_00000_00000_00000_00000_00000_11111_00000) >> 5) as u8;
             let bits35_39 =
-                ((merged_bytes & 0b00000_00000_00000_00000_00000_00000_00000_11111) >> 0) as u8;
+                (merged_bytes & 0b00000_00000_00000_00000_00000_00000_00000_11111) as u8;
 
             decoded_bytes.extend([
                 u5_to_base32(u5::new(bits0_4)),
@@ -420,9 +420,9 @@ impl Base32 {
             ]);
         });
 
-        match remainder {
-            &[] => (),
-            &[byte0] => {
+        match *remainder {
+            [] => (),
+            [byte0] => {
                 let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, 0, 0, 0, 0]);
 
                 let bits0_4 = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000)
@@ -441,7 +441,7 @@ impl Base32 {
                     PADDING_CHAR,
                 ]);
             }
-            &[byte0, byte1] => {
+            [byte0, byte1] => {
                 let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, 0, 0, 0]);
 
                 let bits0_4 = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000)
@@ -464,7 +464,7 @@ impl Base32 {
                     PADDING_CHAR,
                 ]);
             }
-            &[byte0, byte1, byte2] => {
+            [byte0, byte1, byte2] => {
                 let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, byte2, 0, 0]);
 
                 let bits0_4 = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000)
@@ -489,7 +489,7 @@ impl Base32 {
                     PADDING_CHAR,
                 ]);
             }
-            &[byte0, byte1, byte2, byte3] => {
+            [byte0, byte1, byte2, byte3] => {
                 let merged_bytes = u64::from_be_bytes([0, 0, 0, byte0, byte1, byte2, byte3, 0]);
 
                 let bits0_4 = ((merged_bytes & 0b11111_00000_00000_00000_00000_00000_00000_00000)
@@ -549,11 +549,11 @@ impl Base32 {
                 return Err(Base32Error::Overflow);
             }
 
-            match chunk {
+            match *chunk {
                 // 1st character can never be a padding character.
-                &[PADDING_CHAR, _, _, _, _, _, _, _] => return Err(Base32Error::Overflow),
+                [PADDING_CHAR, _, _, _, _, _, _, _] => return Err(Base32Error::Overflow),
                 // Characters 1, 2, & 3 can only be a padding character if every byte that follows is also a padding character.
-                &[
+                [
                     _,
                     PADDING_CHAR,
                     PADDING_CHAR,
@@ -563,8 +563,8 @@ impl Base32 {
                     PADDING_CHAR,
                     PADDING_CHAR,
                 ] => padding_reached = true,
-                &[_, PADDING_CHAR, _, _, _, _, _, _] => return Err(Base32Error::BadPadding),
-                &[
+                [_, PADDING_CHAR, _, _, _, _, _, _] => return Err(Base32Error::BadPadding),
+                [
                     _,
                     _,
                     PADDING_CHAR,
@@ -574,11 +574,11 @@ impl Base32 {
                     PADDING_CHAR,
                     PADDING_CHAR,
                 ] => padding_reached = true,
-                &[_, _, PADDING_CHAR, _, _, _, _, _] => return Err(Base32Error::BadPadding),
+                [_, _, PADDING_CHAR, _, _, _, _, _] => return Err(Base32Error::BadPadding),
                 // 4th character can never be a padding character.
-                &[_, _, _, PADDING_CHAR, _, _, _, _] => return Err(Base32Error::BadPadding),
+                [_, _, _, PADDING_CHAR, _, _, _, _] => return Err(Base32Error::BadPadding),
                 // Characters 5 & 6 can only be a padding character if every byte that follows is also a padding character.
-                &[
+                [
                     _,
                     _,
                     _,
@@ -588,16 +588,14 @@ impl Base32 {
                     PADDING_CHAR,
                     PADDING_CHAR,
                 ] => padding_reached = true,
-                &[_, _, _, _, PADDING_CHAR, _, _, _] => return Err(Base32Error::BadPadding),
-                &[_, _, _, _, _, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => {
-                    padding_reached = true
-                }
-                &[_, _, _, _, _, PADDING_CHAR, _, _] => return Err(Base32Error::BadPadding),
+                [_, _, _, _, PADDING_CHAR, _, _, _] => return Err(Base32Error::BadPadding),
+                [_, _, _, _, _, PADDING_CHAR, PADDING_CHAR, PADDING_CHAR] => padding_reached = true,
+                [_, _, _, _, _, PADDING_CHAR, _, _] => return Err(Base32Error::BadPadding),
                 // 7th character can never be a padding character.
-                &[_, _, _, _, _, _, PADDING_CHAR, _] => return Err(Base32Error::BadPadding),
+                [_, _, _, _, _, _, PADDING_CHAR, _] => return Err(Base32Error::BadPadding),
                 // 8th character can be padding but does not have to be.
-                &[_, _, _, _, _, _, _, PADDING_CHAR] => padding_reached = true,
-                &[_, _, _, _, _, _, _, _] => (),
+                [_, _, _, _, _, _, _, PADDING_CHAR] => padding_reached = true,
+                [_, _, _, _, _, _, _, _] => (),
                 _ => panic!(
                     "The pattern was supposed to chunk exactly 8 bytes. However, the chunk contained {} bytes",
                     chunk.len()
@@ -605,7 +603,7 @@ impl Base32 {
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 }
 

@@ -237,7 +237,7 @@ impl InternalBytes {
                 } else if end == len {
                     Self::Tail {
                         data: bytes.clone(),
-                        start: start,
+                        start,
                     }
                 } else {
                     Self::Slice {
@@ -295,7 +295,7 @@ impl InternalBytes {
     fn as_slice(&self) -> &[u8] {
         match &self {
             Self::Empty => &[],
-            Self::Vec(bytes) => &bytes,
+            Self::Vec(bytes) => bytes,
             Self::Front { data, end } => &data[..*end],
             Self::Tail { data, start } => &data[*start..],
             Self::Slice { data, start, end } => &data[*start..*end],
@@ -443,7 +443,7 @@ impl Bytes {
 impl From<Rc<Vec<u8>>> for Bytes {
     #[inline]
     fn from(value: Rc<Vec<u8>>) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -458,7 +458,7 @@ impl From<Rc<Vec<u8>>> for Bytes {
 impl From<&Rc<Vec<u8>>> for Bytes {
     #[inline]
     fn from(value: &Rc<Vec<u8>>) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -473,7 +473,7 @@ impl From<&Rc<Vec<u8>>> for Bytes {
 impl From<Vec<u8>> for Bytes {
     #[inline]
     fn from(value: Vec<u8>) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -488,7 +488,7 @@ impl From<Vec<u8>> for Bytes {
 impl From<&Vec<u8>> for Bytes {
     #[inline]
     fn from(value: &Vec<u8>) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -503,7 +503,7 @@ impl From<&Vec<u8>> for Bytes {
 impl From<Vec<&u8>> for Bytes {
     #[inline]
     fn from(value: Vec<&u8>) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -518,7 +518,7 @@ impl From<Vec<&u8>> for Bytes {
 impl From<&Vec<&u8>> for Bytes {
     #[inline]
     fn from(value: &Vec<&u8>) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -533,7 +533,7 @@ impl From<&Vec<&u8>> for Bytes {
 impl From<&[u8]> for Bytes {
     #[inline]
     fn from(value: &[u8]) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -548,7 +548,7 @@ impl From<&[u8]> for Bytes {
 impl From<&[&u8]> for Bytes {
     #[inline]
     fn from(value: &[&u8]) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -563,7 +563,7 @@ impl From<&[&u8]> for Bytes {
 impl<const N: usize> From<&[u8; N]> for Bytes {
     #[inline]
     fn from(value: &[u8; N]) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -578,7 +578,7 @@ impl<const N: usize> From<&[u8; N]> for Bytes {
 impl<const N: usize> From<&[&u8; N]> for Bytes {
     #[inline]
     fn from(value: &[&u8; N]) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -593,7 +593,7 @@ impl<const N: usize> From<&[&u8; N]> for Bytes {
 impl<const N: usize> From<[u8; N]> for Bytes {
     #[inline]
     fn from(value: [u8; N]) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -608,7 +608,7 @@ impl<const N: usize> From<[u8; N]> for Bytes {
 impl<const N: usize> From<[&u8; N]> for Bytes {
     #[inline]
     fn from(value: [&u8; N]) -> Self {
-        if value.len() == 0 {
+        if value.is_empty() {
             Self {
                 bytes: InternalBytes::Empty,
             }
@@ -622,13 +622,13 @@ impl<const N: usize> From<[&u8; N]> for Bytes {
 
 impl FromIterator<u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = u8>>(iter: T) -> Self {
-        Self::from(iter.into_iter().collect::<Vec<u8>>())
+        Self::from(iter.into_iter().collect::<Vec<_>>())
     }
 }
 
 impl<'a> FromIterator<&'a u8> for Bytes {
     fn from_iter<T: IntoIterator<Item = &'a u8>>(iter: T) -> Self {
-        Self::from(iter.into_iter().map(|x| *x).collect::<Vec<u8>>())
+        Self::from(iter.into_iter().copied().collect::<Vec<_>>())
     }
 }
 

@@ -22,7 +22,7 @@ impl OpCode {
 
     #[inline]
     pub const fn code(&self) -> u4 {
-        return match self {
+        match self {
             Self::Unknown(x) => *x,
 
             Self::Query => u4::new(0),
@@ -32,12 +32,12 @@ impl OpCode {
             Self::Notify => u4::new(4),
             Self::Update => u4::new(5),
             Self::DNSStatefulOperations => u4::new(6),
-        };
+        }
     }
 
     #[inline]
     pub const fn mnemonic(&self) -> &str {
-        return match self {
+        match self {
             Self::Unknown(_) => "Unknown",
 
             Self::Query => "Query",
@@ -47,12 +47,12 @@ impl OpCode {
             Self::Notify => "Notify",
             Self::Update => "Update",
             Self::DNSStatefulOperations => "DNS Stateful Operations",
-        };
+        }
     }
 
     #[inline]
     pub fn from_code(value: u4) -> Self {
-        return match u8::from(value) {
+        match u8::from(value) {
             0 => Self::Query,
             1 => Self::IQuery,
             2 => Self::Status,
@@ -65,7 +65,7 @@ impl OpCode {
             _ => unreachable!(
                 "codes greater than 15 are invalid options for OpCodes and cannot be represented by a u4"
             ),
-        };
+        }
     }
 }
 

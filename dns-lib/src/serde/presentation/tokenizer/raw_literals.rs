@@ -41,29 +41,21 @@ impl<'a> Display for RawLiteral<'a> {
     }
 }
 
-impl<'a> Into<&'a str> for RawLiteral<'a> {
-    #[inline]
-    fn into(self) -> &'a str {
-        match &self {
-            Self::Text(string) => string,
-            Self::QuotedText(string) => string,
-            Self::Separator(string) => string,
-            Self::NewLine(string) => string,
-            Self::Comment(string) => string,
-        }
-    }
-}
-
-impl<'a> Into<&'a str> for &RawLiteral<'a> {
-    #[inline]
-    fn into(self) -> &'a str {
-        match &self {
+impl<'a> From<RawLiteral<'a>> for &'a str {
+    fn from(value: RawLiteral<'a>) -> Self {
+        match value {
             RawLiteral::Text(string) => string,
             RawLiteral::QuotedText(string) => string,
             RawLiteral::Separator(string) => string,
             RawLiteral::NewLine(string) => string,
             RawLiteral::Comment(string) => string,
         }
+    }
+}
+
+impl<'a> From<&RawLiteral<'a>> for &'a str {
+    fn from(value: &RawLiteral<'a>) -> Self {
+        Self::from(*value)
     }
 }
 
@@ -125,7 +117,7 @@ impl<'a> Iterator for RawLiteralIter<'a> {
             return Some(Ok(result));
         }
 
-        return Some(Err(TokenizerError::UnknownToken(self.feed.to_string())));
+        Some(Err(TokenizerError::UnknownToken(self.feed.to_string())))
     }
 }
 

@@ -90,7 +90,7 @@ impl WKS {
 impl FromTokenizedRData for WKS {
     #[inline]
     fn from_tokenized_rdata(
-        rdata: &Vec<&str>,
+        rdata: &[&str],
     ) -> Result<Self, crate::serde::presentation::errors::TokenizedRecordError>
     where
         Self: Sized,
@@ -114,7 +114,7 @@ impl FromTokenizedRData for WKS {
             if REGEX_UNSIGNED_INT.is_match_at(service, 0) {
                 add_port_to_bitmap(&mut port_bitmap, &u16::from_token_format(&[service])?.0);
             } else {
-                let ports = match port_from_service(service.to_string(), protocol.clone()) {
+                let ports = match port_from_service(service.to_string(), protocol) {
                     Ok(ports) => ports,
                     Err(error) => Err(TokenError::PortError(error))?,
                 };
@@ -180,7 +180,7 @@ impl ToPresentation for WKS {
                 ((index * 8) + 1).to_presentation_format(out_buffer);
             }
             if *byte & 0b10000000 == 0b10000000 {
-                ((index * 8) + 0).to_presentation_format(out_buffer);
+                (index * 8).to_presentation_format(out_buffer);
             }
         }
     }
