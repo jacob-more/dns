@@ -7,5 +7,6 @@ members = [
     "dns-server",
     "dns-client",
     "dns-experimental",
+    "static-assertions",
 ]
 resolver = "3"
