@@ -85,6 +85,8 @@ macro_rules! gen_enum {
 
 macro_rules! impl_enum_code {
     ($enum_name:ident, $int_ty:ty, ($(($item_name:ident, $item_code:literal)),+$(,)?)) => {
+        static_assertions::const_assert!(<$enum_name>::MIN <= <$enum_name>::MAX);
+
         impl $enum_name {
             pub const MIN: $int_ty = <$int_ty>::MIN;
             pub const MAX: $int_ty = <$int_ty>::MAX;

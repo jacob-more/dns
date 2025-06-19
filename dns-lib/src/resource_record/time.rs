@@ -8,6 +8,7 @@ use std::{
 };
 
 use dns_macros::{FromWire, ToPresentation, ToWire};
+use static_assertions::const_assert;
 
 use crate::serde::presentation::{errors::TokenError, from_presentation::FromPresentation};
 
@@ -40,6 +41,7 @@ type TimeInt = u32;
 pub const TTL_MAX: TimeInt = 2_u32.pow(31) - 1;
 /// https://datatracker.ietf.org/doc/html/rfc2181#section-8
 pub const TTL_MIN: TimeInt = 0;
+const_assert!(TTL_MIN <= TTL_MAX);
 
 #[derive(
     Clone,

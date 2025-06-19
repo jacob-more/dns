@@ -7,6 +7,7 @@ use std::{
     ops::Add,
 };
 
+use static_assertions::const_assert;
 use tinyvec::{ArrayVec, TinyVec, tiny_vec};
 
 use crate::{
@@ -174,6 +175,10 @@ pub struct CDomainName {
     // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
     length_octets: TinyVec<[u8; 14]>,
 }
+
+const_assert!(CDomainName::MIN_OCTETS <= CDomainName::MAX_OCTETS);
+const_assert!(CDomainName::MAX_LABELS <= CDomainName::MAX_OCTETS);
+const_assert!(CDomainName::MAX_COMPRESSION_POINTERS <= CDomainName::MAX_LABELS);
 
 impl CDomainName {
     /// Maximum number of bytes that can make up a domain name, including the length octet.

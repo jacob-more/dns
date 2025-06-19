@@ -10,7 +10,7 @@ use crate::network::errors::{self, SocketType};
 pub async fn read_udp_message<const BUFFER_SIZE: usize>(
     udp_socket: &UdpSocket,
 ) -> Result<Message, errors::ReceiveError> {
-    debug_assert!(u16::MAX as usize >= BUFFER_SIZE);
+    assert!(u16::MAX as usize >= BUFFER_SIZE);
 
     // Step 1: Setup buffer. Make sure it is within the configured size.
     let mut buffer = [0; BUFFER_SIZE];
@@ -50,7 +50,7 @@ pub async fn read_stream_message<const BUFFER_SIZE: usize>(
     tcp_stream: &mut (impl AsyncReadExt + Unpin),
     protocol: SocketType,
 ) -> Result<Message, errors::ReceiveError> {
-    debug_assert!(u16::MAX as usize >= BUFFER_SIZE);
+    assert!(u16::MAX as usize >= BUFFER_SIZE);
 
     // Step 1: Deserialize the u16 representing the size of the rest of the data. This is the first
     //         2 bytes of data.

@@ -8,6 +8,8 @@ use std::{
     task::{Poll, Waker},
 };
 
+use static_assertions::const_assert_ne;
+
 /// A state in which the token has not yet been awoken. In this state, wakers
 /// can be added to the `waker` map and they will be awoken if the state
 /// changes to `STATE_AWAKE`.
@@ -15,6 +17,12 @@ const STATE_WAIT: u8 = 0;
 /// A state in which the token has been awoken. No additional wakers should be
 /// added to `wakers`.
 const STATE_AWAKE: u8 = 1;
+
+const_assert_ne!(
+    STATE_WAIT,
+    STATE_AWAKE,
+    "STATE_WAIT and STATE_AWAKE must not be equal since they represent distinct states used by the awake token"
+);
 
 #[repr(u8)]
 enum State {

@@ -27,6 +27,7 @@ use dns_lib::{
 };
 use futures::FutureExt;
 use pin_project::{pin_project, pinned_drop};
+use static_assertions::const_assert;
 use tinyvec::TinyVec;
 use tokio::{
     io::AsyncWriteExt,
@@ -66,24 +67,61 @@ pub(crate) const INIT_TCP_TIMEOUT: Duration = Duration::from_secs(1);
 /// this represents 200%. If the average response time were 20 ms, then the retransmission timeout
 /// would be 40 ms.
 pub(crate) const TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME: f64 = 2.00;
+const_assert!(
+    TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME >= 0.0,
+    "TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME represents a percentage that must be at least 0%"
+);
 /// The maximum percentage of the average TCP response time that the timeout should be set to.
 /// Currently, this represents 400%. If the average response time were 20 ms, then the
 /// retransmission timeout would be 80 ms.
 pub(crate) const TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME: f64 = 4.00;
+const_assert!(
+    TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME >= 0.0,
+    "TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME represents a percentage that must be at least 0%"
+);
+const_assert!(
+    TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME
+        <= TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME,
+    "TCP_TIMEOUT_MAX_DURATION_ABOVE_TCP_RESPONSE_TIME is the upper bound of TCP_TIMEOUT_DURATION_ABOVE_TCP_RESPONSE_TIME"
+);
 /// The step size to use if INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is exceeded.
 pub(crate) const TCP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration =
     Duration::from_millis(50);
 /// When 20% or more of packets are being dropped (for TCP, this just means that the queries are
 /// timing out), then it is time to start slowing down the socket.
 pub(crate) const INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+const_assert!(
+    INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD >= 0.0,
+    "INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD <= 1.0,
+    "INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
 /// When 1% or more of packets are being dropped (for TCP, this just means that the queries are
 /// timing out), then we might want to try speeding up the socket again, to reflect the average
 /// response time.
 pub(crate) const DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+const_assert!(
+    DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD >= 0.0,
+    "DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD <= 1.0,
+    "DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD < INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD,
+    "if DECREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD isn't less than INCREASE_TCP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD, then there would be cases where a timing will be adjusted up and then back down"
+);
 /// The maximum allowable TCP timeout.
 pub(crate) const MAX_TCP_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum allowable TCP timeout.
 pub(crate) const MIN_TCP_TIMEOUT: Duration = Duration::from_millis(50);
+const_assert!(
+    MIN_TCP_TIMEOUT.as_secs_f64() <= MAX_TCP_TIMEOUT.as_secs_f64(),
+    "MAX_TCP_TIMEOUT and MIN_TCP_TIMEOUT are the upper and lower bounds for a single range. So the upper bound should never be below the lower bound"
+);
 
 /// The initial UDP retransmission timeout, used when setting up a socket, before anything is known
 /// about the average response time.
@@ -92,23 +130,69 @@ pub(crate) const INIT_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_mill
 /// this represents 150%. If the average response time were 20 ms, then the retransmission timeout
 /// would be 30 ms.
 pub(crate) const UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 1.50;
+const_assert!(
+    UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME >= 0.0,
+    "UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME represents a percentage that must be at least 0%"
+);
 /// The maximum percentage of the average UDP response time that the timeout should be set to.
-/// Currently, this represents 250%. If the average response time were 20 ms, then the
+/// Currently, this represents 300%. If the average response time were 20 ms, then the
 /// retransmission timeout would be 60 ms.
 pub(crate) const UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 3.00;
+const_assert!(
+    UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME >= 0.0,
+    "UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME represents a percentage that must be at least 0%"
+);
+const_assert!(
+    UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME
+        <= UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME,
+    "UDP_RETRANSMISSION_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME is the upper bound of UDP_RETRANSMISSION_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME"
+);
 /// The step size to use if INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is
 /// exceeded.
 pub(crate) const UDP_RETRANSMISSION_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration =
     Duration::from_millis(50);
 /// When 20% or more of packets are being dropped, then it is time to start slowing down the socket.
 pub(crate) const INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+const_assert!(
+    INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD >= 0.0,
+    "INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD <= 1.0,
+    "INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
 /// When 1% or more of packets are being dropped, then we might want to try speeding up the socket
 /// again, to reflect the average response time.
 pub(crate) const DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+const_assert!(
+    DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD >= 0.0,
+    "DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD <= 1.0,
+    "DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD
+        < INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD,
+    "if DECREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD isn't less than INCREASE_UDP_RETRANSMISSION_TIMEOUT_DROPPED_AVERAGE_THRESHOLD, then there would be cases where a timing will be adjusted up and then back down"
+);
 /// The maximum allowable UDP retransmission timeout.
 pub(crate) const MAX_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_secs(10);
+const_assert!(
+    MAX_UDP_RETRANSMISSION_TIMEOUT.as_secs_f64() >= INIT_UDP_RETRANSMISSION_TIMEOUT.as_secs_f64(),
+    "MAX_UDP_RETRANSMISSION_TIMEOUT is the upper bound for INIT_UDP_RETRANSMISSION_TIMEOUT"
+);
 /// The minimum allowable UDP retransmission timeout.
 pub(crate) const MIN_UDP_RETRANSMISSION_TIMEOUT: Duration = Duration::from_millis(50);
+const_assert!(
+    MIN_UDP_RETRANSMISSION_TIMEOUT.as_secs_f64() <= INIT_UDP_RETRANSMISSION_TIMEOUT.as_secs_f64(),
+    "MIN_UDP_RETRANSMISSION_TIMEOUT is the lower bound for INIT_UDP_RETRANSMISSION_TIMEOUT"
+);
+const_assert!(
+    MIN_UDP_RETRANSMISSION_TIMEOUT.as_secs_f64() <= MAX_UDP_RETRANSMISSION_TIMEOUT.as_secs_f64(),
+    "MAX_UDP_RETRANSMISSION_TIMEOUT and MIN_UDP_RETRANSMISSION_TIMEOUT are the upper and lower bounds for a single range. So the upper bound should never be below the lower bound"
+);
 
 /// The initial UDP timeout, used when setting up a socket, before anything is known about the
 /// average response time.
@@ -118,23 +202,68 @@ pub(crate) const UDP_RETRANSMISSIONS: u8 = 1;
 /// The percentage of the average UDP response time that the timeout should be set to. Currently,
 /// this represents 200%. If the average response time were 20 ms, then the timeout would be 40 ms.
 pub(crate) const UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 2.00;
+const_assert!(
+    UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME >= 0.0,
+    "UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME represents a percentage that must be at least 0%"
+);
 /// The maximum percentage of the average UDP response time that the timeout should be set to.
 /// Currently, this represents 400%. If the average response time were 20 ms, then the
 /// retransmission timeout would be 80 ms.
 pub(crate) const UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME: f64 = 4.00;
+const_assert!(
+    UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME >= 0.0,
+    "UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME represents a percentage that must be at least 0%"
+);
+const_assert!(
+    UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME
+        <= UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME,
+    "UDP_TIMEOUT_MAX_DURATION_ABOVE_UDP_RESPONSE_TIME is the upper bound of UDP_TIMEOUT_DURATION_ABOVE_UDP_RESPONSE_TIME"
+);
 /// The step size to use if INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD is
 /// exceeded.
 pub(crate) const UDP_TIMEOUT_STEP_WHEN_DROPPED_THRESHOLD_EXCEEDED: Duration =
     Duration::from_millis(50);
 /// When 20% or more of packets are being dropped, then it is time to start slowing down the socket.
 pub(crate) const INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.20;
+const_assert!(
+    INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD >= 0.0,
+    "INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD <= 1.0,
+    "INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
 /// When 1% or more of packets are being dropped, then we might want to try speeding up the socket
 /// again, to reflect the average response time.
 pub(crate) const DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD: f64 = 0.01;
+const_assert!(
+    DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD >= 0.0,
+    "DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD <= 1.0,
+    "DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD represents a percentage that must be between 0 and 1"
+);
+const_assert!(
+    DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD < INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD,
+    "if DECREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD isn't less than INCREASE_UDP_TIMEOUT_DROPPED_AVERAGE_THRESHOLD, then there would be cases where a timing will be adjusted up and then back down"
+);
 /// The maximum allowable UDP timeout.
 pub(crate) const MAX_UDP_TIMEOUT: Duration = Duration::from_secs(10);
+const_assert!(
+    MAX_UDP_TIMEOUT.as_secs_f64() >= INIT_UDP_TIMEOUT.as_secs_f64(),
+    "MAX_UDP_TIMEOUT is the upper bound for INIT_UDP_TIMEOUT"
+);
 /// The minimum allowable UDP timeout.
 pub(crate) const MIN_UDP_TIMEOUT: Duration = Duration::from_millis(50);
+const_assert!(
+    MIN_UDP_TIMEOUT.as_secs_f64() <= INIT_UDP_TIMEOUT.as_secs_f64(),
+    "MIN_UDP_TIMEOUT is the lower bound for INIT_UDP_TIMEOUT"
+);
+const_assert!(
+    MIN_UDP_TIMEOUT.as_secs_f64() <= MAX_UDP_TIMEOUT.as_secs_f64(),
+    "MAX_UDP_TIMEOUT and MIN_UDP_TIMEOUT are the upper and lower bounds for a single range. So the upper bound should never be below the lower bound"
+);
 
 pub(crate) const ROLLING_AVERAGE_TCP_MAX_DROPPED: NonZeroU8 = NonZeroU8::new(11).unwrap();
 pub(crate) const ROLLING_AVERAGE_TCP_MAX_RESPONSE_TIMES: NonZeroU8 = NonZeroU8::new(13).unwrap();

@@ -1,3 +1,4 @@
+use static_assertions::const_assert;
 use tinyvec::ArrayVec;
 
 use crate::{
@@ -14,6 +15,8 @@ struct WindowBlock {
     bitmap_length: u8, //< Must be between 1 and 32, inclusive.
     map: ArrayVec<[u8; WindowBlock::MAX_BITMAP_LENGTH as usize]>,
 }
+
+const_assert!(WindowBlock::MIN_BITMAP_LENGTH <= WindowBlock::MAX_BITMAP_LENGTH);
 
 impl WindowBlock {
     const MIN_BITMAP_LENGTH: u8 = 1;
