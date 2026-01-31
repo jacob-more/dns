@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt::{Debug, Display},
+    hash::Hash,
     iter::FusedIterator,
     marker::PhantomData,
     ops::Add,
@@ -165,7 +166,7 @@ pub trait CmpDomainName<T>: Sized {
 /// This RFC lists a number of the requirements for a DNS system.
 ///
 /// Domain names cannot be compressed: Those not defined in RFC 1035
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone)]
 pub struct CDomainName {
     /// Octets still contains label lengths inline despite `length_octets` containing all the length
     /// octets. This way, it maintains the exact same layout as the wire format.
@@ -604,6 +605,19 @@ impl<'a> DoubleEndedIterator for CDomainSearchNameIter<'a> {
 
 impl<'a> ExactSizeIterator for CDomainSearchNameIter<'a> {}
 impl<'a> FusedIterator for CDomainSearchNameIter<'a> {}
+
+impl PartialEq for CDomainName {
+    fn eq(&self, other: &Self) -> bool {
+        self.octets == other.octets
+    }
+}
+impl Eq for CDomainName {}
+
+impl Hash for CDomainName {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.octets.hash(state);
+    }
+}
 
 impl Display for CDomainName {
     #[inline]
