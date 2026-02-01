@@ -1,6 +1,6 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::types::domain_name::DomainName;
+use crate::types::domain_name::{DomainNameVec, IncompressibleDomainVec};
 
 /// TODO: read RFC 2672
 ///
@@ -9,17 +9,19 @@ use crate::types::domain_name::DomainName;
     Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData,
 )]
 pub struct DNAME {
-    target: DomainName,
+    target: IncompressibleDomainVec,
 }
 
 impl DNAME {
     #[inline]
-    pub fn new(target: DomainName) -> Self {
-        Self { target }
+    pub fn new(target: DomainNameVec) -> Self {
+        Self {
+            target: IncompressibleDomainVec(target),
+        }
     }
 
     #[inline]
-    pub fn target_name(&self) -> &DomainName {
+    pub fn target_name(&self) -> &DomainNameVec {
         &self.target
     }
 }
@@ -29,13 +31,13 @@ mod circular_serde_sanity_test {
     use super::DNAME;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::DomainName,
+        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         DNAME {
-            target: DomainName::from_utf8("www.example.com.").unwrap()
+            target: IncompressibleDomainVec(DomainNameVec::from_utf8("www.example.com.").unwrap())
         }
     );
 }
@@ -47,7 +49,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::DomainName,
+        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";
@@ -57,7 +59,7 @@ mod tokenizer_tests {
         test_ok,
         DNAME,
         DNAME {
-            target: DomainName::from_utf8(GOOD_DOMAIN).unwrap()
+            target: IncompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [GOOD_DOMAIN]
     );

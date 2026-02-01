@@ -23,7 +23,7 @@ use dns_lib::{
     interface::ports::{DNS_TCP_PORT, DNS_UDP_PORT},
     query::{message::Message, question::Question},
     serde::wire::{to_wire::ToWire, write_wire::WriteWire},
-    types::c_domain_name::CompressionMap,
+    types::domain_name::CompressionMap,
 };
 use futures::FutureExt;
 use pin_project::{pin_project, pinned_drop};
@@ -2516,7 +2516,7 @@ mod mixed_udp_tcp_tests {
             rtype::RType, time::Time, types::a::A,
         },
         serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire},
-        types::c_domain_name::CDomainName,
+        types::domain_name::DomainNameVec,
     };
     use tinyvec::TinyVec;
     use tokio::{io::AsyncReadExt, select};
@@ -2533,7 +2533,7 @@ mod mixed_udp_tcp_tests {
         let listen_udp_socket = tokio::net::UdpSocket::bind(LISTEN_ADDR).await.unwrap();
         let listen_tcp_socket = tokio::net::TcpListener::bind(LISTEN_ADDR).await.unwrap();
 
-        let example_domain = CDomainName::from_utf8("example.org.").unwrap();
+        let example_domain = DomainNameVec::from_utf8("example.org.").unwrap();
         let example_class = RClass::Internet;
 
         let question = Question::new(example_domain.clone(), RType::A, RClass::Internet);

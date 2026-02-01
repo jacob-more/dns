@@ -1,14 +1,17 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::{resource_record::time::Time, types::c_domain_name::CDomainName};
+use crate::{
+    resource_record::time::Time,
+    types::domain_name::{CompressibleDomainVec, DomainNameVec},
+};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.13
 #[derive(
     Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData,
 )]
 pub struct SOA {
-    mname: CDomainName,
-    rname: CDomainName,
+    mname: CompressibleDomainVec,
+    rname: CompressibleDomainVec,
     serial: u32,
     refresh: Time,
     retry: Time,
@@ -19,8 +22,8 @@ pub struct SOA {
 impl SOA {
     #[inline]
     pub fn new(
-        mname: CDomainName,
-        rname: CDomainName,
+        mname: DomainNameVec,
+        rname: DomainNameVec,
         serial: u32,
         refresh: Time,
         retry: Time,
@@ -28,8 +31,8 @@ impl SOA {
         minimum: u32,
     ) -> Self {
         Self {
-            mname,
-            rname,
+            mname: CompressibleDomainVec(mname),
+            rname: CompressibleDomainVec(rname),
             serial,
             refresh,
             retry,
@@ -39,12 +42,12 @@ impl SOA {
     }
 
     #[inline]
-    pub fn main_domain_name(&self) -> &CDomainName {
+    pub fn main_domain_name(&self) -> &DomainNameVec {
         &self.mname
     }
 
     #[inline]
-    pub fn responsible_mailbox_domain_name(&self) -> &CDomainName {
+    pub fn responsible_mailbox_domain_name(&self) -> &DomainNameVec {
         &self.rname
     }
 
@@ -80,14 +83,18 @@ mod circular_serde_sanity_test {
     use crate::{
         resource_record::time::Time,
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::c_domain_name::CDomainName,
+        types::domain_name::{CompressibleDomainVec, DomainNameVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         SOA {
-            mname: CDomainName::from_utf8("name_server.example.com.").unwrap(),
-            rname: CDomainName::from_utf8("responsible_person.example.com.").unwrap(),
+            mname: CompressibleDomainVec(
+                DomainNameVec::from_utf8("name_server.example.com.").unwrap()
+            ),
+            rname: CompressibleDomainVec(
+                DomainNameVec::from_utf8("responsible_person.example.com.").unwrap()
+            ),
             serial: 12,
             refresh: Time::new(60),
             retry: Time::new(15),
@@ -105,7 +112,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::c_domain_name::CDomainName,
+        types::domain_name::{CompressibleDomainVec, DomainNameVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";
@@ -119,8 +126,8 @@ mod tokenizer_tests {
         test_ok,
         SOA,
         SOA {
-            mname: CDomainName::from_utf8(GOOD_DOMAIN).unwrap(),
-            rname: CDomainName::from_utf8(GOOD_DOMAIN).unwrap(),
+            mname: CompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap()),
+            rname: CompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap()),
             serial: 10,
             refresh: Time::new(10),
             retry: Time::new(10),

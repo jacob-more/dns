@@ -4,13 +4,13 @@ use ux::u48;
 use crate::{
     resource_record::rcode::RCode,
     serde::wire::{from_wire::FromWire, to_wire::ToWire},
-    types::domain_name::DomainName,
+    types::domain_name::IncompressibleDomainVec,
 };
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8945#name-tsig-rr-format
 #[derive(Clone, PartialEq, Eq, Hash, Debug, RData)]
 pub struct TSIG {
-    algorithm_name: DomainName,
+    algorithm_name: IncompressibleDomainVec,
     time_signed: u48,
     fudge: u16,
     mac: Vec<u8>,
@@ -23,7 +23,7 @@ impl ToWire for TSIG {
     fn to_wire_format<'a, 'b>(
         &self,
         wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+        compression: &mut Option<crate::types::domain_name::CompressionMap>,
     ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
     where
         'a: 'b,
@@ -62,7 +62,7 @@ impl FromWire for TSIG {
         Self: Sized,
         'a: 'b,
     {
-        let algorithm_name = DomainName::from_wire_format(wire)?;
+        let algorithm_name = IncompressibleDomainVec::from_wire_format(wire)?;
         let time_signed = u48::from_wire_format(wire)?;
         let fudge = u16::from_wire_format(wire)?;
 

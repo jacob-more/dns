@@ -13,7 +13,7 @@ use dns_lib::{
         types::ns::NS,
     },
     types::{
-        c_domain_name::{CDomainName, CmpDomainName},
+        domain_name::{DomainName, DomainNameCompare, DomainNameVec},
         label::CaseSensitive,
     },
 };
@@ -81,7 +81,7 @@ where
             search_names_context.qname(),
             search_names_context
                 .qname()
-                .search_domains()
+                .search_domain_iter()
                 .take(search_names_max_index),
             limit,
         ),
@@ -301,7 +301,7 @@ async fn get_closest_name_server<CCache>(
 where
     CCache: AsyncCache,
 {
-    for (index, search_name) in question.qname().search_domains().enumerate() {
+    for (index, search_name) in question.qname().search_domain_iter().enumerate() {
         match joined_cache
             .get(&CacheQuery {
                 authoritative: false,
@@ -394,7 +394,7 @@ where
     debug!(context:?; "Recursive search redirected by dname");
     for record in &answer {
         if let RecordData::DNAME(dname_rdata) = record.get_rdata() {
-            if !context.qname().is_parent_domain_of(record.get_name()) {
+            if !context.qname().is_parent_of_ignore_case(record.get_name()) {
                 trace!(context:?; "Recursive search new dname error: The query name '{}' is not a subdomain of the dname's owner name '{}'", context.qname(), record.get_name());
                 return QError::QNameIsNotChildOfDName {
                     dname: record.get_name().clone(),
@@ -402,12 +402,12 @@ where
                 }
                 .into();
             }
-            let dname = CDomainName::from_labels(
+            let dname = DomainNameVec::from_labels(
                 context
                     .qname()
-                    .labels::<CaseSensitive>()
-                    .take(record.get_name().label_count())
-                    .chain(dname_rdata.target_name().labels())
+                    .labels_iter::<CaseSensitive>()
+                    .take(record.get_name().label_count() as usize)
+                    .chain(dname_rdata.target_name().labels_iter())
                     .collect(),
             );
 
@@ -415,7 +415,7 @@ where
                 Ok(dname) => dname,
                 Err(error) => {
                     trace!(context:?; "Recursive search new cname error: {error}");
-                    return QError::CDomainNameErr(error).into();
+                    return QError::DomainNameErr(error).into();
                 }
             };
 

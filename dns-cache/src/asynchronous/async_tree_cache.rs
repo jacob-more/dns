@@ -9,7 +9,7 @@ use dns_lib::{
     query::question::Question,
     resource_record::{rclass::RClass, rtype::RType},
     types::{
-        c_domain_name::CDomainName,
+        domain_name::{DomainName, DomainNameVec},
         label::{CaseInsensitive, Label, OwnedLabel},
     },
 };
@@ -18,7 +18,7 @@ use tokio::sync::{Mutex, RwLock};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum AsyncTreeCacheError {
-    NonFullyQualifiedDomainName(CDomainName),
+    NonFullyQualifiedDomainName(DomainNameVec),
     InconsistentState(String),
 }
 impl Error for AsyncTreeCacheError {}
@@ -107,7 +107,7 @@ where
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().labels().rev().skip(1) {
+        for label in question.qname().labels_iter().rev().skip(1) {
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
             let read_current_node_children = current_node.children.read().await;
@@ -170,7 +170,7 @@ where
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().labels().rev().skip(1) {
+        for label in question.qname().labels_iter().rev().skip(1) {
             let read_current_node_children = current_node.children.read().await;
             if let Some(child_node) = read_current_node_children.get(label) {
                 let child_node = child_node.clone();
@@ -188,7 +188,7 @@ where
     #[inline]
     pub async fn remove_node(
         &self,
-        qname: &CDomainName,
+        qname: &DomainNameVec,
         qclass: &RClass,
     ) -> Result<Option<Arc<TreeNode<Records>>>, AsyncTreeCacheError> {
         // Checks if domain name ends in root node.
@@ -217,7 +217,7 @@ where
             return Ok(None);
         }
 
-        let qlabels = qname.labels();
+        let qlabels = qname.labels_iter();
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels.skip(1).rev().skip(1) {
@@ -232,7 +232,7 @@ where
             }
         }
 
-        let last_label = match qname.labels().next() {
+        let last_label = match qname.labels_iter().next() {
             Some(last_label) => last_label,
             None => {
                 return Err(AsyncTreeCacheError::InconsistentState(format!(
@@ -278,7 +278,7 @@ where
             .into_inner()
     }
 
-    pub async fn get_domains(&self) -> HashSet<CDomainName> {
+    pub async fn get_domains(&self) -> HashSet<DomainNameVec> {
         let read_root_node = self.root_nodes.read().await;
         let root_nodes = read_root_node.clone();
         drop(read_root_node);
@@ -298,10 +298,10 @@ where
                                 subdomain_name
                             })
                             .filter_map(|domain_name| {
-                                CDomainName::from_owned_labels(domain_name).ok()
+                                DomainNameVec::from_owned_labels(domain_name).ok()
                             }),
                     );
-                    write_domains.insert(CDomainName::new_root());
+                    write_domains.insert(DomainNameVec::new_root());
                     drop(write_domains);
                     drop(domains);
                 }

@@ -16,9 +16,9 @@ use crate::{
 
 use super::ascii::constants::ASCII_PERIOD;
 
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct CaseSensitive;
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct CaseInsensitive;
 
 impl Display for CaseSensitive {
@@ -36,11 +36,11 @@ impl Display for CaseInsensitive {
 }
 
 pub(crate) mod case_sensitivity {
-    use std::fmt::Display;
+    use std::fmt::{Debug, Display};
 
     use super::{CaseInsensitive, CaseSensitive};
 
-    pub trait CaseSensitivity: Display + Default {}
+    pub trait CaseSensitivity: Debug + Copy + Clone + Display + Default {}
 
     impl CaseSensitivity for CaseSensitive {}
     impl CaseSensitivity for CaseInsensitive {}

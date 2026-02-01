@@ -4,13 +4,13 @@ use dns_macros::{FromWire, ToWire};
 
 use crate::{
     resource_record::{rclass::RClass, rtype::RType},
-    types::c_domain_name::CDomainName,
+    types::domain_name::{CompressibleDomainVec, DomainNameVec},
 };
 
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.2
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire)]
 pub struct Question {
-    qname: CDomainName,
+    qname: CompressibleDomainVec,
     qtype: RType,
     qclass: RClass,
 }
@@ -19,7 +19,7 @@ impl Default for Question {
     #[inline]
     fn default() -> Self {
         Self {
-            qname: CDomainName::new_root(),
+            qname: CompressibleDomainVec(DomainNameVec::new_root()),
             qtype: RType::Unknown(0),
             qclass: RClass::Unknown(0),
         }
@@ -28,17 +28,17 @@ impl Default for Question {
 
 impl Question {
     #[inline]
-    pub const fn new(qname: CDomainName, qtype: RType, qclass: RClass) -> Question {
+    pub const fn new(qname: DomainNameVec, qtype: RType, qclass: RClass) -> Question {
         Question {
-            qname,
+            qname: CompressibleDomainVec(qname),
             qtype,
             qclass,
         }
     }
 
     #[inline]
-    pub const fn qname(&self) -> &CDomainName {
-        &self.qname
+    pub const fn qname(&self) -> &DomainNameVec {
+        &self.qname.0
     }
 
     #[inline]
@@ -51,9 +51,9 @@ impl Question {
         self.qclass
     }
 
-    pub fn with_new_qname(&self, qname: CDomainName) -> Self {
+    pub fn with_new_qname(&self, qname: DomainNameVec) -> Self {
         Question {
-            qname,
+            qname: CompressibleDomainVec(qname),
             qtype: self.qtype,
             qclass: self.qclass,
         }
@@ -75,17 +75,17 @@ impl Question {
         }
     }
 
-    pub fn with_new_qname_qtype(&self, qname: CDomainName, qtype: RType) -> Self {
+    pub fn with_new_qname_qtype(&self, qname: DomainNameVec, qtype: RType) -> Self {
         Question {
-            qname,
+            qname: CompressibleDomainVec(qname),
             qtype,
             qclass: self.qclass,
         }
     }
 
-    pub fn with_new_qname_qclass(&self, qname: CDomainName, qclass: RClass) -> Self {
+    pub fn with_new_qname_qclass(&self, qname: DomainNameVec, qclass: RClass) -> Self {
         Question {
-            qname,
+            qname: CompressibleDomainVec(qname),
             qtype: self.qtype,
             qclass,
         }
@@ -97,7 +97,7 @@ impl Display for Question {
         write!(
             f,
             "Question: {{qname: '{}', qtype: {}, qclass: {}}}",
-            self.qname, self.qtype, self.qclass
+            self.qname.0, self.qtype, self.qclass
         )
     }
 }

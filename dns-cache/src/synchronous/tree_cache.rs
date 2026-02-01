@@ -11,14 +11,14 @@ use dns_lib::{
     query::question::Question,
     resource_record::{rclass::RClass, rtype::RType},
     types::{
-        c_domain_name::CDomainName,
+        domain_name::{DomainName, DomainNameVec},
         label::{CaseInsensitive, Label, OwnedLabel},
     },
 };
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TreeCacheError {
-    NonFullyQualifiedDomainName(CDomainName),
+    NonFullyQualifiedDomainName(DomainNameVec),
     InconsistentState(String),
 }
 impl Error for TreeCacheError {}
@@ -83,7 +83,7 @@ impl<Records> TreeCache<Records> {
         };
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().labels().rev().skip(1) {
+        for label in question.qname().labels_iter().rev().skip(1) {
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
             current_node = match current_node.children.entry(label.as_owned()) {
@@ -123,7 +123,7 @@ impl<Records> TreeCache<Records> {
         }
 
         // Note: Skipping first label (root label) because it was already checked.
-        for label in question.qname().labels().rev().skip(1) {
+        for label in question.qname().labels_iter().rev().skip(1) {
             if let Some(child_node) = current_node.children.get(label) {
                 current_node = child_node;
             } else {
@@ -137,7 +137,7 @@ impl<Records> TreeCache<Records> {
     #[inline]
     pub fn remove_node(
         &mut self,
-        qname: &CDomainName,
+        qname: &DomainNameVec,
         qclass: &RClass,
     ) -> Result<Option<TreeNode<Records>>, TreeCacheError> {
         // Checks if domain name ends in root node.
@@ -158,7 +158,7 @@ impl<Records> TreeCache<Records> {
             return Ok(None);
         }
 
-        let qlabels = qname.labels();
+        let qlabels = qname.labels_iter();
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels.skip(1).rev().skip(1) {
@@ -169,7 +169,7 @@ impl<Records> TreeCache<Records> {
             }
         }
 
-        match qname.labels().next() {
+        match qname.labels_iter().next() {
             Some(last_label) => Ok(parent_node.children.remove(last_label)),
             None => Err(TreeCacheError::InconsistentState(format!(
                 "Could not determine the last label in the qname '{qname}'"

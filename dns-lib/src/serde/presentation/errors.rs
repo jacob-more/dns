@@ -19,8 +19,8 @@ use crate::{
     },
     types::{
         ascii::AsciiError, base16::Base16Error, base32::Base32Error, base64::Base64Error,
-        c_domain_name::CDomainNameError, character_string::CharacterStringError,
-        domain_name::DomainNameError, extended_base32::ExtendedBase32Error,
+        character_string::CharacterStringError, domain_name::DomainNameError,
+        extended_base32::ExtendedBase32Error,
     },
 };
 
@@ -86,7 +86,6 @@ pub enum TokenError {
     DnsSecAlgorithmError(DnsSecAlgorithmError),
     AsciiError(AsciiError),
     CharacterStringError(CharacterStringError),
-    CDomainNameError(CDomainNameError),
     DomainNameError(DomainNameError),
     Base16Error(Base16Error),
     Base32Error(Base32Error),
@@ -115,7 +114,6 @@ impl Display for TokenError {
             Self::DnsSecAlgorithmError(error) => write!(f, "{error}"),
             Self::AsciiError(error) => write!(f, "{error}"),
             Self::CharacterStringError(error) => write!(f, "{error}"),
-            Self::CDomainNameError(error) => write!(f, "{error}"),
             Self::DomainNameError(error) => write!(f, "{error}"),
             Self::Base16Error(error) => write!(f, "{error}"),
             Self::Base32Error(error) => write!(f, "{error}"),
@@ -166,11 +164,6 @@ impl From<AsciiError> for TokenError {
 impl From<CharacterStringError> for TokenError {
     fn from(value: CharacterStringError) -> Self {
         Self::CharacterStringError(value)
-    }
-}
-impl From<CDomainNameError> for TokenError {
-    fn from(value: CDomainNameError) -> Self {
-        Self::CDomainNameError(value)
     }
 }
 impl From<DomainNameError> for TokenError {

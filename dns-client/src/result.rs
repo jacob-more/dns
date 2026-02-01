@@ -6,7 +6,7 @@ use std::{
 use dns_lib::{
     interface::client::ContextErr,
     resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::ns::NS},
-    types::c_domain_name::{CDomainName, CDomainNameError},
+    types::domain_name::{DomainNameError, DomainNameVec},
 };
 
 use crate::network::errors::QueryError;
@@ -31,14 +31,14 @@ impl Display for QOk {
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum QError {
     ContextErr(ContextErr),
-    CDomainNameErr(CDomainNameError),
+    DomainNameErr(DomainNameError),
     NetworkQueryErr(QueryError),
     CacheFailure(RCode),
-    NoClosestNameServerFound(CDomainName),
+    NoClosestNameServerFound(DomainNameVec),
     MissingRecord(RType),
     QNameIsNotChildOfDName {
-        dname: CDomainName,
-        qname: CDomainName,
+        dname: DomainNameVec,
+        qname: DomainNameVec,
     },
 }
 
@@ -46,7 +46,7 @@ impl Display for QError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             QError::ContextErr(context_err) => write!(f, "{context_err}"),
-            QError::CDomainNameErr(cdomain_name_err) => write!(f, "{cdomain_name_err}"),
+            QError::DomainNameErr(domain_name_err) => write!(f, "{domain_name_err}"),
             QError::NetworkQueryErr(query_err) => write!(f, "{query_err}"),
             QError::CacheFailure(rcode) => write!(f, "the cache returned an error code '{rcode}'"),
             QError::NoClosestNameServerFound(domain) => {
@@ -70,9 +70,9 @@ impl From<ContextErr> for QError {
     }
 }
 
-impl From<CDomainNameError> for QError {
-    fn from(value: CDomainNameError) -> Self {
-        Self::CDomainNameErr(value)
+impl From<DomainNameError> for QError {
+    fn from(value: DomainNameError) -> Self {
+        Self::DomainNameErr(value)
     }
 }
 

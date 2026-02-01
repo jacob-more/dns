@@ -15,7 +15,7 @@ use crate::{
             write_wire::WriteWire,
         },
     },
-    types::domain_name::DomainName,
+    types::domain_name::IncompressibleDomainVec,
 };
 
 const IPV6_ADDRESS_LENGTH: usize = 128 / 8;
@@ -27,7 +27,7 @@ const IPV6_ADDRESS_LENGTH: usize = 128 / 8;
 pub struct A6 {
     prefix_length: u8,
     ipv6_address: Option<Ipv6Addr>,
-    domain_name: Option<DomainName>,
+    domain_name: Option<IncompressibleDomainVec>,
 }
 
 impl A6 {
@@ -39,7 +39,7 @@ impl ToWire for A6 {
     fn to_wire_format<'a, 'b>(
         &self,
         wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+        compression: &mut Option<crate::types::domain_name::CompressionMap>,
     ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
     where
         'a: 'b,
@@ -122,7 +122,7 @@ impl FromWire for A6 {
         // Shift past prefix ipv6 address.
         let domain_name = match prefix_length {
             0 => None,
-            _ => Some(DomainName::from_wire_format(wire)?),
+            _ => Some(IncompressibleDomainVec::from_wire_format(wire)?),
         };
 
         Ok(Self {
@@ -162,7 +162,8 @@ impl FromTokenizedRData for A6 {
                         })
                     }
                     128 => {
-                        let (domain_name, _) = DomainName::from_token_format(&[token2])?;
+                        let (domain_name, _) =
+                            IncompressibleDomainVec::from_token_format(&[token2])?;
                         Ok(Self {
                             prefix_length,
                             ipv6_address: None,
@@ -199,7 +200,7 @@ impl FromTokenizedRData for A6 {
                 }
 
                 let (address, _) = Ipv6Addr::from_token_format(&[token2])?;
-                let (domain_name, _) = DomainName::from_token_format(&[token3])?;
+                let (domain_name, _) = IncompressibleDomainVec::from_token_format(&[token3])?;
 
                 Ok(Self {
                     prefix_length,
@@ -259,7 +260,7 @@ mod circular_serde_sanity_test {
     use super::A6;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::DomainName,
+        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
@@ -275,7 +276,9 @@ mod circular_serde_sanity_test {
         A6 {
             prefix_length: 128,
             ipv6_address: None,
-            domain_name: Some(DomainName::from_utf8("www.example.org.").unwrap())
+            domain_name: Some(IncompressibleDomainVec(
+                DomainNameVec::from_utf8("www.example.org.").unwrap()
+            ))
         }
     );
     gen_test_circular_serde_sanity_test!(
@@ -283,7 +286,9 @@ mod circular_serde_sanity_test {
         A6 {
             prefix_length: 64,
             ipv6_address: Some(Ipv6Addr::new(0, 0, 0, 0, 10, 9, 8, 7)),
-            domain_name: Some(DomainName::from_utf8("www.example.org.").unwrap())
+            domain_name: Some(IncompressibleDomainVec(
+                DomainNameVec::from_utf8("www.example.org.").unwrap()
+            ))
         }
     );
 }
@@ -295,7 +300,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::DomainName,
+        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
     };
     use std::net::Ipv6Addr;
 
@@ -320,7 +325,9 @@ mod tokenizer_tests {
         A6 {
             prefix_length: 128,
             ipv6_address: None,
-            domain_name: Some(DomainName::from_utf8(GOOD_DOMAIN).unwrap())
+            domain_name: Some(IncompressibleDomainVec(
+                DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap()
+            ))
         },
         ["128", GOOD_DOMAIN]
     );
@@ -330,7 +337,9 @@ mod tokenizer_tests {
         A6 {
             prefix_length: 64,
             ipv6_address: Some(Ipv6Addr::new(0, 0, 0, 0, 10, 9, 8, 7)),
-            domain_name: Some(DomainName::from_utf8("www.example.org.").unwrap())
+            domain_name: Some(IncompressibleDomainVec(
+                DomainNameVec::from_utf8("www.example.org.").unwrap()
+            ))
         },
         ["64", "::a:9:8:7", GOOD_DOMAIN]
     );

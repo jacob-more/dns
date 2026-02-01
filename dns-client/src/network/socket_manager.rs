@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use dns_lib::types::c_domain_name::CDomainName;
+use dns_lib::types::domain_name::DomainNameVec;
 use futures::StreamExt;
 use rustls::RootCertStore;
 use tokio::{
@@ -20,8 +20,8 @@ const DEFAULT_KEEP_ALIVE: Duration = Duration::from_secs(30);
 
 struct InternalSocketManager {
     udp_tcp_sockets: HashMap<IpAddr, (Arc<MixedSocket>, u8)>,
-    tls_sockets: HashMap<(IpAddr, CDomainName), (Arc<TlsSocket>, u8)>,
-    quic_sockets: HashMap<(IpAddr, CDomainName), (Arc<QuicSocket>, u8)>,
+    tls_sockets: HashMap<(IpAddr, DomainNameVec), (Arc<TlsSocket>, u8)>,
+    quic_sockets: HashMap<(IpAddr, DomainNameVec), (Arc<QuicSocket>, u8)>,
     garbage_collection: Option<JoinHandle<()>>,
     keep_alive: watch::Sender<Duration>,
 }
@@ -307,7 +307,7 @@ impl SocketManager {
     ///
     /// This function is cancel safe.
     #[inline]
-    pub async fn get_tls(&self, address: (IpAddr, CDomainName)) -> Arc<TlsSocket> {
+    pub async fn get_tls(&self, address: (IpAddr, DomainNameVec)) -> Arc<TlsSocket> {
         let r_socket_manager = self.internal.read().await;
         if let Some((socket, _)) = r_socket_manager.tls_sockets.get(&address) {
             return socket.clone();
@@ -331,7 +331,7 @@ impl SocketManager {
     ///
     /// This function is cancel safe.
     #[inline]
-    pub async fn try_get_tls(&self, address: &(IpAddr, CDomainName)) -> Option<Arc<TlsSocket>> {
+    pub async fn try_get_tls(&self, address: &(IpAddr, DomainNameVec)) -> Option<Arc<TlsSocket>> {
         let r_socket_manager = self.internal.read().await;
         let socket = r_socket_manager.tls_sockets.get(address).cloned();
         drop(r_socket_manager);
@@ -344,7 +344,7 @@ impl SocketManager {
     #[inline]
     pub async fn get_all_tls(
         &self,
-        addresses: impl Iterator<Item = (IpAddr, CDomainName)>,
+        addresses: impl Iterator<Item = (IpAddr, DomainNameVec)>,
     ) -> Vec<Arc<TlsSocket>> {
         let mut w_socket_manager = self.internal.write().await;
         let sockets = addresses
@@ -371,7 +371,7 @@ impl SocketManager {
     #[inline]
     pub async fn try_get_all_tls(
         &self,
-        addresses: impl Iterator<Item = &(IpAddr, CDomainName)>,
+        addresses: impl Iterator<Item = &(IpAddr, DomainNameVec)>,
     ) -> Vec<Arc<TlsSocket>> {
         let r_socket_manager = self.internal.read().await;
         let sockets = addresses
@@ -390,7 +390,7 @@ impl SocketManager {
     pub async fn for_each_tls<F>(&self, f: F)
     where
         Self: Sized,
-        F: FnMut((&(IpAddr, CDomainName), &Arc<TlsSocket>)),
+        F: FnMut((&(IpAddr, DomainNameVec), &Arc<TlsSocket>)),
     {
         let r_socket_manager = self.internal.read().await;
         r_socket_manager
@@ -405,7 +405,7 @@ impl SocketManager {
     ///
     /// This function is cancel safe.
     #[inline]
-    pub async fn get_quic(&self, address: (IpAddr, CDomainName)) -> Arc<QuicSocket> {
+    pub async fn get_quic(&self, address: (IpAddr, DomainNameVec)) -> Arc<QuicSocket> {
         let r_socket_manager = self.internal.read().await;
         if let Some((socket, _)) = r_socket_manager.quic_sockets.get(&address) {
             return socket.clone();
@@ -429,7 +429,7 @@ impl SocketManager {
     ///
     /// This function is cancel safe.
     #[inline]
-    pub async fn try_get_quic(&self, address: &(IpAddr, CDomainName)) -> Option<Arc<QuicSocket>> {
+    pub async fn try_get_quic(&self, address: &(IpAddr, DomainNameVec)) -> Option<Arc<QuicSocket>> {
         let r_socket_manager = self.internal.read().await;
         let socket = r_socket_manager.quic_sockets.get(address).cloned();
         drop(r_socket_manager);
@@ -442,7 +442,7 @@ impl SocketManager {
     #[inline]
     pub async fn get_all_quic(
         &self,
-        addresses: impl Iterator<Item = (IpAddr, CDomainName)>,
+        addresses: impl Iterator<Item = (IpAddr, DomainNameVec)>,
     ) -> Vec<Arc<QuicSocket>> {
         let mut w_socket_manager = self.internal.write().await;
         let sockets = addresses
@@ -470,7 +470,7 @@ impl SocketManager {
     #[inline]
     pub async fn try_get_all_quic(
         &self,
-        addresses: impl Iterator<Item = &(IpAddr, CDomainName)>,
+        addresses: impl Iterator<Item = &(IpAddr, DomainNameVec)>,
     ) -> Vec<Arc<QuicSocket>> {
         let r_socket_manager = self.internal.read().await;
         let sockets = addresses
@@ -489,7 +489,7 @@ impl SocketManager {
     pub async fn for_each_quic<F>(&self, f: F)
     where
         Self: Sized,
-        F: FnMut((&(IpAddr, CDomainName), &Arc<QuicSocket>)),
+        F: FnMut((&(IpAddr, DomainNameVec), &Arc<QuicSocket>)),
     {
         let r_socket_manager = self.internal.read().await;
         r_socket_manager

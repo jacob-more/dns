@@ -5,7 +5,7 @@ use crate::{
         errors::TokenizedRecordError, from_presentation::FromPresentation,
         from_tokenized_rdata::FromTokenizedRData,
     },
-    types::{domain_name::DomainName, rtype_bitmap::RTypeBitmap},
+    types::{domain_name::IncompressibleDomainVec, rtype_bitmap::RTypeBitmap},
 };
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc4034#section-3
@@ -14,7 +14,7 @@ use crate::{
 /// (Update) https://datatracker.ietf.org/doc/html/rfc6944
 #[derive(Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, RData)]
 pub struct NSEC {
-    next_domain_name: DomainName,
+    next_domain_name: IncompressibleDomainVec,
     type_bit_map: RTypeBitmap,
 }
 
@@ -31,7 +31,8 @@ impl FromTokenizedRData for NSEC {
                 received: rdata.len(),
             }),
             [next_domain_name, ..] => {
-                let (next_domain_name, _) = DomainName::from_token_format(&[next_domain_name])?;
+                let (next_domain_name, _) =
+                    IncompressibleDomainVec::from_token_format(&[next_domain_name])?;
                 let (type_bit_map, _) = RTypeBitmap::from_token_format(&rdata[1..])?;
                 Ok(Self {
                     next_domain_name,
@@ -47,7 +48,10 @@ mod circular_serde_sanity_test {
     use crate::{
         resource_record::rtype::RType,
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::{domain_name::DomainName, rtype_bitmap::RTypeBitmap},
+        types::{
+            domain_name::{DomainNameVec, IncompressibleDomainVec},
+            rtype_bitmap::RTypeBitmap,
+        },
     };
 
     use super::NSEC;
@@ -55,7 +59,9 @@ mod circular_serde_sanity_test {
     gen_test_circular_serde_sanity_test!(
         rfc_4034_example_record_circular_serde_sanity_test,
         NSEC {
-            next_domain_name: DomainName::from_utf8("host.example.com.").unwrap(),
+            next_domain_name: IncompressibleDomainVec(
+                DomainNameVec::from_utf8("host.example.com.").unwrap()
+            ),
             type_bit_map: RTypeBitmap::from_rtypes(
                 [
                     RType::A,

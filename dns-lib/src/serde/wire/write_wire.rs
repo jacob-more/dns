@@ -2,8 +2,7 @@ use std::{error::Error, fmt::Display};
 
 use crate::types::{
     ascii::AsciiError, base16::Base16Error, base32::Base32Error, base64::Base64Error,
-    c_domain_name::CDomainNameError, domain_name::DomainNameError,
-    extended_base32::ExtendedBase32Error,
+    domain_name::DomainNameError, extended_base32::ExtendedBase32Error,
 };
 
 use super::read_wire::ReadWire;
@@ -16,7 +15,6 @@ pub enum WriteWireError {
     OutOfBoundsError(String),
     ValueError(String),
     VersionError(String),
-    CDomainNameError(CDomainNameError),
     DomainNameError(DomainNameError),
     AsciiError(AsciiError),
     Base16Error(Base16Error),
@@ -35,11 +33,8 @@ impl Display for WriteWireError {
             Self::ValueError(error) => write!(f, "Write Wire Value Error: {error}"),
             Self::VersionError(error) => write!(f, "Write Wire Version Error: {error}"),
 
-            Self::CDomainNameError(error) => {
-                write!(f, "Write Wire Compressible Domain Name Error: {error}")
-            }
             Self::DomainNameError(error) => {
-                write!(f, "Write Wire Incompressible Domain Name Error: {error}")
+                write!(f, "Write Wire Domain Name Error: {error}")
             }
             Self::AsciiError(error) => write!(f, "Write Wire Ascii Error: {error}"),
 
@@ -50,11 +45,6 @@ impl Display for WriteWireError {
             }
             Self::Base64Error(error) => write!(f, "Write Wire Base64 Error: {error}"),
         }
-    }
-}
-impl From<CDomainNameError> for WriteWireError {
-    fn from(value: CDomainNameError) -> Self {
-        WriteWireError::CDomainNameError(value)
     }
 }
 impl From<DomainNameError> for WriteWireError {

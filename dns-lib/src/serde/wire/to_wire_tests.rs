@@ -9,7 +9,7 @@ mod built_in_primitives_test {
                         const_byte_counts::*,
                         wire::{to_wire::ToWire, write_wire::WriteWire},
                     },
-                    types::c_domain_name::CompressionMap,
+                    types::domain_name::CompressionMap,
                 };
 
                 #[test]
@@ -103,7 +103,7 @@ mod ux_primitives_test {
                         const_byte_counts::*,
                         wire::{to_wire::ToWire, write_wire::WriteWire},
                     },
-                    types::c_domain_name::CompressionMap,
+                    types::domain_name::CompressionMap,
                 };
 
                 #[test]
@@ -182,7 +182,7 @@ mod ux_primitives_test {
                         const_byte_counts::*,
                         wire::{to_wire::ToWire, write_wire::WriteWire},
                     },
-                    types::c_domain_name::CompressionMap,
+                    types::domain_name::CompressionMap,
                 };
 
                 #[test]

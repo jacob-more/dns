@@ -93,9 +93,13 @@ macro_rules! const_assert {
     // helpful documentation AND enforces that the arguments must be `const`
     // expressions.
     ($expression:expr $(,)?) => {
+        #[allow(clippy::eq_op)]
+        #[allow(clippy::absurd_extreme_comparisons)]
         const _: () = ::std::assert!(const { $expression });
     };
     ($expression:expr, $($arg:tt)+) => {
+        #[allow(clippy::eq_op)]
+        #[allow(clippy::absurd_extreme_comparisons)]
         const _: () = ::std::assert!(const { $expression }, $($arg)+);
     };
 }
@@ -158,9 +162,13 @@ macro_rules! const_assert_eq {
     // is blocked on some of the macro's internal string manipulation not
     // working in `const` contexts.
     ($left:expr, $right:expr $(,)?) => {
+        #[allow(clippy::eq_op)]
+        #[allow(clippy::absurd_extreme_comparisons)]
         const _: () = ::std::assert!(const { $left } == const { $right });
     };
     ($left:expr, $right:expr, $($arg:tt)+) => {
+        #[allow(clippy::eq_op)]
+        #[allow(clippy::absurd_extreme_comparisons)]
         const _: () = ::std::assert!(
             const { $left } == const { $right },
             $($arg)+
@@ -226,9 +234,13 @@ macro_rules! const_assert_ne {
     // is blocked on some of the macro's internal string manipulation not
     // working in `const` contexts.
     ($left:expr, $right:expr $(,)?) => {
+        #[allow(clippy::eq_op)]
+        #[allow(clippy::absurd_extreme_comparisons)]
         const _: () = ::std::assert!(const { $left } != const { $right });
     };
     ($left:expr, $right:expr, $($arg:tt)+) => {
+        #[allow(clippy::eq_op)]
+        #[allow(clippy::absurd_extreme_comparisons)]
         const _: () = ::std::assert!(
             const { $left } != const { $right },
             $($arg)+

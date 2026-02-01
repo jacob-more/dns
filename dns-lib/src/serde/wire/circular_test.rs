@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::{serde::wire::write_wire::WriteWire, types::c_domain_name::CompressionMap};
+use crate::{serde::wire::write_wire::WriteWire, types::domain_name::CompressionMap};
 
 use super::{from_wire::FromWire, to_wire::ToWire};
 

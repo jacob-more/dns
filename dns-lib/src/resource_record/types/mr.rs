@@ -1,23 +1,25 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::types::c_domain_name::CDomainName;
+use crate::types::domain_name::{CompressibleDomainVec, DomainNameVec};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.8
 #[derive(
     Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData,
 )]
 pub struct MR {
-    new_domain_name: CDomainName,
+    new_domain_name: CompressibleDomainVec,
 }
 
 impl MR {
     #[inline]
-    pub fn new(new_domain_name: CDomainName) -> Self {
-        Self { new_domain_name }
+    pub fn new(new_domain_name: DomainNameVec) -> Self {
+        Self {
+            new_domain_name: CompressibleDomainVec(new_domain_name),
+        }
     }
 
     #[inline]
-    pub fn mailbox_rename_domain_name(&self) -> &CDomainName {
+    pub fn mailbox_rename_domain_name(&self) -> &DomainNameVec {
         &self.new_domain_name
     }
 }
@@ -27,13 +29,15 @@ mod circular_serde_sanity_test {
     use super::MR;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::c_domain_name::CDomainName,
+        types::domain_name::{CompressibleDomainVec, DomainNameVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         MR {
-            new_domain_name: CDomainName::from_utf8("www.example.com.").unwrap()
+            new_domain_name: CompressibleDomainVec(
+                DomainNameVec::from_utf8("www.example.com.").unwrap()
+            )
         }
     );
 }
@@ -45,7 +49,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::c_domain_name::CDomainName,
+        types::domain_name::{CompressibleDomainVec, DomainNameVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";
@@ -55,7 +59,7 @@ mod tokenizer_tests {
         test_ok,
         MR,
         MR {
-            new_domain_name: CDomainName::from_utf8(GOOD_DOMAIN).unwrap()
+            new_domain_name: CompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [GOOD_DOMAIN]
     );

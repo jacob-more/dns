@@ -1,5 +1,4 @@
 pub mod ascii;
-pub mod c_domain_name;
 pub mod character_string;
 pub mod domain_name;
 pub mod label;

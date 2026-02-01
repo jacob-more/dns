@@ -1,6 +1,6 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::types::c_domain_name::CDomainName;
+use crate::types::domain_name::{CompressibleDomainVec, DomainNameVec};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.9
 #[derive(
@@ -8,15 +8,15 @@ use crate::types::c_domain_name::CDomainName;
 )]
 pub struct MX {
     preference: u16,
-    exchange: CDomainName,
+    exchange: CompressibleDomainVec,
 }
 
 impl MX {
     #[inline]
-    pub fn new(preference: u16, exchange: CDomainName) -> Self {
+    pub fn new(preference: u16, exchange: DomainNameVec) -> Self {
         Self {
             preference,
-            exchange,
+            exchange: CompressibleDomainVec(exchange),
         }
     }
 
@@ -26,7 +26,7 @@ impl MX {
     }
 
     #[inline]
-    pub fn exchange(&self) -> &CDomainName {
+    pub fn exchange(&self) -> &DomainNameVec {
         &self.exchange
     }
 }
@@ -36,14 +36,14 @@ mod circular_serde_sanity_test {
     use super::MX;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::c_domain_name::CDomainName,
+        types::domain_name::{CompressibleDomainVec, DomainNameVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         MX {
             preference: 10,
-            exchange: CDomainName::from_utf8("www.example.com.").unwrap(),
+            exchange: CompressibleDomainVec(DomainNameVec::from_utf8("www.example.com.").unwrap(),)
         }
     );
 }
@@ -55,7 +55,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::c_domain_name::CDomainName,
+        types::domain_name::{CompressibleDomainVec, DomainNameVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";
@@ -69,7 +69,7 @@ mod tokenizer_tests {
         MX,
         MX {
             preference: 10,
-            exchange: CDomainName::from_utf8(GOOD_DOMAIN).unwrap()
+            exchange: CompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [GOOD_PREFERENCE, GOOD_DOMAIN]
     );

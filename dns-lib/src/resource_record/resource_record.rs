@@ -12,7 +12,7 @@ use crate::{
             to_wire::ToWire,
         },
     },
-    types::c_domain_name::CDomainName,
+    types::domain_name::{CompressibleDomainVec, DomainNameVec},
 };
 
 use super::{
@@ -51,7 +51,7 @@ pub trait RData: ToWire + PartialEq + Clone + Hash {
 
 #[derive(Debug, Clone)]
 pub struct ResourceRecord<RDataT: RData = RecordData> {
-    name: CDomainName,
+    name: CompressibleDomainVec,
     rclass: RClass,
     ttl: Time,
     rdata: RDataT,
@@ -59,9 +59,9 @@ pub struct ResourceRecord<RDataT: RData = RecordData> {
 
 impl<RDataT: RData> ResourceRecord<RDataT> {
     #[inline]
-    pub const fn new(name: CDomainName, rclass: RClass, ttl: Time, rdata: RDataT) -> Self {
+    pub const fn new(name: DomainNameVec, rclass: RClass, ttl: Time, rdata: RDataT) -> Self {
         Self {
-            name,
+            name: CompressibleDomainVec(name),
             rclass,
             ttl,
             rdata,
@@ -69,13 +69,13 @@ impl<RDataT: RData> ResourceRecord<RDataT> {
     }
 
     #[inline]
-    pub const fn get_name(&self) -> &CDomainName {
-        &self.name
+    pub const fn get_name(&self) -> &DomainNameVec {
+        &self.name.0
     }
 
     #[inline]
-    pub fn into_name(self) -> CDomainName {
-        self.name
+    pub fn into_name(self) -> DomainNameVec {
+        self.name.0
     }
 
     #[inline]
@@ -148,7 +148,7 @@ impl<RDataT: RData> ToWire for ResourceRecord<RDataT> {
     fn to_wire_format<'a, 'b>(
         &self,
         wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+        compression: &mut Option<crate::types::domain_name::CompressionMap>,
     ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
     where
         'a: 'b,
@@ -202,7 +202,7 @@ macro_rules! gen_record_data {
         }
 
         impl ToWire for RecordData {
-            fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::c_domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
+            fn to_wire_format<'a, 'b>(&self, wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>, compression: &mut Option<crate::types::domain_name::CompressionMap>) -> Result<(), crate::serde::wire::write_wire::WriteWireError> where 'a: 'b {
                 match self {
                     $(Self::$record(rdata) => rdata.to_wire_format(wire, compression),)+
                 }
@@ -217,7 +217,7 @@ macro_rules! gen_record_data {
 
         impl FromWire for ResourceRecord<RecordData> {
             fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
-                let name = CDomainName::from_wire_format(wire)?;
+                let name = CompressibleDomainVec::from_wire_format(wire)?;
                 let rtype = RType::from_wire_format(wire)?;
                 let rclass = RClass::from_wire_format(wire)?;
                 let ttl = Time::from_wire_format(wire)?;
@@ -253,7 +253,7 @@ macro_rules! gen_record_data {
         $(
             impl FromWire for ResourceRecord<$record> {
                 fn from_wire_format<'a, 'b>(wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>) -> Result<Self, ReadWireError> where Self: Sized, 'a: 'b {
-                    let name = CDomainName::from_wire_format(wire)?;
+                    let name = CompressibleDomainVec::from_wire_format(wire)?;
                     let rtype = RType::from_wire_format(wire)?;
                     if rtype != RType::$record {
                         return Err(ReadWireError::UnexpectedRType{
@@ -294,7 +294,7 @@ macro_rules! gen_record_data {
 
         impl ResourceRecord<RecordData> {
             pub fn from_tokenized_record<'a>(record: &crate::serde::presentation::tokenizer::tokenizer::ResourceRecordToken<'a>) -> Result<Self, TokenizedRecordError> where Self: Sized {
-                let name = CDomainName::from_token_format(&[record.domain_name])?.0;
+                let name = CompressibleDomainVec::from_token_format(&[record.domain_name])?.0;
                 let rclass = RClass::from_token_format(&[record.rclass])?.0;
                 let ttl = Time::from_token_format(&[record.ttl])?.0;
 

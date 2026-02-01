@@ -526,7 +526,7 @@ impl ToWire for AsciiString {
     fn to_wire_format<'a, 'b>(
         &self,
         wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        _compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+        _compression: &mut Option<crate::types::domain_name::CompressionMap>,
     ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
     where
         'a: 'b,

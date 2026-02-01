@@ -8,8 +8,7 @@ use crate::{
     resource_record::rtype::RType,
     types::{
         ascii::AsciiError, base16::Base16Error, base32::Base32Error, base64::Base64Error,
-        c_domain_name::CDomainNameError, domain_name::DomainNameError,
-        extended_base32::ExtendedBase32Error,
+        domain_name::DomainNameError, extended_base32::ExtendedBase32Error,
     },
 };
 
@@ -22,7 +21,6 @@ pub enum ReadWireError {
     UnexpectedRType { expected: RType, actual: RType },
     ValueError(String),
     VersionError(String),
-    CDomainNameError(CDomainNameError),
     DomainNameError(DomainNameError),
     AsciiError(AsciiError),
     Base16Error(Base16Error),
@@ -47,11 +45,8 @@ impl Display for ReadWireError {
             Self::ValueError(error) => write!(f, "Read Wire Value Error: {error}"),
             Self::VersionError(error) => write!(f, "Read Wire Version Error: {error}"),
 
-            Self::CDomainNameError(error) => {
-                write!(f, "Read Wire Compressible Domain Name Error: {error}")
-            }
             Self::DomainNameError(error) => {
-                write!(f, "Read Wire Incompressible Domain Name Error: {error}")
+                write!(f, "Read Wire Domain Name Error: {error}")
             }
             Self::AsciiError(error) => write!(f, "Read Wire Ascii Error: {error}"),
 
@@ -62,11 +57,6 @@ impl Display for ReadWireError {
             }
             Self::Base64Error(error) => write!(f, "Read Wire Base64 Error: {error}"),
         }
-    }
-}
-impl From<CDomainNameError> for ReadWireError {
-    fn from(value: CDomainNameError) -> Self {
-        ReadWireError::CDomainNameError(value)
     }
 }
 impl From<DomainNameError> for ReadWireError {

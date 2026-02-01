@@ -12,7 +12,7 @@ use async_lib::{
     once_watch::{self, OnceWatchSend, OnceWatchSubscribe},
 };
 use async_trait::async_trait;
-use dns_lib::types::c_domain_name::CDomainName;
+use dns_lib::types::domain_name::DomainNameVec;
 use pin_project::{pin_project, pinned_drop};
 use quinn::Connecting;
 use tokio::{task::JoinHandle, time::Sleep};
@@ -40,7 +40,7 @@ where
     Self: 'static + Sized + Send + Sync,
 {
     fn peer_addr(&self) -> SocketAddr;
-    fn peer_name(&self) -> &CDomainName;
+    fn peer_name(&self) -> &DomainNameVec;
     fn state(&self) -> &std::sync::RwLock<QuicState>;
     fn client_config(&self) -> &Arc<quinn::ClientConfig>;
 

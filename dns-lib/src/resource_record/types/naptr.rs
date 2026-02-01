@@ -10,9 +10,8 @@ use crate::{
         wire::{from_wire::FromWire, read_wire::ReadWireError},
     },
     types::{
-        c_domain_name::CDomainNameError,
         character_string::CharacterString,
-        domain_name::{DomainName, DomainNameError},
+        domain_name::{DomainName, DomainNameError, DomainNameVec, IncompressibleDomainVec},
     },
 };
 
@@ -24,7 +23,7 @@ pub struct NAPTR {
     flags: CharacterString,
     service: CharacterString,
     regexp: CharacterString,
-    replacement: DomainName,
+    replacement: IncompressibleDomainVec,
 }
 
 impl NAPTR {
@@ -35,7 +34,7 @@ impl NAPTR {
         flags: CharacterString,
         service: CharacterString,
         regexp: CharacterString,
-        replacement: DomainName,
+        replacement: DomainNameVec,
     ) -> Self {
         Self {
             order,
@@ -43,7 +42,7 @@ impl NAPTR {
             flags,
             service,
             regexp,
-            replacement,
+            replacement: IncompressibleDomainVec(replacement),
         }
     }
 
@@ -73,7 +72,7 @@ impl NAPTR {
     }
 
     #[inline]
-    pub fn replacement(&self) -> &DomainName {
+    pub fn replacement(&self) -> &DomainNameVec {
         &self.replacement
     }
 }
@@ -100,11 +99,9 @@ impl FromWire for NAPTR {
         let service = CharacterString::from_wire_format(wire)?;
         let regexp = CharacterString::from_wire_format(wire)?;
 
-        let replacement = DomainName::from_wire_format(wire)?;
+        let replacement = IncompressibleDomainVec::from_wire_format(wire)?;
         if !replacement.is_fully_qualified() {
-            return Err(ReadWireError::DomainNameError(
-                DomainNameError::CDomainNameError(CDomainNameError::Fqdn),
-            ));
+            return Err(ReadWireError::DomainNameError(DomainNameError::Fqdn));
         }
 
         if !regexp.is_empty() && (!replacement.is_root()) {
@@ -147,12 +144,10 @@ impl FromTokenizedRData for NAPTR {
                 let (service, _) = CharacterString::from_token_format(&[service])?;
                 let (regexp, _) = CharacterString::from_token_format(&[regexp])?;
 
-                let (replacement, _) = DomainName::from_token_format(&[replacement])?;
+                let (replacement, _) = IncompressibleDomainVec::from_token_format(&[replacement])?;
                 if !replacement.is_fully_qualified() {
                     return Err(TokenizedRecordError::TokenError(
-                        TokenError::DomainNameError(DomainNameError::CDomainNameError(
-                            CDomainNameError::Fqdn,
-                        )),
+                        TokenError::DomainNameError(DomainNameError::Fqdn),
                     ));
                 }
 
@@ -187,7 +182,10 @@ impl FromTokenizedRData for NAPTR {
 mod circular_serde_sanity_test {
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::{character_string::CharacterString, domain_name::DomainName},
+        types::{
+            character_string::CharacterString,
+            domain_name::{DomainNameVec, IncompressibleDomainVec},
+        },
     };
 
     use super::NAPTR;
@@ -200,7 +198,7 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("").unwrap(),
             service: CharacterString::from_utf8("").unwrap(),
             regexp: CharacterString::from_utf8(r"!^urn:cid:.+@([^\.]+\.)(.*)$!\2!i").unwrap(),
-            replacement: DomainName::from_utf8(".").unwrap()
+            replacement: IncompressibleDomainVec(DomainNameVec::from_utf8(".").unwrap())
         }
     );
 
@@ -212,7 +210,9 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("a").unwrap(),
             service: CharacterString::from_utf8("z3950+N2L+N2C").unwrap(),
             regexp: CharacterString::from_utf8("").unwrap(),
-            replacement: DomainName::from_utf8("cidserver.example.com.").unwrap()
+            replacement: IncompressibleDomainVec(
+                DomainNameVec::from_utf8("cidserver.example.com.").unwrap()
+            )
         }
     );
 
@@ -224,7 +224,9 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("a").unwrap(),
             service: CharacterString::from_utf8("rcds+N2C").unwrap(),
             regexp: CharacterString::from_utf8("").unwrap(),
-            replacement: DomainName::from_utf8("cidserver.example.com.").unwrap()
+            replacement: IncompressibleDomainVec(
+                DomainNameVec::from_utf8("cidserver.example.com.").unwrap()
+            )
         }
     );
 
@@ -236,7 +238,9 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("s").unwrap(),
             service: CharacterString::from_utf8("http+N2L+N2C+N2R").unwrap(),
             regexp: CharacterString::from_utf8("").unwrap(),
-            replacement: DomainName::from_utf8("www.example.com.").unwrap()
+            replacement: IncompressibleDomainVec(
+                DomainNameVec::from_utf8("www.example.com.").unwrap()
+            )
         }
     );
 
@@ -248,7 +252,7 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("u").unwrap(),
             service: CharacterString::from_utf8("sip+E2U").unwrap(),
             regexp: CharacterString::from_utf8(r"!^.*$!sip:information@foo.se!i").unwrap(),
-            replacement: DomainName::from_utf8(".").unwrap()
+            replacement: IncompressibleDomainVec(DomainNameVec::from_utf8(".").unwrap())
         }
     );
 
@@ -260,7 +264,7 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("u").unwrap(),
             service: CharacterString::from_utf8("smtp+E2U").unwrap(),
             regexp: CharacterString::from_utf8(r"!^.*$!mailto:information@foo.se!i").unwrap(),
-            replacement: DomainName::from_utf8(".").unwrap()
+            replacement: IncompressibleDomainVec(DomainNameVec::from_utf8(".").unwrap())
         }
     );
 }

@@ -11,7 +11,9 @@ use crate::{
         },
         wire::{from_wire::FromWire, to_wire::ToWire},
     },
-    types::domain_name::DomainName,
+    types::domain_name::{
+        DomainName, DomainNameVec, IncompressibleDomainVec, IncompressibleSubDomain,
+    },
 };
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8777#name-amtrelay-rdata-format
@@ -62,7 +64,7 @@ pub enum RelayType {
     Empty,
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
-    DomainName(DomainName),
+    DomainName(DomainNameVec),
 }
 
 impl RelayType {
@@ -84,7 +86,7 @@ impl ToWire for AMTRELAY {
     fn to_wire_format<'a, 'b>(
         &self,
         wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::c_domain_name::CompressionMap>,
+        compression: &mut Option<crate::types::domain_name::CompressionMap>,
     ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
     where
         'a: 'b,
@@ -95,7 +97,9 @@ impl ToWire for AMTRELAY {
             RelayType::Empty => Ok(()),
             RelayType::Ipv4(address) => address.to_wire_format(wire, compression),
             RelayType::Ipv6(address) => address.to_wire_format(wire, compression),
-            RelayType::DomainName(dn) => dn.to_wire_format(wire, compression),
+            RelayType::DomainName(dn) => {
+                IncompressibleSubDomain(dn.as_subdomain()).to_wire_format(wire, compression)
+            }
             RelayType::Unknown(_, data) => {
                 wire.write_bytes(data)?;
                 Ok(())
@@ -111,7 +115,9 @@ impl ToWire for AMTRELAY {
                 RelayType::Empty => 0,
                 RelayType::Ipv4(address) => address.serial_length(),
                 RelayType::Ipv6(address) => address.serial_length(),
-                RelayType::DomainName(dn) => dn.serial_length(),
+                RelayType::DomainName(dn) => {
+                    IncompressibleSubDomain(dn.as_subdomain()).serial_length()
+                }
                 RelayType::Unknown(_, data) => data.len() as u16,
             }
     }
@@ -134,7 +140,7 @@ impl FromWire for AMTRELAY {
             0 => RelayType::Empty,
             1 => RelayType::Ipv4(Ipv4Addr::from_wire_format(wire)?),
             2 => RelayType::Ipv6(Ipv6Addr::from_wire_format(wire)?),
-            3 => RelayType::DomainName(DomainName::from_wire_format(wire)?),
+            3 => RelayType::DomainName(IncompressibleDomainVec::from_wire_format(wire)?.0),
             4..=U7_MAX => RelayType::Unknown(relay_type, wire.take_all().to_vec()),
             _ => unreachable!(
                 "All numbers, 0-127, are represented by the u7 type. No value outside that range should be possible"
@@ -164,7 +170,7 @@ impl FromTokenizedRData for AMTRELAY {
                 let (relay_type, _) = u7::from_token_format(&[relay_type])?;
                 let relay = match u8::from(relay_type) {
                     0 => {
-                        let (root_domain, _) = DomainName::from_token_format(&[relay])?;
+                        let (root_domain, _) = DomainNameVec::from_token_format(&[relay])?;
                         // According to RFC 8777,
                         // "If the relay type field is 0, the relay field MUST be ".""
                         // In other words, the relay type is equivalent to the root domain encoding.
@@ -177,7 +183,7 @@ impl FromTokenizedRData for AMTRELAY {
                     }
                     1 => RelayType::Ipv4(Ipv4Addr::from_token_format(&[relay])?.0),
                     2 => RelayType::Ipv6(Ipv6Addr::from_token_format(&[relay])?.0),
-                    3 => RelayType::DomainName(DomainName::from_token_format(&[relay])?.0),
+                    3 => RelayType::DomainName(DomainNameVec::from_token_format(&[relay])?.0),
                     _ => {
                         return Err(
                             crate::serde::presentation::errors::TokenizedRecordError::ValueError(
@@ -239,7 +245,7 @@ mod circular_serde_sanity_test {
     use super::{AMTRELAY, RelayType};
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::DomainName,
+        types::domain_name::DomainNameVec,
     };
 
     gen_test_circular_serde_sanity_test!(
@@ -247,7 +253,7 @@ mod circular_serde_sanity_test {
         AMTRELAY {
             precedence: 1,
             discovery_optional: u1::new(0),
-            relay: RelayType::DomainName(DomainName::from_utf8("www.example.org.").unwrap())
+            relay: RelayType::DomainName(DomainNameVec::from_utf8("www.example.org.").unwrap())
         }
     );
     gen_test_circular_serde_sanity_test!(
@@ -296,7 +302,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::DomainName,
+        types::domain_name::DomainNameVec,
     };
 
     const GOOD_PRECEDENCE: &str = "1";
@@ -365,7 +371,7 @@ mod tokenizer_tests {
         AMTRELAY {
             precedence: 1,
             discovery_optional: u1::new(1),
-            relay: RelayType::DomainName(DomainName::from_utf8(GOOD_DOMAIN).unwrap())
+            relay: RelayType::DomainName(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [
             GOOD_PRECEDENCE,

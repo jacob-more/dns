@@ -9,7 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use mac_address::MacAddress;
 use ux::{i24, i40, i48, i56, u1, u3, u4, u7, u24, u40, u48, u56};
 
-use crate::{serde::const_byte_counts::*, types::c_domain_name::CompressionMap};
+use crate::{serde::const_byte_counts::*, types::domain_name::CompressionMap};
 
 use super::write_wire::{WriteWire, WriteWireError};
 

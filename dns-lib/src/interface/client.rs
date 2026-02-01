@@ -7,7 +7,7 @@ use crate::{
     resource_record::{
         rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::ns::NS,
     },
-    types::c_domain_name::{CDomainName, CmpDomainName},
+    types::domain_name::{DomainNameCompare, DomainNameVec},
 };
 
 #[derive(Debug)]
@@ -233,7 +233,7 @@ impl Context {
     }
 
     #[inline]
-    pub fn new_cname(self: Arc<Self>, qname: CDomainName) -> Result<Context, ContextErr> {
+    pub fn new_cname(self: Arc<Self>, qname: DomainNameVec) -> Result<Context, ContextErr> {
         let query = Question::new(qname, self.qtype(), self.qclass());
         match (self.is_cname_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
@@ -317,7 +317,7 @@ impl Context {
     }
 
     #[inline]
-    pub fn new_dname(self: Arc<Self>, qname: CDomainName) -> Result<Context, ContextErr> {
+    pub fn new_dname(self: Arc<Self>, qname: DomainNameVec) -> Result<Context, ContextErr> {
         let query = Question::new(qname, self.qtype(), self.qclass());
         match (self.is_dname_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
@@ -503,7 +503,7 @@ impl Context {
     }
 
     #[inline]
-    pub const fn qname(&self) -> &CDomainName {
+    pub const fn qname(&self) -> &DomainNameVec {
         self.query().qname()
     }
 
@@ -809,7 +809,7 @@ impl Context {
                 query,
                 minimization: _,
             } => {
-                if query.qname().is_parent_domain_of(child.qname()) {
+                if query.qname().is_parent_of_ignore_case(child.qname()) {
                     Err(ContextErr::CNameWillLoop {
                         parent: self.short_name(),
                         child: child.clone(),
@@ -823,7 +823,7 @@ impl Context {
             | Context::CNameSearch { query, parent }
             | Context::DName { query, parent }
             | Context::DNameSearch { query, parent } => {
-                if query.qname().is_parent_domain_of(child.qname()) {
+                if query.qname().is_parent_of_ignore_case(child.qname()) {
                     Err(ContextErr::CNameWillLoop {
                         parent: self.short_name(),
                         child: child.clone(),
@@ -861,7 +861,7 @@ impl Context {
                 query,
                 minimization: _,
             } => {
-                if query.qname().is_parent_domain_of(child.qname()) {
+                if query.qname().is_parent_of_ignore_case(child.qname()) {
                     Err(ContextErr::DNameWillLoop {
                         parent: self.short_name(),
                         child: child.clone(),
@@ -875,7 +875,7 @@ impl Context {
             | Context::CNameSearch { query, parent }
             | Context::DName { query, parent }
             | Context::DNameSearch { query, parent } => {
-                if query.qname().is_parent_domain_of(child.qname()) {
+                if query.qname().is_parent_of_ignore_case(child.qname()) {
                     Err(ContextErr::DNameWillLoop {
                         parent: self.short_name(),
                         child: child.clone(),
