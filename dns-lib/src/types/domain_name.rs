@@ -403,7 +403,7 @@ macro_rules! impl_domain_name_assert_invariants {
             /// Verify that the `octets` and `length_octets` fields are in
             /// agreement and any other obvious invariant violations.
             fn assert_invariants(&self) {
-                assert!(self.length_octets.iter().rev().skip(LENGTH_OCTET_WIDTH).all(|x| *x != 0));
+                assert!(self.length_octets.iter().rev().skip(1).all(|x| *x != 0));
                 assert_eq!(self.length_octets.is_empty(), self.octets.is_empty());
 
                 // Verify that the length octets actually sum up to the total
@@ -753,85 +753,124 @@ macro_rules! ref_domain {
     // This pattern is exposed, and matches against the user input. It performs
     // the global limit checks that apply to all labels.
     ($($label:expr),+ $(,)?) => {{
-        // Verify that the number of labels will fit within the label count limit (MAX_LABELS).
         const TOTAL_LABELS: usize = count_expressions!($($label),+);
-        ::static_assertions::const_assert!(
-            TOTAL_LABELS <= ($crate::types::domain_name::MAX_LABELS as usize),
-            "domain name specified must be valid but its total label count exceeds MAX_LABELS",
-        );
-
-        // Verify that the domain name will fit within the overall octet limit (MAX_OCTETS).
         const TOTAL_OCTETS: usize = (TOTAL_LABELS * $crate::types::domain_name::LENGTH_OCTET_WIDTH)
             + sum_expressions!(usize; $($label.as_bytes().len()),+);
-        ::static_assertions::const_assert!(
-            TOTAL_OCTETS <= ($crate::types::domain_name::MAX_OCTETS as usize),
-            "domain name specified must be valid but its total length exceeds MAX_OCTETS",
-        );
-
-        // Verify that each label fits within the label octet limit (MAX_LABEL_OCTETS).
-        $(
-            ::static_assertions::const_assert!(
-                ($label).as_bytes().len() <= ($crate::types::domain_name::MAX_LABEL_OCTETS as usize),
-                "domain name specified must be valid but the length of a label exceeds MAX_LABEL_OCTETS",
-            );
-        )+
-
-        ref_domain![@transpose TOTAL_OCTETS, TOTAL_LABELS; $($label),+]
-    }};
-    // The @transpose rules are an internal implementation detail. They help
-    // separate the last expression from those preceding once since it is
-    // treated as special by the @with_separate_tail rule.
-    //
-    // TODO: tty munchers can be very bad for compile times. Consider finding an
-    //       alternative.
-    (@transpose $total_length:expr, $total_labels:expr; $($trailing_labels:expr),+ $(,)?) => {
-        ref_domain![@transpose $total_length, $total_labels; [ ] $($trailing_labels),*]
-    };
-    (@transpose $total_length:expr, $total_labels:expr; [ $($leading_labels:expr),* $(,)?] $next_label:expr, $($trailing_labels:expr),+ $(,)?) => {
-        ref_domain![@transpose $total_length, $total_labels;
-            [
-                $($leading_labels,)*
-                $next_label
-            ]
-            $($trailing_labels),*
-        ]
-    };
-    (@transpose $total_length:expr, $total_labels:expr; [ $($leading_labels:expr),* $(,)?] $last_label:expr $(,)?) => {
-        ref_domain![@with_separate_tail $total_length, $total_labels;
-            [ $($leading_labels,)* ]
-            $last_label
-        ]
-    };
-    // This pattern is an internal implementation detail. Once the checks that
-    // apply to all the labels have been performed, this pattern is used to
-    // isolate the last label from the others to perform additional checks on
-    // all the leading labels.
-    (@with_separate_tail $total_length:expr, $total_labels:expr; [ $($leading_label:expr,)* $(,)?] $last_label:expr $(,)?) => {{
-        // Verify that all non-terminating labels have a non-zero length.
-        $(
-            ::static_assertions::const_assert!(
-                ($leading_label).as_bytes().len() > ($crate::types::domain_name::MIN_LABEL_OCTETS as usize),
-                "domain name specified must be valid but a non-terminating label has a length of zero",
-            );
-        )*
-
-        // Build the domain name
-        const OCTETS_BUFFER: [u8; $total_length] = concat_arrays!(
+        const OCTETS_BUFFER: [u8; TOTAL_OCTETS] = concat_arrays!(
             0; u8;
             $(
-                [$leading_label.as_bytes().len() as u8],
-                $leading_label.as_bytes(),
+                [$label.as_bytes().len() as u8],
+                $label.as_bytes(),
             )*
-            [$last_label.as_bytes().len() as u8],
-            $last_label.as_bytes(),
         );
-        const LENGTH_OCTETS_BUFFER: [u8; $total_labels] = [
-            $($leading_label.as_bytes().len() as u8,)*
-            $last_label.as_bytes().len() as u8,
+        const LENGTH_OCTETS_BUFFER: [u8; TOTAL_LABELS] = [
+            $($label.as_bytes().len() as u8),*
         ];
-        SubDomainName {
-            octets: &OCTETS_BUFFER,
-            length_octets: &LENGTH_OCTETS_BUFFER
+
+        const fn assert_invariants(octets: &[u8], length_octets: &[u8]) {
+            use $crate::types::domain_name::{MAX_OCTETS, MAX_LABELS, MAX_LABEL_OCTETS, LENGTH_OCTET_WIDTH};
+
+            // Verify global invariants
+            // Note that we are allowed to have fewer than  `MIN_OCTETS`
+            // octets.
+            ::std::assert!(
+                octets.len() <= MAX_OCTETS as usize,
+                "domain name specified must be valid but its total length exceeds MAX_OCTETS",
+            );
+            ::std::assert!(
+                length_octets.len() <= MAX_LABELS as usize,
+                "domain name specified must be valid but its total label count exceeds MAX_LABELS",
+            );
+            let mut length_octets_index = 0;
+            while length_octets_index < length_octets.len() {
+                ::std::assert!(
+                    (length_octets[length_octets_index] as usize) <= (MAX_LABEL_OCTETS as usize),
+                    "domain name specified must be valid but the length of a label exceeds MAX_LABEL_OCTETS",
+                );
+                length_octets_index += 1;
+            }
+
+            assert!(
+                length_octets.is_empty() == octets.is_empty(),
+                "domain name octets can only be empty of length octets is also empty",
+            );
+
+            // Verify that the length octets actually sum up to the total
+            // number of non-length octets in the `octets` field.
+            let mut expected_total_octet_len = 0;
+            let mut length_octets_index = 0;
+            while length_octets_index < length_octets.len() {
+                expected_total_octet_len += length_octets[length_octets_index] as usize;
+                expected_total_octet_len += LENGTH_OCTET_WIDTH;
+                length_octets_index += 1;
+            }
+            ::std::assert!(
+                octets.len() == expected_total_octet_len,
+                "domain name length octets sum must match the count of non-length octets",
+            );
+
+            // Verify that the length octets in `octets` and `length_octets`
+            // are the same.
+            let mut octets_index = 0;
+            let mut length_octets_index = 0;
+            while length_octets_index < length_octets.len() {
+                ::std::assert!(
+                    octets.len() > octets_index,
+                    "domain name octets must align with length octets",
+                );
+                ::std::assert!(
+                    octets[octets_index] == length_octets[length_octets_index],
+                    "domain name octets must align with length octets",
+                );
+                octets_index += (length_octets[length_octets_index] as usize) + LENGTH_OCTET_WIDTH;
+                length_octets_index += 1;
+            }
+            ::std::assert!(
+                octets_index == octets.len(),
+                "domain name octets must align with length octets",
+            );
+            ::std::assert!(
+                length_octets_index == length_octets.len(),
+                "domain name octets must align with length octets",
+            );
+
+            // Verify that only the last label can be a root label.
+            let mut length_octets_index = 0;
+            while length_octets_index < length_octets.len().saturating_sub(1) {
+                ::std::assert!(
+                    0 < length_octets[length_octets_index],
+                    "domain name specified must be valid but a non-terminating label has a length of zero",
+                );
+                length_octets_index += 1;
+            }
+        }
+        const _: () = assert_invariants(&OCTETS_BUFFER, &LENGTH_OCTETS_BUFFER);
+
+        // # Safety
+        //
+        // This macro works from a list of labels, encoded as bytes (which are
+        // allowed to exceed the range of ASCII characters). This ensures that
+        // each label is a valid wire encoding.
+        //
+        // >  - The total number of labels must be less than `MAX_LABELS` (128).
+        // >  - The total length of this field cannot exceed `MAX_OCTETS` (256)
+        // >    bytes.
+        // >  - No single label may exceed a length of `MAX_LABEL_OCTETS` (63)
+        // >    bytes (not including the length octet).
+        // >  - Only the last label may be a root label.
+        // >
+        // > The `length_octets` must contain the length octets that appear in
+        // > `octets` in the same order that they appear in `octets`.
+        //
+        // All safety checks are performed by `assert_invariants()`, after all
+        // expressions have been evaluated. Any inconsistencies caused by
+        // evaluating the expressions more than once will be caught by those
+        // checks.
+        unsafe {
+            $crate::types::domain_name::SubDomainName::from_raw_parts(
+                &OCTETS_BUFFER,
+                &LENGTH_OCTETS_BUFFER
+            )
         }
     }};
 }
@@ -864,6 +903,32 @@ macro_rules! label {
 }
 
 impl<'a> SubDomainName<'a> {
+    /// Create a `SubDomainName` from its raw components.
+    ///
+    /// # Safety
+    ///
+    /// The `octets` must be a valid non-compressed wire-encoded domain name,
+    /// although it is not required to be fully qualified. Requirements include:
+    ///
+    ///  - The total number of labels must be less than `MAX_LABELS` (128).
+    ///  - The total length of this field cannot exceed `MAX_OCTETS` (256)
+    ///    bytes.
+    ///  - No single label may exceed a length of `MAX_LABEL_OCTETS` (63) bytes
+    ///    (not including the length octet).
+    ///  - Only the last label may be a root label.
+    ///
+    /// See RFC 1035 for details about this encoding scheme used for the
+    /// `octets`.
+    ///
+    /// The `length_octets` must contain the length octets that appear in
+    /// `octets` in the same order that they appear in `octets`.
+    pub const unsafe fn from_raw_parts(octets: &'a [u8], length_octets: &'a [u8]) -> Self {
+        SubDomainName {
+            octets,
+            length_octets,
+        }
+    }
+
     /// Divides one domain into two halves at an index.
     ///
     /// The first will contain all labels from `[0, mid)` (excluding the index
