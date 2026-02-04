@@ -10,10 +10,12 @@ static-assertions = { path = "../static-assertions" }
 dns-macros = {path="../dns-macros"}
 
 async-trait = "0.1"
+concat-idents = "1.1"
 futures = "0.3"
 lazy_static = "1.5"
 mac_address = "1.1"
 regex = "1.11"
+rstest = "0.26"
 thiserror = "2.0"
 tinyvec = { version = "1.9", features = ["alloc"] }
 tokio = { version = "1.45", features = ["full"] }

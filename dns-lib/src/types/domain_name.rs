@@ -52,8 +52,13 @@ pub const MIN_OCTETS: u16 = 1;
 /// number of labels is 128.
 pub const MAX_LABELS: u16 = MAX_OCTETS.div_ceil(2);
 /// Maximum number of bytes that can a single label of a domain name, not
-/// including the length octet.
-pub const MAX_LABEL_OCTETS: u16 = MAX_OCTETS - 1;
+/// including the length octet. This limit is specified in
+/// [RFC 1035 section 2.3.4](https://www.rfc-editor.org/rfc/rfc1035#section-2.3.4)
+pub const MAX_LABEL_OCTETS: u16 = 63;
+/// Minimum number of bytes that can a single label of a domain name, not
+/// including the length octet. A label with this length is also known as the
+/// root label, and is used to terminate fully qualified domains.
+pub const MIN_LABEL_OCTETS: u16 = 0;
 
 /// We have 14 bits for the compression pointer
 pub const MAX_COMPRESSION_OFFSET: u16 = u16::MAX >> 2 + 1;
@@ -74,6 +79,11 @@ pub const LENGTH_OCTET_WIDTH: usize = 1;
 
 const_assert!(MIN_OCTETS <= MAX_OCTETS);
 const_assert!(MAX_LABELS <= MAX_OCTETS);
+const_assert!(
+    (MAX_LABEL_OCTETS as usize) <= ((MAX_OCTETS as usize) - LENGTH_OCTET_WIDTH),
+    "MAX_LABEL_OCTETS must not exceed MAX_OCTETS or else a single label could be larger than the domain name and it cannot be equal since it does not include a length octet"
+);
+const_assert!(MIN_LABEL_OCTETS <= MAX_LABEL_OCTETS);
 const_assert!(MAX_COMPRESSION_POINTERS <= MAX_LABELS);
 const_assert!(
     LENGTH_OCTET_WIDTH <= (u32::MAX as usize),
@@ -115,11 +125,7 @@ impl Display for DomainNameError {
                 "Domain Must Be Fully Qualified: indicates that a domain name does not have a closing dot"
             ),
             Self::LongDomain => write!(f, "Domain Name Exceeded {} Wire-Format Octets", MAX_OCTETS),
-            Self::LongLabel => write!(
-                f,
-                "Label Exceeded {} Wire-Format Octets",
-                <OwnedLabel<CaseInsensitive>>::MAX_OCTETS
-            ),
+            Self::LongLabel => write!(f, "Label Exceeded {} Wire-Format Octets", MAX_LABEL_OCTETS),
             Self::LeadingDot => write!(
                 f,
                 "Bad Leading Dot: domain name must not begin with a '.' except for in the root zone"
@@ -568,7 +574,7 @@ impl DomainNameVec {
 
                     // TODO: Can we optimize this check? It might be able to do once per label as
                     // long as we still check against the maximum number of octets every time.
-                    if octets[length_octet_index] > <OwnedLabel<CaseInsensitive>>::MAX_OCTETS {
+                    if u16::from(octets[length_octet_index]) > MAX_LABEL_OCTETS {
                         return Err(DomainNameError::LongLabel);
                     }
 
@@ -696,6 +702,165 @@ impl DomainNameVec {
     ) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
         SearchDomainIter::new(self)
     }
+}
+
+/// Counts the number of expressions and returns the total as a usize during
+/// compile time.
+macro_rules! count_expressions {
+    // This first pattern is an internal implementation detail. It matches any
+    // expression and replaces it with the unit type `()`.
+    (@replace $_e:expr) => {()};
+    ($($expression:expr),* $(,)?) => {<[()]>::len(&[$(count_expressions!(@replace $expression)),*])};
+}
+
+/// Sums the results of expressions and returns the total during compile time.
+macro_rules! sum_expressions {
+    ($int_ty:ty; $($expression:expr),* $(,)?) => {{
+        const TOTAL: $int_ty = 0 $( + $expression )*;
+        TOTAL
+    }};
+}
+
+/// Given a set of arrays, concatenates all the arrays into a single array at
+/// compile time. The order of elements in the resultant array is the same as
+/// the order in which they were specified in the arguments.
+///
+/// Note that the arrays provided as arguments can be fixed-size arrays
+/// (e.g., `[u8; 10]`), references to fixed-size arrays (e.g., `&[u8; 10]`), or
+/// const slices (e.g., `&[u8]`).
+macro_rules! concat_arrays {
+    ($default:expr; $element_ty:ty; $($array:expr),* $(,)?) => {{
+        const CONCATENATED_ARRAY_LEN: usize = 0 $( + $array.len() )*;
+        const CONCATENATED_ARRAY: [$element_ty; CONCATENATED_ARRAY_LEN] = {
+            let mut concatenated_array = [$default; CONCATENATED_ARRAY_LEN];
+            let mut concatenated_array_index = 0;
+            $(
+                let source_array = $array;
+                let mut source_index = 0;
+                while source_index < source_array.len() {
+                    concatenated_array[concatenated_array_index] = source_array[source_index];
+                    source_index += 1;
+                    concatenated_array_index += 1;
+                }
+            )*
+            concatenated_array
+        };
+        CONCATENATED_ARRAY
+    }};
+}
+
+macro_rules! ref_domain {
+    // This pattern is exposed, and matches against the user input. It performs
+    // the global limit checks that apply to all labels.
+    ($($label:expr),+ $(,)?) => {{
+        // Verify that the number of labels will fit within the label count limit (MAX_LABELS).
+        const TOTAL_LABELS: usize = count_expressions!($($label),+);
+        ::static_assertions::const_assert!(
+            TOTAL_LABELS <= ($crate::types::domain_name::MAX_LABELS as usize),
+            "domain name specified must be valid but its total label count exceeds MAX_LABELS",
+        );
+
+        // Verify that the domain name will fit within the overall octet limit (MAX_OCTETS).
+        const TOTAL_OCTETS: usize = (TOTAL_LABELS * $crate::types::domain_name::LENGTH_OCTET_WIDTH)
+            + sum_expressions!(usize; $($label.as_bytes().len()),+);
+        ::static_assertions::const_assert!(
+            TOTAL_OCTETS <= ($crate::types::domain_name::MAX_OCTETS as usize),
+            "domain name specified must be valid but its total length exceeds MAX_OCTETS",
+        );
+
+        // Verify that each label fits within the label octet limit (MAX_LABEL_OCTETS).
+        $(
+            ::static_assertions::const_assert!(
+                ($label).as_bytes().len() <= ($crate::types::domain_name::MAX_LABEL_OCTETS as usize),
+                "domain name specified must be valid but the length of a label exceeds MAX_LABEL_OCTETS",
+            );
+        )+
+
+        ref_domain![@transpose TOTAL_OCTETS, TOTAL_LABELS; $($label),+]
+    }};
+    // The @transpose rules are an internal implementation detail. They help
+    // separate the last expression from those preceding once since it is
+    // treated as special by the @with_separate_tail rule.
+    //
+    // TODO: tty munchers can be very bad for compile times. Consider finding an
+    //       alternative.
+    (@transpose $total_length:expr, $total_labels:expr; $($trailing_labels:expr),+ $(,)?) => {
+        ref_domain![@transpose $total_length, $total_labels; [ ] $($trailing_labels),*]
+    };
+    (@transpose $total_length:expr, $total_labels:expr; [ $($leading_labels:expr),* $(,)?] $next_label:expr, $($trailing_labels:expr),+ $(,)?) => {
+        ref_domain![@transpose $total_length, $total_labels;
+            [
+                $($leading_labels,)*
+                $next_label
+            ]
+            $($trailing_labels),*
+        ]
+    };
+    (@transpose $total_length:expr, $total_labels:expr; [ $($leading_labels:expr),* $(,)?] $last_label:expr $(,)?) => {
+        ref_domain![@with_separate_tail $total_length, $total_labels;
+            [ $($leading_labels,)* ]
+            $last_label
+        ]
+    };
+    // This pattern is an internal implementation detail. Once the checks that
+    // apply to all the labels have been performed, this pattern is used to
+    // isolate the last label from the others to perform additional checks on
+    // all the leading labels.
+    (@with_separate_tail $total_length:expr, $total_labels:expr; [ $($leading_label:expr,)* $(,)?] $last_label:expr $(,)?) => {{
+        // Verify that all non-terminating labels have a non-zero length.
+        $(
+            ::static_assertions::const_assert!(
+                ($leading_label).as_bytes().len() > ($crate::types::domain_name::MIN_LABEL_OCTETS as usize),
+                "domain name specified must be valid but a non-terminating label has a length of zero",
+            );
+        )*
+
+        // Build the domain name
+        const OCTETS_BUFFER: [u8; $total_length] = concat_arrays!(
+            0; u8;
+            $(
+                [$leading_label.as_bytes().len() as u8],
+                $leading_label.as_bytes(),
+            )*
+            [$last_label.as_bytes().len() as u8],
+            $last_label.as_bytes(),
+        );
+        const LENGTH_OCTETS_BUFFER: [u8; $total_labels] = [
+            $($leading_label.as_bytes().len() as u8,)*
+            $last_label.as_bytes().len() as u8,
+        ];
+        SubDomainName {
+            octets: &OCTETS_BUFFER,
+            length_octets: &LENGTH_OCTETS_BUFFER
+        }
+    }};
+}
+
+macro_rules! domain {
+    ($($label:expr),+ $(,)?) => {
+        ref_domain![$($label),*]
+            .to_domain_vec()
+            .and_debug_assert_invariants()
+    };
+}
+
+macro_rules! ref_label {
+    ($label:expr, $case_sensitivity:path $(,)?) => {{
+        ::static_assertions::const_assert!(
+            ($label).as_bytes().len() <= ($crate::types::domain_name::MAX_LABEL_OCTETS as usize),
+            "domain name label specified must be valid but it exceeds MAX_LABEL_OCTETS",
+        );
+        $crate::types::label::RefLabel::<$case_sensitivity>::from_octets($label.as_bytes())
+    }};
+    ($label:expr $(,)?) => {
+        ref_label!($label, $crate::types::label::CaseInsensitive)
+    };
+}
+
+macro_rules! label {
+    ($label:expr$(, $case_sensitivity:path)? $(,)?) => {
+        ref_label!($label, $($case_sensitivity)?).as_owned()
+    };
 }
 
 impl<'a> SubDomainName<'a> {
@@ -2097,278 +2262,296 @@ impl CompressionMap {
 }
 
 #[cfg(test)]
-mod circular_serde_sanity_test {
-    use tinyvec::TinyVec;
+mod test {
+    use std::fmt::Debug;
+
+    use concat_idents::concat_idents;
+    use rstest::rstest;
+    use static_assertions::const_assert;
 
     use crate::{
-        serde::wire::circular_test::gen_test_circular_serde_sanity_test,
+        serde::wire::{from_wire::FromWire, to_wire::ToWire},
         types::{
-            ascii::AsciiString,
             domain_name::{
                 CompressibleDomainVec, DomainName, DomainNameVec, IncompressibleDomainVec,
+                SubDomainName,
             },
-            label::{CaseSensitive, Label, OwnedLabel},
+            label::{CaseSensitive, RefLabel},
         },
     };
 
-    gen_test_circular_serde_sanity_test!(
-        compressible_root_record_circular_serde_sanity_test,
-        CompressibleDomainVec(DomainNameVec::from_utf8(".").unwrap())
-    );
-    gen_test_circular_serde_sanity_test!(
-        incompressible_root_record_circular_serde_sanity_test,
-        IncompressibleDomainVec(DomainNameVec::from_utf8(".").unwrap())
-    );
-    gen_test_circular_serde_sanity_test!(
-        compressible_root_zone_record_circular_serde_sanity_test,
-        CompressibleDomainVec(DomainNameVec::from_utf8("com.").unwrap())
-    );
-    gen_test_circular_serde_sanity_test!(
-        incompressible_root_zone_record_circular_serde_sanity_test,
-        IncompressibleDomainVec(DomainNameVec::from_utf8("com.").unwrap())
-    );
-    gen_test_circular_serde_sanity_test!(
-        compressible_record_circular_serde_sanity_test,
-        CompressibleDomainVec(DomainNameVec::from_utf8("www.example.com.").unwrap())
-    );
-    gen_test_circular_serde_sanity_test!(
-        incompressible_record_circular_serde_sanity_test,
-        IncompressibleDomainVec(DomainNameVec::from_utf8("www.example.com.").unwrap())
-    );
-    gen_test_circular_serde_sanity_test!(
-        compressible_repetitive_1_record_circular_serde_sanity_test,
-        CompressibleDomainVec(
-            DomainNameVec::from_utf8("www.example.com.www.example.com.").unwrap()
-        )
-    );
-    gen_test_circular_serde_sanity_test!(
-        incompressible_repetitive_1_record_circular_serde_sanity_test,
-        IncompressibleDomainVec(
-            DomainNameVec::from_utf8("www.example.com.www.example.com.").unwrap()
-        )
-    );
-    gen_test_circular_serde_sanity_test!(
-        compressible_repetitive_2_record_circular_serde_sanity_test,
-        CompressibleDomainVec(
-            DomainNameVec::from_utf8("www.example.com.www.example.com.www.example.com.").unwrap()
-        )
-    );
-    gen_test_circular_serde_sanity_test!(
-        incompressible_repetitive_2_record_circular_serde_sanity_test,
-        IncompressibleDomainVec(
-            DomainNameVec::from_utf8("www.example.com.www.example.com.www.example.com.").unwrap()
-        )
-    );
-
-    #[test]
-    fn domain_name_to_labels() {
-        let domain_label_pairs = vec![
-            (".", vec![""]),
-            ("com.", vec!["com", ""]),
-            ("www.example.com.", vec!["www", "example", "com", ""]),
-            (
-                "www.example1.com.www.example2.org.",
-                vec!["www", "example1", "com", "www", "example2", "org", ""],
-            ),
-            (
-                "www.example1.org.www.example2.com.www.example3.dev.",
-                vec![
-                    "www", "example1", "org", "www", "example2", "com", "www", "example3", "dev",
-                    "",
-                ],
-            ),
-        ];
-
-        for (domain, expected_labels) in &domain_label_pairs {
-            let domain_name = DomainNameVec::from_utf8(domain).unwrap();
-            let expected_labels = expected_labels
-                .into_iter()
-                .map(|label| {
-                    <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                        AsciiString::from_utf8(label).unwrap().as_slice(),
-                    ))
-                })
-                .collect::<Vec<_>>();
-            let actual_labels = domain_name
-                .labels_iter()
-                .map(|label| label.as_owned())
-                .collect::<Vec<_>>();
-            assert_eq!(expected_labels, actual_labels);
-        }
-
-        for (domain, expected_labels) in &domain_label_pairs {
-            let domain_name = DomainNameVec::from_utf8(domain).unwrap();
-            let expected_labels = expected_labels
-                .into_iter()
-                .rev()
-                .map(|label| {
-                    <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                        AsciiString::from_utf8(label).unwrap().as_slice(),
-                    ))
-                })
-                .collect::<Vec<_>>();
-            let actual_labels = domain_name
-                .labels_iter()
-                .rev()
-                .map(|label| label.as_owned())
-                .collect::<Vec<_>>();
-            assert_eq!(expected_labels, actual_labels);
+    fn domain_labels_iter_verify_extra_properties<'a, 'b>(
+        domain_labels: impl DoubleEndedIterator<Item = &'a RefLabel<CaseSensitive>>
+        + ExactSizeIterator
+        + Debug
+        + Clone,
+        expected_labels: impl DoubleEndedIterator<Item = &'b RefLabel<CaseSensitive>>
+        + ExactSizeIterator
+        + Debug
+        + Clone,
+    ) {
+        assert_eq!(expected_labels.clone().next(), domain_labels.clone().next(),);
+        assert_eq!(
+            expected_labels.clone().next_back(),
+            domain_labels.clone().next_back(),
+        );
+        assert_eq!(expected_labels.clone().last(), domain_labels.clone().last(),);
+        assert_eq!(
+            domain_labels.clone().last(),
+            domain_labels.clone().next_back(),
+        );
+        assert_eq!(
+            expected_labels.clone().count(),
+            domain_labels.clone().count(),
+        );
+        assert_eq!(
+            expected_labels.clone().count(),
+            domain_labels.clone().size_hint().0,
+        );
+        assert_eq!(
+            expected_labels.clone().count(),
+            domain_labels
+                .clone()
+                .size_hint()
+                .1
+                .expect("domain label iterators should always have a known length"),
+        );
+        for n in 0..(domain_labels.size_hint().0 + 1) {
+            assert_eq!(expected_labels.clone().nth(n), domain_labels.clone().nth(n));
+            assert_eq!(
+                expected_labels.clone().rev().nth(n),
+                domain_labels.clone().rev().nth(n)
+            );
         }
     }
 
-    #[test]
-    fn domain_name_to_labels_nth() {
-        let domain_label_pairs = vec![
-            (".", vec![""]),
-            ("com.", vec!["com", ""]),
-            ("www.example.com.", vec!["www", "example", "com", ""]),
-            (
-                "www.example1.com.www.example2.org.",
-                vec!["www", "example1", "com", "www", "example2", "org", ""],
-            ),
-            (
-                "www.example1.org.www.example2.com.www.example3.dev.",
-                vec![
-                    "www", "example1", "org", "www", "example2", "com", "www", "example3", "dev",
-                    "",
-                ],
-            ),
-        ];
-        let max_n = (domain_label_pairs.iter().map(|(_, labels)| labels.len()))
-            .max()
-            .unwrap();
+    fn impl_domain_labels_iter_test(
+        domain: impl DomainName,
+        expected_labels: &[&RefLabel<CaseSensitive>],
+    ) {
+        let actual_labels = domain.labels_iter().collect::<Vec<_>>();
+        assert_eq!(expected_labels, &actual_labels);
+    }
 
-        for n in 0..max_n {
-            for (domain, expected_labels) in &domain_label_pairs {
-                let domain_name = DomainNameVec::from_utf8(domain).unwrap();
-                let expected_label = expected_labels.into_iter().nth(n).map(|label| {
-                    <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                        AsciiString::from_utf8(label).unwrap().as_slice(),
-                    ))
-                });
-                let actual_label = domain_name
-                    .labels_iter()
-                    .nth(n)
-                    .map(|label| label.as_owned());
-                assert_eq!(expected_label, actual_label);
-            }
+    fn impl_domain_labels_reverse_iter_test(
+        domain: impl DomainName,
+        expected_labels: &[&RefLabel<CaseSensitive>],
+    ) {
+        let mut expected_labels = expected_labels.to_vec();
+        expected_labels.reverse();
 
-            for (domain, expected_labels) in &domain_label_pairs {
-                let domain_name = DomainNameVec::from_utf8(domain).unwrap();
-                let expected_label = expected_labels.into_iter().rev().nth(n).map(|label| {
-                    <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                        AsciiString::from_utf8(label).unwrap().as_slice(),
-                    ))
-                });
-                let actual_label = domain_name
-                    .labels_iter()
-                    .rev()
-                    .nth(n)
-                    .map(|label| label.as_owned());
-                assert_eq!(expected_label, actual_label);
-            }
-        }
+        let actual_labels = domain.labels_iter().rev().collect::<Vec<_>>();
+        assert_eq!(expected_labels, actual_labels);
+    }
 
-        for n in 0..max_n {
-            // Normal forward
-            for (domain, expected_labels) in &domain_label_pairs {
-                let domain_name = DomainNameVec::from_utf8(domain).unwrap();
-                let mut expected_labels = expected_labels.into_iter();
-                let mut expected_labels_nth = Vec::new();
-                let mut actual_labels = domain_name.labels_iter();
-                let mut actual_labels_nth = Vec::new();
-                for _ in 0..max_n {
-                    assert_eq!(
-                        expected_labels.clone().count(),
-                        actual_labels.clone().count()
-                    );
-                    assert_eq!(
-                        expected_labels.clone().count(),
-                        actual_labels.clone().size_hint().0
-                    );
-                    assert_eq!(
-                        expected_labels.clone().count(),
-                        actual_labels.clone().size_hint().1.unwrap()
-                    );
-                    assert_eq!(
-                        expected_labels.clone().last().map(|label| {
-                            <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                                AsciiString::from_utf8(label).unwrap().as_slice(),
-                            ))
-                        }),
-                        actual_labels.clone().last().map(|label| label.as_owned())
-                    );
-                    expected_labels_nth.push(expected_labels.nth(n).map(|label| {
-                        <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                            AsciiString::from_utf8(label).unwrap().as_slice(),
-                        ))
-                    }));
-                    actual_labels_nth.push(actual_labels.nth(n).map(|label| label.as_owned()));
-                }
-                assert_eq!(expected_labels_nth, actual_labels_nth);
-            }
-
-            // Normal reverse
-            for (domain, expected_labels) in &domain_label_pairs {
-                let domain_name = DomainNameVec::from_utf8(domain).unwrap();
-                let mut expected_labels = expected_labels.into_iter().rev();
-                let mut expected_labels_nth = Vec::new();
-                let mut actual_labels = domain_name.labels_iter().rev();
-                let mut actual_labels_nth = Vec::new();
-                for _ in 0..max_n {
-                    assert_eq!(
-                        expected_labels.clone().count(),
-                        actual_labels.clone().count()
-                    );
-                    assert_eq!(
-                        expected_labels.clone().count(),
-                        actual_labels.clone().size_hint().0
-                    );
-                    assert_eq!(
-                        expected_labels.clone().count(),
-                        actual_labels.clone().size_hint().1.unwrap()
-                    );
-                    assert_eq!(
-                        expected_labels.clone().last().map(|label| {
-                            <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                                AsciiString::from_utf8(label).unwrap().as_slice(),
-                            ))
-                        }),
-                        actual_labels.clone().last().map(|label| label.as_owned())
-                    );
-                    expected_labels_nth.push(expected_labels.nth(n).map(|label| {
-                        <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                            AsciiString::from_utf8(label).unwrap().as_slice(),
-                        ))
-                    }));
-                    actual_labels_nth.push(actual_labels.nth(n).map(|label| label.as_owned()));
-                }
-                assert_eq!(expected_labels_nth, actual_labels_nth);
-            }
-
-            // Flipping back and forth between forwards and reverse
-            for (domain, expected_labels) in &domain_label_pairs {
-                let domain_name = DomainNameVec::from_utf8(domain).unwrap();
-                let mut expected_labels: Box<dyn DoubleEndedIterator<Item = _>> =
-                    Box::new(expected_labels.into_iter());
-                let mut expected_labels_nth = Vec::new();
-                let mut actual_labels: Box<dyn DoubleEndedIterator<Item = _>> =
-                    Box::new(domain_name.labels_iter());
-                let mut actual_labels_nth = Vec::new();
-                for _ in 0..max_n {
-                    expected_labels_nth.push(expected_labels.nth(n).map(|label| {
-                        <OwnedLabel<CaseSensitive>>::from_octets(TinyVec::from(
-                            AsciiString::from_utf8(label).unwrap().as_slice(),
-                        ))
-                    }));
-                    actual_labels_nth.push(actual_labels.nth(n).map(|label| label.as_owned()));
-                    expected_labels = Box::new(expected_labels.rev());
-                    actual_labels = Box::new(actual_labels.rev());
-                }
-                assert_eq!(expected_labels_nth, actual_labels_nth);
+    fn impl_domain_labels_nth_iter_test(
+        domain: impl DomainName,
+        expected_labels: &[&RefLabel<CaseSensitive>],
+    ) {
+        for n in 0..(expected_labels.len() * 2) {
+            let mut expected_labels = expected_labels.into_iter().copied();
+            let mut domain_labels = domain.labels_iter::<CaseSensitive>();
+            for _ in 0..(expected_labels.len() * 2) {
+                assert_eq!(expected_labels.nth(n), domain_labels.nth(n));
+                domain_labels_iter_verify_extra_properties(
+                    domain_labels.clone(),
+                    expected_labels.clone(),
+                );
             }
         }
     }
+
+    fn impl_domain_labels_reverse_nth_iter_test(
+        domain: impl DomainName,
+        expected_labels: &[&RefLabel<CaseSensitive>],
+    ) {
+        let mut expected_labels = expected_labels.to_vec();
+        expected_labels.reverse();
+
+        for n in 0..(expected_labels.len() * 2) {
+            let mut expected_labels = expected_labels.iter().copied();
+            let mut domain_labels = domain.labels_iter::<CaseSensitive>().rev();
+            for _ in 0..(expected_labels.len() * 2) {
+                assert_eq!(expected_labels.nth(n), domain_labels.nth(n));
+                domain_labels_iter_verify_extra_properties(
+                    domain_labels.clone(),
+                    expected_labels.clone(),
+                );
+            }
+        }
+    }
+
+    fn impl_domain_labels_to_str_test(
+        domain: impl DomainName,
+        expected_labels: &[&RefLabel<CaseSensitive>],
+        expected_label_strings: &[&str],
+    ) {
+        assert_eq!(
+            domain.labels_iter::<CaseSensitive>().count(),
+            expected_labels.len()
+        );
+        assert_eq!(
+            domain.labels_iter::<CaseSensitive>().count(),
+            expected_label_strings.len()
+        );
+        for ((domain_label, &expected_label), &expected_label_str) in domain
+            .labels_iter::<CaseSensitive>()
+            .zip(expected_labels)
+            .zip(expected_label_strings)
+        {
+            assert_eq!(expected_label, domain_label);
+            assert_eq!(expected_label_str, domain_label.to_string().as_str());
+            assert_eq!(expected_label_str, expected_label.to_string().as_str());
+        }
+    }
+
+    /// Generates a 3 constants, each with a different prefix:
+    ///
+    /// - DOMAIN_* - has the specified labels in the form of a `SubDomainName`.
+    /// - LABELS_* - has the specified labels in the form of slice of `RefLabel`s.
+    /// - LABEL_STRINGS_* - has the specified labels in the form of a slice of string slices.
+    ///
+    /// Also generates a number of unit tests that use those constants as input.
+    macro_rules! generate {
+        // The @ident rule is used to generate identifiers. It can't be used in
+        // all places like concat_idents!() can but it is a little easier to
+        // read in the places where it is used.
+        (@ident $prefix:tt, $name:tt $(,)?) => {
+            concat_idents!(concatenated_name = $prefix, $name { concatenated_name })
+        };
+        (@make_constants $([$name:tt; $($label:expr),+ $(,)?]),* $(,)?) => {
+            $(
+                concat_idents!(name = DOMAIN_, $name {
+                    const name: SubDomainName<'static> = ref_domain![$($label),+];
+                });
+                concat_idents!(name = LABELS_, $name {
+                    const name: &[&RefLabel<CaseSensitive>] = &[
+                        $(ref_label![$label, CaseSensitive]),+
+                    ];
+                });
+                concat_idents!(name = LABEL_STRINGS_, $name {
+                    const name: &[&str] = &[$($label),*];
+                });
+            )*
+        };
+        // The @validate_test_cases rule checks the provided test cases to make
+        // sure they are well-formed. Otherwise, there are other valid forms
+        // that domain names can take but which cannot be sent over a wire so
+        // are not tested here.
+        (@validate_test_cases $($name:tt),* $(,)?) => {
+            $(
+                // One easy mistake to make is forgetting to make the test cases
+                // all fully qualified domains. This requirement stems from the
+                // fact that we perform the serialization / deserialization
+                // tests here and all domain names sent over a wire are required
+                // to be fully qualified.
+                const_assert!(
+                    generate!(@ident DOMAIN_, $name).length_octets.len() > 0,
+                    "Test cases in this macro MUST only involve fully qualified names"
+                );
+                const_assert!(
+                    generate!(@ident DOMAIN_, $name).length_octets[generate!(@ident DOMAIN_, $name).length_octets.len() - 1] == 0,
+                    "Test cases in this macro MUST only involve fully qualified names"
+                );
+            )*
+        };
+        (@make_domain_test DOMAIN_ LABELS_; $call:ident [$($name:tt),* $(,)?]) => {
+            #[rstest]
+            $(
+                #[case(
+                    generate!(@ident DOMAIN_, $name).to_domain_vec(),
+                    generate!(@ident LABELS_, $name),
+                )]
+                #[case(
+                    generate!(@ident DOMAIN_, $name).as_subdomain(),
+                    generate!(@ident LABELS_, $name),
+                )]
+            )*
+            fn $call(
+                #[case] domain: impl DomainName,
+                #[case] expected_labels: &[&RefLabel<CaseSensitive>],
+            ) {
+                generate!(@ident impl_, $call)(domain, expected_labels);
+            }
+        };
+        (@make_domain_test DOMAIN_ LABELS_ LABEL_STRINGS_; $call:ident [$($name:tt),* $(,)?]) => {
+            #[rstest]
+            $(
+                #[case(
+                    generate!(@ident DOMAIN_, $name).to_domain_vec(),
+                    generate!(@ident LABELS_, $name),
+                    generate!(@ident LABEL_STRINGS_, $name),
+                )]
+                #[case(
+                    generate!(@ident DOMAIN_, $name).as_subdomain(),
+                    generate!(@ident LABELS_, $name),
+                    generate!(@ident LABEL_STRINGS_, $name),
+                )]
+            )*
+            fn $call(
+                #[case] domain: impl DomainName,
+                #[case] expected_labels: &[&RefLabel<CaseSensitive>],
+                #[case] expected_label_strings: &[&str],
+            ) {
+                generate!(@ident impl_, $call)(domain, expected_labels, expected_label_strings);
+            }
+        };
+        (@make_tests $($name:tt),* $(,)?) => {
+            #[rstest]
+            $(
+                #[case(CompressibleDomainVec(
+                    generate!(@ident DOMAIN_, $name).to_domain_vec()
+                ))]
+                #[case(IncompressibleDomainVec(
+                    generate!(@ident DOMAIN_, $name).to_domain_vec()
+                ))]
+            )*
+            fn circular_serde_sanity_test<T>(#[case] input: T) where T: Debug + ToWire + FromWire + PartialEq {
+                crate::serde::wire::circular_test::circular_serde_sanity_test::<T>(input)
+            }
+
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_labels_iter_test [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_labels_reverse_iter_test [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_labels_nth_iter_test [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_labels_reverse_nth_iter_test [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_ LABEL_STRINGS_; domain_labels_to_str_test [$($name),*]);
+        };
+        ($([$name:tt; $($label:expr),+ $(,)?]),* $(,)?) => {
+            generate!(@make_constants $([$name; $($label),*]),+);
+            generate!(@validate_test_cases $($name),+);
+            generate!(@make_tests $($name),+);
+        };
+    }
+    generate![
+        [ROOT; ""],
+        [2_LABELS; "com", ""],
+        [3_LABELS; "example", "com", ""],
+        [4_LABELS; "www", "example", "com", ""],
+        [10_LABELS;
+            "label1",
+            "next?",
+            "another_one",
+            "more-labels",
+            "com",
+            "1",
+            "sub",
+            "subdomain",
+            "org",
+            "",
+        ],
+        [REPETITIVE;
+            "www", "example", "org", "www", "example", "org", "www", "example", "org", "www",
+            "example", "org", "www", "example", "org", "www", "example", "org", "www", "example",
+            "org", "www", "example", "org", "www", "example", "org", "www", "example", "org", "www",
+            "example", "org", ""
+        ],
+        [1_LONG_LABEL; "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678", ""],
+        [2_LONG_LABELS;
+            "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678",
+            "9 `~!@#$%^&*()-_=+[]{};:'\",<>/? abcdefghijklmnopqrstuvwxyz ABCD",
+            "",
+        ],
+    ];
 
     #[test]
     fn domain_name_to_search_names() {

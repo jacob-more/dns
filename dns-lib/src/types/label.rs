@@ -296,7 +296,7 @@ impl<C: CaseSensitivity> OwnedLabel<C> {
         }
     }
 
-    pub(super) fn from_octets(octets: TinyVec<[AsciiChar; 14]>) -> Self {
+    pub(super) const fn from_octets(octets: TinyVec<[AsciiChar; 14]>) -> Self {
         OwnedLabel {
             case: PhantomData,
             octets,
@@ -309,11 +309,11 @@ static ROOT_LABEL: &[AsciiChar] = &[];
 // TODO: The unsafe blocks for the ref labels are based on code in the standard library. Need to go through and make sure I am upholding the safety guarantees in this particular case.
 
 impl<C: CaseSensitivity> RefLabel<C> {
-    pub fn new_root() -> &'static Self {
+    pub const fn new_root() -> &'static Self {
         Self::from_octets(ROOT_LABEL)
     }
 
-    pub(super) fn from_octets(octets: &[AsciiChar]) -> &Self {
+    pub(super) const fn from_octets(octets: &[AsciiChar]) -> &Self {
         unsafe { &*(octets as *const [AsciiChar] as *const RefLabel<C>) }
     }
 }
