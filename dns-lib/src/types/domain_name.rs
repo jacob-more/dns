@@ -397,41 +397,123 @@ const_assert!(
     "MAX_LABEL_OCTETS cannot exceed u8::MAX because if it were greater, we would need to represent them with a different type in the `length_octets` fields"
 );
 
-macro_rules! impl_domain_name_assert_invariants {
+/// Assert all invariants required to ensure that the raw parts of a domain name
+/// are correct and that it is safe to pass those arguments to
+/// `SubDomainName::from_raw_parts()`.
+///
+/// This function is `const`. This means that it can be called at compile time
+/// in a `const` setting where it will cause compilation to fail if the
+/// invariants are not met.
+///
+/// # Panics
+///
+/// This function will panic if any required invariant to ensure that it is safe
+/// to use the arguments with `SubDomainName::from_raw_parts()` are not met.
+pub const fn assert_domain_name_invariants(octets: &[u8], length_octets: &[u8]) {
+    // Verify global invariants
+    // Note that we are allowed to have fewer than  `MIN_OCTETS`
+    // octets.
+    assert!(
+        octets.len() <= MAX_OCTETS as usize,
+        "domain name specified must be valid but its total length exceeds MAX_OCTETS",
+    );
+    assert!(
+        length_octets.len() <= MAX_LABELS as usize,
+        "domain name specified must be valid but its total label count exceeds MAX_LABELS",
+    );
+    let mut length_octets_index = 0;
+    while length_octets_index < length_octets.len() {
+        assert!(
+            (length_octets[length_octets_index] as usize) <= (MAX_LABEL_OCTETS as usize),
+            "domain name specified must be valid but the length of a label exceeds MAX_LABEL_OCTETS",
+        );
+        length_octets_index += 1;
+    }
+
+    assert!(
+        length_octets.is_empty() == octets.is_empty(),
+        "domain name octets can only be empty of length octets is also empty",
+    );
+
+    // Verify that the length octets actually sum up to the total
+    // number of non-length octets in the `octets` field.
+    let mut expected_total_octet_len = 0;
+    let mut length_octets_index = 0;
+    while length_octets_index < length_octets.len() {
+        expected_total_octet_len += length_octets[length_octets_index] as usize;
+        expected_total_octet_len += LENGTH_OCTET_WIDTH;
+        length_octets_index += 1;
+    }
+    assert!(
+        octets.len() == expected_total_octet_len,
+        "domain name length octets sum must match the count of non-length octets",
+    );
+
+    // Verify that the length octets in `octets` and `length_octets`
+    // are the same.
+    let mut octets_index = 0;
+    let mut length_octets_index = 0;
+    while length_octets_index < length_octets.len() {
+        assert!(
+            octets.len() > octets_index,
+            "domain name octets must align with length octets",
+        );
+        assert!(
+            octets[octets_index] == length_octets[length_octets_index],
+            "domain name octets must align with length octets",
+        );
+        octets_index += (length_octets[length_octets_index] as usize) + LENGTH_OCTET_WIDTH;
+        length_octets_index += 1;
+    }
+    assert!(
+        octets_index == octets.len(),
+        "domain name octets must align with length octets",
+    );
+    assert!(
+        length_octets_index == length_octets.len(),
+        "domain name octets must align with length octets",
+    );
+
+    // Verify that only the last label can be a root label.
+    let mut length_octets_index = 0;
+    while length_octets_index < length_octets.len().saturating_sub(1) {
+        assert!(
+            0 < length_octets[length_octets_index],
+            "domain name specified must be valid but a non-terminating label has a length of zero",
+        );
+        length_octets_index += 1;
+    }
+}
+
+impl DomainNameVec {
+    /// Verify that the `octets` and `length_octets` fields are in agreement and
+    /// any other obvious invariant violations.
+    fn assert_invariants(&self) {
+        // Note: this function is not `const` because `TinyVec::as_slice()` is
+        //       not currently `const`.
+        assert_domain_name_invariants(self.octets.as_slice(), self.length_octets.as_slice());
+    }
+}
+
+impl SubDomainName<'_> {
+    /// Verify that the `octets` and `length_octets` fields are in agreement and
+    /// any other obvious invariant violations.
+    const fn assert_invariants(&self) {
+        assert_domain_name_invariants(self.octets, self.length_octets);
+    }
+}
+
+impl MutSubDomainName<'_> {
+    /// Verify that the `octets` and `length_octets` fields are in agreement and
+    /// any other obvious invariant violations.
+    const fn assert_invariants(&self) {
+        assert_domain_name_invariants(self.octets, self.length_octets);
+    }
+}
+
+macro_rules! impl_domain_name_debug_assert_invariants {
     ($domain_type:ty) => {
         impl $domain_type {
-            /// Verify that the `octets` and `length_octets` fields are in
-            /// agreement and any other obvious invariant violations.
-            fn assert_invariants(&self) {
-                assert!(self.length_octets.iter().rev().skip(1).all(|x| *x != 0));
-                assert_eq!(self.length_octets.is_empty(), self.octets.is_empty());
-
-                // Verify that the length octets actually sum up to the total
-                // number of non-length octets in the `octets` field.
-                let expected_total_octet_len = self
-                    .length_octets
-                    .iter()
-                    .map(|length_octet| *length_octet as usize)
-                    .sum::<usize>()
-                    + (self.length_octets.len() * LENGTH_OCTET_WIDTH);
-                assert_eq!(self.octets.len(), expected_total_octet_len);
-
-                // Verify that the length octets match their counterparts in the
-                // `octets` field.
-                let mut index = 0;
-                for length_octet in self.length_octets.iter() {
-                    assert_eq!(self.octets[index], *length_octet);
-                    index += (*length_octet as usize) + LENGTH_OCTET_WIDTH;
-                }
-
-                // Verify global invariants
-                // Note that we are allowed to have fewer than  `MIN_OCTETS`
-                // octets.
-                assert!(self.octets.len() <= MAX_OCTETS as usize);
-                assert!(self.length_octets.len() <= MAX_LABELS as usize);
-                assert!(self.length_octets.iter().all(|length_octet| (*length_octet as usize) <= (MAX_LABEL_OCTETS as usize)));
-            }
-
             /// Verify that the `octets` and `length_octets` fields are in
             /// agreement and any other obvious invariant violations.
             ///
@@ -462,10 +544,9 @@ macro_rules! impl_domain_name_assert_invariants {
         }
     };
 }
-
-impl_domain_name_assert_invariants!(DomainNameVec);
-impl_domain_name_assert_invariants!(SubDomainName<'_>);
-impl_domain_name_assert_invariants!(MutSubDomainName<'_>);
+impl_domain_name_debug_assert_invariants!(DomainNameVec);
+impl_domain_name_debug_assert_invariants!(SubDomainName<'_>);
+impl_domain_name_debug_assert_invariants!(MutSubDomainName<'_>);
 
 impl DomainNameVec {
     pub fn as_subdomain(&self) -> SubDomainName<'_> {
@@ -702,204 +783,6 @@ impl DomainNameVec {
     ) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
         SearchDomainIter::new(self)
     }
-}
-
-/// Counts the number of expressions and returns the total as a usize during
-/// compile time.
-macro_rules! count_expressions {
-    // This first pattern is an internal implementation detail. It matches any
-    // expression and replaces it with the unit type `()`.
-    (@replace $_e:expr) => {()};
-    ($($expression:expr),* $(,)?) => {<[()]>::len(&[$(count_expressions!(@replace $expression)),*])};
-}
-
-/// Sums the results of expressions and returns the total during compile time.
-macro_rules! sum_expressions {
-    ($int_ty:ty; $($expression:expr),* $(,)?) => {{
-        const TOTAL: $int_ty = 0 $( + $expression )*;
-        TOTAL
-    }};
-}
-
-/// Given a set of arrays, concatenates all the arrays into a single array at
-/// compile time. The order of elements in the resultant array is the same as
-/// the order in which they were specified in the arguments.
-///
-/// Note that the arrays provided as arguments can be fixed-size arrays
-/// (e.g., `[u8; 10]`), references to fixed-size arrays (e.g., `&[u8; 10]`), or
-/// const slices (e.g., `&[u8]`).
-macro_rules! concat_arrays {
-    ($default:expr; $element_ty:ty; $($array:expr),* $(,)?) => {{
-        const CONCATENATED_ARRAY_LEN: usize = 0 $( + $array.len() )*;
-        const CONCATENATED_ARRAY: [$element_ty; CONCATENATED_ARRAY_LEN] = {
-            let mut concatenated_array = [$default; CONCATENATED_ARRAY_LEN];
-            let mut concatenated_array_index = 0;
-            $(
-                let source_array = $array;
-                let mut source_index = 0;
-                while source_index < source_array.len() {
-                    concatenated_array[concatenated_array_index] = source_array[source_index];
-                    source_index += 1;
-                    concatenated_array_index += 1;
-                }
-            )*
-            concatenated_array
-        };
-        CONCATENATED_ARRAY
-    }};
-}
-
-macro_rules! ref_domain {
-    // This pattern is exposed, and matches against the user input. It performs
-    // the global limit checks that apply to all labels.
-    ($($label:expr),+ $(,)?) => {{
-        const TOTAL_LABELS: usize = count_expressions!($($label),+);
-        const TOTAL_OCTETS: usize = (TOTAL_LABELS * $crate::types::domain_name::LENGTH_OCTET_WIDTH)
-            + sum_expressions!(usize; $($label.as_bytes().len()),+);
-        const OCTETS_BUFFER: [u8; TOTAL_OCTETS] = concat_arrays!(
-            0; u8;
-            $(
-                [$label.as_bytes().len() as u8],
-                $label.as_bytes(),
-            )*
-        );
-        const LENGTH_OCTETS_BUFFER: [u8; TOTAL_LABELS] = [
-            $($label.as_bytes().len() as u8),*
-        ];
-
-        const fn assert_invariants(octets: &[u8], length_octets: &[u8]) {
-            use $crate::types::domain_name::{MAX_OCTETS, MAX_LABELS, MAX_LABEL_OCTETS, LENGTH_OCTET_WIDTH};
-
-            // Verify global invariants
-            // Note that we are allowed to have fewer than  `MIN_OCTETS`
-            // octets.
-            ::std::assert!(
-                octets.len() <= MAX_OCTETS as usize,
-                "domain name specified must be valid but its total length exceeds MAX_OCTETS",
-            );
-            ::std::assert!(
-                length_octets.len() <= MAX_LABELS as usize,
-                "domain name specified must be valid but its total label count exceeds MAX_LABELS",
-            );
-            let mut length_octets_index = 0;
-            while length_octets_index < length_octets.len() {
-                ::std::assert!(
-                    (length_octets[length_octets_index] as usize) <= (MAX_LABEL_OCTETS as usize),
-                    "domain name specified must be valid but the length of a label exceeds MAX_LABEL_OCTETS",
-                );
-                length_octets_index += 1;
-            }
-
-            assert!(
-                length_octets.is_empty() == octets.is_empty(),
-                "domain name octets can only be empty of length octets is also empty",
-            );
-
-            // Verify that the length octets actually sum up to the total
-            // number of non-length octets in the `octets` field.
-            let mut expected_total_octet_len = 0;
-            let mut length_octets_index = 0;
-            while length_octets_index < length_octets.len() {
-                expected_total_octet_len += length_octets[length_octets_index] as usize;
-                expected_total_octet_len += LENGTH_OCTET_WIDTH;
-                length_octets_index += 1;
-            }
-            ::std::assert!(
-                octets.len() == expected_total_octet_len,
-                "domain name length octets sum must match the count of non-length octets",
-            );
-
-            // Verify that the length octets in `octets` and `length_octets`
-            // are the same.
-            let mut octets_index = 0;
-            let mut length_octets_index = 0;
-            while length_octets_index < length_octets.len() {
-                ::std::assert!(
-                    octets.len() > octets_index,
-                    "domain name octets must align with length octets",
-                );
-                ::std::assert!(
-                    octets[octets_index] == length_octets[length_octets_index],
-                    "domain name octets must align with length octets",
-                );
-                octets_index += (length_octets[length_octets_index] as usize) + LENGTH_OCTET_WIDTH;
-                length_octets_index += 1;
-            }
-            ::std::assert!(
-                octets_index == octets.len(),
-                "domain name octets must align with length octets",
-            );
-            ::std::assert!(
-                length_octets_index == length_octets.len(),
-                "domain name octets must align with length octets",
-            );
-
-            // Verify that only the last label can be a root label.
-            let mut length_octets_index = 0;
-            while length_octets_index < length_octets.len().saturating_sub(1) {
-                ::std::assert!(
-                    0 < length_octets[length_octets_index],
-                    "domain name specified must be valid but a non-terminating label has a length of zero",
-                );
-                length_octets_index += 1;
-            }
-        }
-        const _: () = assert_invariants(&OCTETS_BUFFER, &LENGTH_OCTETS_BUFFER);
-
-        // # Safety
-        //
-        // This macro works from a list of labels, encoded as bytes (which are
-        // allowed to exceed the range of ASCII characters). This ensures that
-        // each label is a valid wire encoding.
-        //
-        // >  - The total number of labels must be less than `MAX_LABELS` (128).
-        // >  - The total length of this field cannot exceed `MAX_OCTETS` (256)
-        // >    bytes.
-        // >  - No single label may exceed a length of `MAX_LABEL_OCTETS` (63)
-        // >    bytes (not including the length octet).
-        // >  - Only the last label may be a root label.
-        // >
-        // > The `length_octets` must contain the length octets that appear in
-        // > `octets` in the same order that they appear in `octets`.
-        //
-        // All safety checks are performed by `assert_invariants()`, after all
-        // expressions have been evaluated. Any inconsistencies caused by
-        // evaluating the expressions more than once will be caught by those
-        // checks.
-        unsafe {
-            $crate::types::domain_name::SubDomainName::from_raw_parts(
-                &OCTETS_BUFFER,
-                &LENGTH_OCTETS_BUFFER
-            )
-        }
-    }};
-}
-
-macro_rules! domain {
-    ($($label:expr),+ $(,)?) => {
-        ref_domain![$($label),*]
-            .to_domain_vec()
-            .and_debug_assert_invariants()
-    };
-}
-
-macro_rules! ref_label {
-    ($label:expr, $case_sensitivity:path $(,)?) => {{
-        ::static_assertions::const_assert!(
-            ($label).as_bytes().len() <= ($crate::types::domain_name::MAX_LABEL_OCTETS as usize),
-            "domain name label specified must be valid but it exceeds MAX_LABEL_OCTETS",
-        );
-        $crate::types::label::RefLabel::<$case_sensitivity>::from_octets($label.as_bytes())
-    }};
-    ($label:expr $(,)?) => {
-        ref_label!($label, $crate::types::label::CaseInsensitive)
-    };
-}
-
-macro_rules! label {
-    ($label:expr$(, $case_sensitivity:path)? $(,)?) => {
-        ref_label!($label, $($case_sensitivity)?).as_owned()
-    };
 }
 
 impl<'a> SubDomainName<'a> {
@@ -2335,6 +2218,7 @@ mod test {
     use static_assertions::const_assert;
 
     use crate::{
+        ref_domain, ref_label,
         serde::wire::{from_wire::FromWire, to_wire::ToWire},
         types::{
             domain_name::{

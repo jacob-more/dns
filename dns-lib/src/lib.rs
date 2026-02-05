@@ -1,4 +1,5 @@
 mod gen_enum;
+pub mod macros;
 
 pub mod serde;
 pub mod types;

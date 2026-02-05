@@ -46,6 +46,25 @@ pub(crate) mod case_sensitivity {
     impl CaseSensitivity for CaseInsensitive {}
 }
 
+/// Assert all invariants required to ensure that the raw parts of a domain name
+/// label are correct and that it is safe to pass those arguments to
+/// `RefLabel::from_raw_parts()`.
+///
+/// This function is `const`. This means that it can be called at compile time
+/// in a `const` setting where it will cause compilation to fail if the
+/// invariants are not met.
+///
+/// # Panics
+///
+/// This function will panic if any required invariant to ensure that it is safe
+/// to use the arguments with `RefLabel::from_raw_parts()` are not met.
+pub const fn assert_domain_name_label_invariants(octets: &[u8]) {
+    assert!(
+        octets.len() <= (crate::types::domain_name::MAX_LABEL_OCTETS as usize),
+        "domain name label specified must be valid but it exceeds MAX_LABEL_OCTETS",
+    )
+}
+
 pub struct OwnedLabel<C: CaseSensitivity> {
     case: PhantomData<C>,
     // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
@@ -315,5 +334,21 @@ impl<C: CaseSensitivity> RefLabel<C> {
 
     pub(super) const fn from_octets(octets: &[AsciiChar]) -> &Self {
         unsafe { &*(octets as *const [AsciiChar] as *const RefLabel<C>) }
+    }
+
+    /// Create a `RefLabel` from its raw components.
+    ///
+    /// # Safety
+    ///
+    /// The `octets` must be a valid non-compressed wire-encoded domain name
+    /// label, excluding the leading length octet.
+    ///
+    /// The label may not exceed a length of `MAX_LABEL_OCTETS` (63) bytes (not
+    /// including the length octet).
+    ///
+    /// See RFC 1035 for details about this encoding scheme used for the
+    /// `octets`.
+    pub const unsafe fn from_raw_parts(octets: &[AsciiChar]) -> &Self {
+        Self::from_octets(octets)
     }
 }
