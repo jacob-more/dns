@@ -105,12 +105,10 @@ macro_rules! domain {
 
 #[macro_export]
 macro_rules! ref_label {
-    ($label:expr, $case_sensitivity:path $(,)?) => {{
+    ($label:expr $(,)?) => {{
         const OCTETS_BUFFER: &[u8] = $label.as_bytes();
 
-        const _: () = $crate::types::label::assert_domain_name_label_invariants(
-            OCTETS_BUFFER
-        );
+        const _: () = $crate::types::label::assert_domain_name_label_invariants(OCTETS_BUFFER);
         // # Safety
         //
         // > The `octets` must be a valid non-compressed wire-encoded domain name
@@ -125,11 +123,7 @@ macro_rules! ref_label {
         //
         // All safety checks are performed by `assert_invariants()`, after all
         // expressions have been evaluated
-        unsafe {
-            $crate::types::label::RefLabel::<$case_sensitivity>::from_raw_parts(
-                OCTETS_BUFFER
-            )
-        }
+        unsafe { $crate::types::label::RefLabel::from_raw_parts(OCTETS_BUFFER) }
     }};
     ($label:expr $(,)?) => {
         $crate::ref_label!($label, $crate::types::label::CaseInsensitive)
@@ -138,7 +132,7 @@ macro_rules! ref_label {
 
 #[macro_export]
 macro_rules! label {
-    ($label:expr$(, $case_sensitivity:path)? $(,)?) => {
-        $crate::ref_label!($label, $($case_sensitivity)?).as_owned()
+    ($label:expr $(,)?) => {
+        $crate::ref_label!($label).as_owned()
     };
 }

@@ -38,7 +38,7 @@ pub struct TreeCache<Records> {
     root_nodes: HashMap<RClass, TreeNode<Records>>,
 }
 
-type ChildNodes<Records> = HashMap<OwnedLabel<CaseInsensitive>, TreeNode<Records>>;
+type ChildNodes<Records> = HashMap<CaseInsensitive<OwnedLabel>, TreeNode<Records>>;
 pub type MappedRecords<Records> = HashMap<RType, Records>;
 
 #[derive(Debug)]
@@ -86,7 +86,7 @@ impl<Records> TreeCache<Records> {
         for label in question.qname().labels_iter().rev().skip(1) {
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
-            current_node = match current_node.children.entry(label.as_owned()) {
+            current_node = match current_node.children.entry(label.as_owned().into()) {
                 Entry::Occupied(entry) => entry.into_mut(),
                 Entry::Vacant(entry) => {
                     let child_node = TreeNode {
@@ -124,7 +124,7 @@ impl<Records> TreeCache<Records> {
 
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().labels_iter().rev().skip(1) {
-            if let Some(child_node) = current_node.children.get(label) {
+            if let Some(child_node) = current_node.children.get(label.as_case_insensitive()) {
                 current_node = child_node;
             } else {
                 return Ok(None);
@@ -162,7 +162,7 @@ impl<Records> TreeCache<Records> {
         // Note: Skipping last label (root label) because it was already checked. Skipping first
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels.skip(1).rev().skip(1) {
-            if let Some(child_node) = parent_node.children.get_mut(label) {
+            if let Some(child_node) = parent_node.children.get_mut(label.as_case_insensitive()) {
                 parent_node = child_node;
             } else {
                 return Ok(None);
@@ -170,7 +170,7 @@ impl<Records> TreeCache<Records> {
         }
 
         match qname.labels_iter().next() {
-            Some(last_label) => Ok(parent_node.children.remove(last_label)),
+            Some(last_label) => Ok(parent_node.children.remove(last_label.as_case_insensitive())),
             None => Err(TreeCacheError::InconsistentState(format!(
                 "Could not determine the last label in the qname '{qname}'"
             ))),
@@ -235,7 +235,7 @@ impl<'a, Records: 'a> Iterator for TreeRootIterator<'a, Records> {
 
 struct TreeChildIterator<'a, Records: 'a> {
     self_node: Option<&'a TreeNode<Records>>,
-    children_iterator: Values<'a, OwnedLabel<CaseInsensitive>, TreeNode<Records>>,
+    children_iterator: Values<'a, CaseInsensitive<OwnedLabel>, TreeNode<Records>>,
     current_child_iter: Option<Box<Self>>,
 }
 

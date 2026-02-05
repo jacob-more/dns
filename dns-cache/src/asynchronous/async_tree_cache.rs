@@ -38,7 +38,7 @@ pub struct AsyncTreeCache<Records> {
     root_nodes: RwLock<HashMap<RClass, Arc<TreeNode<Records>>>>,
 }
 
-type ChildNodes<Records> = RwLock<HashMap<OwnedLabel<CaseInsensitive>, Arc<TreeNode<Records>>>>;
+type ChildNodes<Records> = RwLock<HashMap<CaseInsensitive<OwnedLabel>, Arc<TreeNode<Records>>>>;
 pub type MappedRecords<Records> = RwLock<HashMap<RType, Records>>;
 
 #[derive(Debug)]
@@ -111,7 +111,7 @@ where
             // If the node does not exist, create it. Then, we can get a shared reference back out
             // of the map.
             let read_current_node_children = current_node.children.read().await;
-            match read_current_node_children.get(label) {
+            match read_current_node_children.get(label.as_case_insensitive()) {
                 Some(child_node) => {
                     let child_node = child_node.clone();
                     drop(read_current_node_children);
@@ -122,7 +122,7 @@ where
                     let mut write_current_node_children = current_node.children.write().await;
                     // Need to check again since the read lock was dropped before the write lock was
                     // obtained. The state could have changed in that time.
-                    match write_current_node_children.entry(label.as_owned()) {
+                    match write_current_node_children.entry(label.as_owned().into()) {
                         Entry::Occupied(entry) => {
                             let child_node = entry.get().clone();
                             drop(write_current_node_children);
@@ -172,7 +172,7 @@ where
         // Note: Skipping first label (root label) because it was already checked.
         for label in question.qname().labels_iter().rev().skip(1) {
             let read_current_node_children = current_node.children.read().await;
-            if let Some(child_node) = read_current_node_children.get(label) {
+            if let Some(child_node) = read_current_node_children.get(label.as_case_insensitive()) {
                 let child_node = child_node.clone();
                 drop(read_current_node_children);
                 current_node = child_node;
@@ -222,7 +222,7 @@ where
         // label since that is the one we want to remove and we need its parent.
         for label in qlabels.skip(1).rev().skip(1) {
             let read_children = parent_node.children.read().await;
-            if let Some(child_node) = read_children.get(label) {
+            if let Some(child_node) = read_children.get(label.as_case_insensitive()) {
                 let next_parent_node = child_node.clone();
                 drop(read_children);
                 parent_node = next_parent_node;
@@ -241,14 +241,14 @@ where
             }
         };
         let mut write_children = parent_node.children.write().await;
-        let result = write_children.remove(last_label);
+        let result = write_children.remove(last_label.as_case_insensitive());
         drop(write_children);
         Ok(result)
     }
 
     async fn get_subdomains(
         node: Arc<TreeNode<Records>>,
-    ) -> HashSet<Vec<OwnedLabel<CaseInsensitive>>> {
+    ) -> HashSet<Vec<CaseInsensitive<OwnedLabel>>> {
         let read_node_children = node.children.read().await;
         let node_children = read_node_children.clone();
         drop(read_node_children);
@@ -294,11 +294,11 @@ where
                         subdomain_names
                             .into_iter()
                             .map(|mut subdomain_name| {
-                                subdomain_name.push(OwnedLabel::new_root());
+                                subdomain_name.push(OwnedLabel::new_root().into());
                                 subdomain_name
                             })
                             .filter_map(|domain_name| {
-                                DomainNameVec::from_owned_labels(domain_name).ok()
+                                DomainNameVec::from_labels(domain_name).ok()
                             }),
                     );
                     write_domains.insert(DomainNameVec::new_root());

@@ -12,10 +12,9 @@ use dns_lib::{
         rtype::RType,
         types::ns::NS,
     },
-    types::{
-        domain_name::{DomainName, DomainNameCompare, DomainNameVec},
-        label::CaseSensitive,
-    },
+    types::
+        domain_name::{DomainName, DomainNameCompare, DomainNameVec}
+    ,
 };
 use log::{debug, trace};
 use rand::{seq::SliceRandom, thread_rng};
@@ -405,7 +404,7 @@ where
             let dname = DomainNameVec::from_labels(
                 context
                     .qname()
-                    .labels_iter::<CaseSensitive>()
+                    .labels_iter()
                     .take(record.get_name().label_count() as usize)
                     .chain(dname_rdata.target_name().labels_iter())
                     .collect(),

@@ -4,7 +4,6 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     iter::FusedIterator,
-    marker::PhantomData,
     ops::{Add, Deref, DerefMut},
 };
 
@@ -26,13 +25,13 @@ use crate::{
     },
     types::{
         ascii::{AsciiError, AsciiString, constants::ASCII_PERIOD},
-        label::CaseSensitive,
+        label::{CaseInsensitive, CaseSensitive},
     },
 };
 
 use super::{
     ascii::AsciiChar,
-    label::{CaseInsensitive, Label, OwnedLabel, RefLabel, case_sensitivity::CaseSensitivity},
+    label::{Label, RefLabel},
 };
 
 /// Maximum number of bytes that can make up a domain name, including the length
@@ -188,11 +187,11 @@ pub trait DomainName {
             "MAX_OCTETS cannot exceed u16::MAX because u16s are used for the octet count"
         );
         const_assert!(
-            (LENGTH_OCTET_WIDTH as usize) <= (u16::MAX as usize),
+            LENGTH_OCTET_WIDTH <= (u16::MAX as usize),
             "LENGTH_OCTET_WIDTH cannot exceed u16::MAX because u16s are used for the octet count"
         );
 
-        self.labels_iter::<CaseInsensitive>()
+        self.labels_iter()
             .map(|label| label.len() + (LENGTH_OCTET_WIDTH as u16))
             .sum()
     }
@@ -207,21 +206,21 @@ pub trait DomainName {
             "MAX_LABELS cannot exceed u16::MAX because u16s are used for the label count"
         );
 
-        u16::try_from(self.labels_iter::<CaseInsensitive>().count())
+        u16::try_from(self.labels_iter().count())
             .expect("domain names cannot have more than u16:MAX labels")
     }
 
     /// A domain name is root if and only if it has exactly 1 label and that
     /// label has a length of zero.
     fn is_root(&self) -> bool {
-        let mut labels = self.labels_iter::<CaseInsensitive>();
+        let mut labels = self.labels_iter();
         labels.next().is_some_and(|label| label.is_root()) && labels.next().is_none()
     }
 
     /// A domain name is lowercase if and only if all non-length ASCII bytes are
     /// not uppercase characters.
     fn is_lowercase(&self) -> bool {
-        self.labels_iter::<CaseSensitive>().all(|label| {
+        self.labels_iter().all(|label| {
             label
                 .octets()
                 .iter()
@@ -232,7 +231,7 @@ pub trait DomainName {
     /// A domain name is uppercase if and only if all non-length ASCII bytes are
     /// not lowercase characters.
     fn is_uppercase(&self) -> bool {
-        self.labels_iter::<CaseSensitive>().all(|label| {
+        self.labels_iter().all(|label| {
             label
                 .octets()
                 .iter()
@@ -243,7 +242,7 @@ pub trait DomainName {
     /// A domain name is fully qualified if and only if it ends with a root
     /// label.
     fn is_fully_qualified(&self) -> bool {
-        self.labels_iter::<CaseInsensitive>()
+        self.labels_iter()
             .next_back()
             .is_some_and(|label| label.is_root())
     }
@@ -254,25 +253,24 @@ pub trait DomainName {
         self.is_fully_qualified() && self.is_lowercase()
     }
 
-    fn first_label<'a, C: 'a + CaseSensitivity>(&self) -> Option<&RefLabel<C>> {
+    fn first_label(&self) -> Option<&RefLabel> {
         self.labels_iter().next()
     }
 
-    fn last_label<'a, C: 'a + CaseSensitivity>(&self) -> Option<&RefLabel<C>> {
+    fn last_label(&self) -> Option<&RefLabel> {
         self.labels_iter().last()
     }
 
     /// Returns an iterator over the labels of this domain name, starting from
     /// the left-most label, and iterating towards the right-most label (often,
     /// the root label).
-    fn labels_iter<'a, C: 'a + CaseSensitivity>(
+    fn labels_iter<'a>(
         &'a self,
     ) -> impl 'a
-    + DoubleEndedIterator<Item = &'a RefLabel<C>>
+    + DoubleEndedIterator<Item = &'a RefLabel>
     + ExactSizeIterator
     + FusedIterator
     + Debug
-    + Clone
     + Copy;
 }
 
@@ -285,9 +283,9 @@ pub trait DomainNameMut {
 
     // TODO: Iterator over mutable labels.
     //
-    //fn labels_iter_mut<'a, C: 'a + CaseSensitivity>(
+    //fn labels_iter_mut<'a>(
     //    &'a self,
-    //) -> impl 'a + Iterator<Item = &'a RefLabel<C>> + DoubleEndedIterator + ExactSizeIterator + FusedIterator;
+    //) -> impl 'a + DoubleEndedIterator<Item = &'a RefLabel> + ExactSizeIterator + FusedIterator + Debug;
 }
 
 pub trait DomainNameCompare<T: ?Sized> {
@@ -683,9 +681,7 @@ impl DomainNameVec {
         Self::new(&AsciiString::from_utf8(string)?)
     }
 
-    pub fn from_labels<C: CaseSensitivity, T: Label<C>>(
-        labels: Vec<T>,
-    ) -> Result<Self, DomainNameError> {
+    pub fn from_labels<T: Label>(labels: Vec<T>) -> Result<Self, DomainNameError> {
         if labels.is_empty() {
             return Err(DomainNameError::EmptyString);
         }
@@ -699,32 +695,6 @@ impl DomainNameVec {
             let length_octet = label.len() as u8;
             octets.push(length_octet);
             octets.extend(label.octets());
-            length_octets.push(length_octet);
-        }
-        Ok(Self {
-            octets,
-            length_octets,
-        }
-        .and_debug_assert_invariants())
-    }
-
-    pub fn from_owned_labels<C: CaseSensitivity>(
-        labels: Vec<OwnedLabel<C>>,
-    ) -> Result<Self, DomainNameError> {
-        if labels.is_empty() {
-            return Err(DomainNameError::EmptyString);
-        }
-        let total_octets =
-            labels.len() + (labels.iter().map(OwnedLabel::len).sum::<u16>() as usize);
-        if total_octets > MAX_OCTETS as usize {
-            return Err(DomainNameError::LongDomain);
-        }
-        let mut length_octets = TinyVec::with_capacity(labels.len());
-        let mut octets = Vec::with_capacity(total_octets);
-        for label in labels {
-            let length_octet = label.len() as u8;
-            octets.push(length_octet);
-            octets.extend(label.into_octets());
             length_octets.push(length_octet);
         }
         Ok(Self {
@@ -880,7 +850,7 @@ impl<'a> SubDomainName<'a> {
 
     /// Returns the first label and all the rest of the labels of the domain, or
     /// `None` if it is empty.
-    pub fn split_first<C: CaseSensitivity>(&self) -> Option<(&'a RefLabel<C>, SubDomainName<'a>)> {
+    pub fn split_first(&self) -> Option<(&'a RefLabel, SubDomainName<'a>)> {
         const_assert!(
             (MAX_LABEL_OCTETS as usize) <= (usize::MAX - LENGTH_OCTET_WIDTH),
             "MAX_LABEL_OCTETS must be at most `usize::MAX - LENGTH_OCTET_WIDTH` because if it were greater, `+ LENGTH_OCTET_WIDTH` would overflow"
@@ -903,7 +873,7 @@ impl<'a> SubDomainName<'a> {
 
     /// Returns the last label and all the rest of the labels of the domain, or
     /// `None` if it is empty.
-    pub fn split_last<C: CaseSensitivity>(&self) -> Option<(&'a RefLabel<C>, SubDomainName<'a>)> {
+    pub fn split_last(&self) -> Option<(&'a RefLabel, SubDomainName<'a>)> {
         let (&last_length_octet, remaining_length_octets) = self.length_octets.split_last()?;
         let (remaining_octets, last_octets) = self
             .octets
@@ -921,7 +891,7 @@ impl<'a> SubDomainName<'a> {
 
     /// Gets the `n`th label in the domain or `None` if `index` is out of
     /// bounds.
-    pub fn get<C: CaseSensitivity>(&self, index: usize) -> Option<&'a RefLabel<C>> {
+    pub fn get(&self, index: usize) -> Option<&'a RefLabel> {
         let (leading_length_octets, &[length_octet, ..]) =
             self.length_octets.split_at_checked(index)?
         else {
@@ -946,7 +916,7 @@ impl<'a> SubDomainName<'a> {
     }
 
     /// Returns the first label of the domain, or `None` if it is empty.
-    pub fn first<C: CaseSensitivity>(&self) -> Option<&'a RefLabel<C>> {
+    pub fn first(&self) -> Option<&'a RefLabel> {
         let &length_octet = self.length_octets.first()?;
         Some(RefLabel::from_octets(
             &self.octets[LENGTH_OCTET_WIDTH..((length_octet as usize) + LENGTH_OCTET_WIDTH)],
@@ -954,21 +924,20 @@ impl<'a> SubDomainName<'a> {
     }
 
     /// Returns the last label of the domain, or `None` if it is empty.
-    pub fn last<C: CaseSensitivity>(&self) -> Option<&'a RefLabel<C>> {
+    pub fn last(&self) -> Option<&'a RefLabel> {
         let &length_octet = self.length_octets.last()?;
         Some(RefLabel::from_octets(
             &self.octets[(self.octets.len() - (length_octet as usize))..],
         ))
     }
 
-    fn into_labels_iter<C: 'a + CaseSensitivity>(
+    fn into_labels_iter(
         self,
     ) -> impl 'a
-    + DoubleEndedIterator<Item = &'a RefLabel<C>>
+    + DoubleEndedIterator<Item = &'a RefLabel>
     + ExactSizeIterator
     + FusedIterator
     + Debug
-    + Clone
     + Copy {
         LabelIter::new(self)
     }
@@ -1011,14 +980,13 @@ impl DomainName for SubDomainName<'_> {
         self.length_octets.last().is_some_and(|octet| *octet == 0)
     }
 
-    fn labels_iter<'a, C: 'a + CaseSensitivity>(
+    fn labels_iter<'a>(
         &'a self,
     ) -> impl 'a
-    + DoubleEndedIterator<Item = &'a RefLabel<C>>
+    + DoubleEndedIterator<Item = &'a RefLabel>
     + ExactSizeIterator
     + FusedIterator
     + Debug
-    + Clone
     + Copy {
         (*self).into_labels_iter()
     }
@@ -1055,22 +1023,21 @@ macro_rules! impl_domain_name_as_subdomain {
                 self.as_subdomain().is_canonical()
             }
 
-            fn first_label<'a, C: 'a + CaseSensitivity>(&self) -> Option<&RefLabel<C>> {
+            fn first_label<'a>(&self) -> Option<&RefLabel> {
                 self.as_subdomain().first()
             }
 
-            fn last_label<'a, C: 'a + CaseSensitivity>(&self) -> Option<&RefLabel<C>> {
+            fn last_label<'a>(&self) -> Option<&RefLabel> {
                 self.as_subdomain().last()
             }
 
-            fn labels_iter<'a, C: 'a + CaseSensitivity>(
+            fn labels_iter<'a>(
                 &'a self,
             ) -> impl 'a
-            + DoubleEndedIterator<Item = &'a RefLabel<C>>
+            + DoubleEndedIterator<Item = &'a RefLabel>
             + ExactSizeIterator
             + FusedIterator
             + Debug
-            + Clone
             + Copy {
                 self.as_subdomain().into_labels_iter()
             }
@@ -1161,12 +1128,12 @@ impl MutSubDomainName<'_> {
             Err(MakeFullyQualifiedError::TooManyOctets)
         } else {
             let mut octets = Vec::with_capacity(self.octets.len() + LENGTH_OCTET_WIDTH);
-            octets.extend_from_slice(&self.octets);
+            octets.extend_from_slice(self.octets);
             octets.push(0);
 
             let mut length_octets =
                 TinyVec::with_capacity(self.length_octets.len() + LENGTH_OCTET_WIDTH);
-            length_octets.extend_from_slice(&self.length_octets);
+            length_octets.extend_from_slice(self.length_octets);
             length_octets.push(0);
 
             Ok(DomainNameVec {
@@ -1273,7 +1240,7 @@ impl Display for SubDomainName<'_> {
             return write!(f, ".");
         }
 
-        let mut labels = self.labels_iter::<CaseInsensitive>();
+        let mut labels = self.labels_iter();
         if let Some(label) = labels.next() {
             write!(f, "{label}")?;
         }
@@ -1301,17 +1268,19 @@ impl DomainNameCompare<SubDomainName<'_>> for SubDomainName<'_> {
         (self.octet_count() == other.octet_count())
             && (self.label_count() == other.label_count())
             && self
-                .labels_iter::<CaseInsensitive>()
-                .eq(other.labels_iter())
+                .labels_iter()
+                .map(CaseInsensitive)
+                .eq(other.labels_iter().map(CaseInsensitive))
     }
 
     fn is_parent_of(&self, other: &SubDomainName) -> bool {
         (self.octet_count() <= other.octet_count())
             && (self.label_count() <= other.label_count())
             // Entire parent is contained by the other (other = subdomain)
-            && self.labels_iter::<CaseSensitive>()
+            && self.labels_iter()
+                .map(CaseSensitive)
                 .rev()
-                .zip(other.labels_iter().rev())
+                .zip(other.labels_iter().map(CaseSensitive).rev())
                 .all(|(self_label, child_label)| self_label == child_label)
     }
 
@@ -1319,9 +1288,10 @@ impl DomainNameCompare<SubDomainName<'_>> for SubDomainName<'_> {
         (self.octet_count() <= other.octet_count())
             && (self.label_count() <= other.label_count())
             // Entire parent is contained by the other (other = subdomain)
-            && self.labels_iter::<CaseInsensitive>()
+            && self.labels_iter()
+                .map(CaseSensitive)
                 .rev()
-                .zip(other.labels_iter().rev())
+                .zip(other.labels_iter().map(CaseSensitive).rev())
                 .all(|(self_label, child_label)| self_label == child_label)
     }
 }
@@ -1468,22 +1438,20 @@ impl Add for DomainNameVec {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct LabelIter<'a, C: CaseSensitivity> {
+struct LabelIter<'a> {
     domain: SubDomainName<'a>,
-    case: PhantomData<C>,
 }
 
-impl<'a, C: CaseSensitivity> LabelIter<'a, C> {
+impl<'a> LabelIter<'a> {
     pub fn new(domain_name: SubDomainName<'a>) -> Self {
         Self {
             domain: domain_name.and_debug_assert_invariants(),
-            case: PhantomData,
         }
     }
 }
 
-impl<'a, C: 'a + CaseSensitivity> Iterator for LabelIter<'a, C> {
-    type Item = &'a RefLabel<C>;
+impl<'a> Iterator for LabelIter<'a> {
+    type Item = &'a RefLabel;
 
     fn next(&mut self) -> Option<Self::Item> {
         let (first, remaining) = self.domain.split_first()?;
@@ -1525,7 +1493,7 @@ impl<'a, C: 'a + CaseSensitivity> Iterator for LabelIter<'a, C> {
     }
 }
 
-impl<'a, C: 'a + CaseSensitivity> DoubleEndedIterator for LabelIter<'a, C> {
+impl<'a> DoubleEndedIterator for LabelIter<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let (last, remaining) = self.domain.split_last()?;
         self.domain = remaining.and_debug_assert_invariants();
@@ -1553,8 +1521,8 @@ impl<'a, C: 'a + CaseSensitivity> DoubleEndedIterator for LabelIter<'a, C> {
     }
 }
 
-impl<'a, C: 'a + CaseSensitivity> ExactSizeIterator for LabelIter<'a, C> {}
-impl<'a, C: 'a + CaseSensitivity> FusedIterator for LabelIter<'a, C> {}
+impl<'a> ExactSizeIterator for LabelIter<'a> {}
+impl<'a> FusedIterator for LabelIter<'a> {}
 
 #[derive(Debug, Clone, Copy)]
 struct SubDomainIter<'a> {
@@ -1594,7 +1562,7 @@ impl<'a> Iterator for SubDomainIter<'a> {
             .and_debug_assert_invariants();
             None
         } else {
-            let (_, remaining) = self.domain.split_first::<CaseInsensitive>()?;
+            let (_, remaining) = self.domain.split_first()?;
             Some(std::mem::replace(
                 &mut self.domain,
                 remaining.and_debug_assert_invariants(),
@@ -2230,24 +2198,27 @@ mod test {
     };
 
     fn domain_labels_iter_verify_extra_properties<'a, 'b>(
-        domain_labels: impl DoubleEndedIterator<Item = &'a RefLabel<CaseSensitive>>
-        + ExactSizeIterator
-        + Debug
-        + Clone,
-        expected_labels: impl DoubleEndedIterator<Item = &'b RefLabel<CaseSensitive>>
+        domain_labels: impl DoubleEndedIterator<Item = &'a RefLabel> + ExactSizeIterator + Debug + Clone,
+        expected_labels: impl DoubleEndedIterator<Item = &'b RefLabel>
         + ExactSizeIterator
         + Debug
         + Clone,
     ) {
-        assert_eq!(expected_labels.clone().next(), domain_labels.clone().next(),);
         assert_eq!(
-            expected_labels.clone().next_back(),
-            domain_labels.clone().next_back(),
+            expected_labels.clone().next().map(CaseSensitive),
+            domain_labels.clone().next().map(CaseSensitive)
         );
-        assert_eq!(expected_labels.clone().last(), domain_labels.clone().last(),);
         assert_eq!(
-            domain_labels.clone().last(),
-            domain_labels.clone().next_back(),
+            expected_labels.clone().next_back().map(CaseSensitive),
+            domain_labels.clone().next_back().map(CaseSensitive),
+        );
+        assert_eq!(
+            expected_labels.clone().last().map(CaseSensitive),
+            domain_labels.clone().last().map(CaseSensitive)
+        );
+        assert_eq!(
+            domain_labels.clone().last().map(CaseSensitive),
+            domain_labels.clone().next_back().map(CaseSensitive),
         );
         assert_eq!(
             expected_labels.clone().count(),
@@ -2266,42 +2237,54 @@ mod test {
                 .expect("domain label iterators should always have a known length"),
         );
         for n in 0..(domain_labels.size_hint().0 + 1) {
-            assert_eq!(expected_labels.clone().nth(n), domain_labels.clone().nth(n));
             assert_eq!(
-                expected_labels.clone().rev().nth(n),
-                domain_labels.clone().rev().nth(n)
+                expected_labels.clone().nth(n).map(CaseSensitive),
+                domain_labels.clone().nth(n).map(CaseSensitive)
+            );
+            assert_eq!(
+                expected_labels.clone().rev().nth(n).map(CaseSensitive),
+                domain_labels.clone().rev().nth(n).map(CaseSensitive),
             );
         }
     }
 
-    fn impl_domain_labels_iter_test(
-        domain: impl DomainName,
-        expected_labels: &[&RefLabel<CaseSensitive>],
-    ) {
-        let actual_labels = domain.labels_iter().collect::<Vec<_>>();
-        assert_eq!(expected_labels, &actual_labels);
+    fn impl_domain_labels_iter_test(domain: impl DomainName, expected_labels: &[&RefLabel]) {
+        let expected_labels = expected_labels
+            .into_iter()
+            .copied()
+            .map(CaseSensitive)
+            .collect::<Vec<_>>();
+        let actual_labels = domain.labels_iter().map(CaseSensitive).collect::<Vec<_>>();
+        assert_eq!(expected_labels, actual_labels);
     }
 
     fn impl_domain_labels_reverse_iter_test(
         domain: impl DomainName,
-        expected_labels: &[&RefLabel<CaseSensitive>],
+        expected_labels: &[&RefLabel],
     ) {
-        let mut expected_labels = expected_labels.to_vec();
-        expected_labels.reverse();
-
-        let actual_labels = domain.labels_iter().rev().collect::<Vec<_>>();
+        let expected_labels = expected_labels
+            .into_iter()
+            .rev()
+            .copied()
+            .map(CaseSensitive)
+            .collect::<Vec<_>>();
+        let actual_labels = domain
+            .labels_iter()
+            .rev()
+            .map(CaseSensitive)
+            .collect::<Vec<_>>();
         assert_eq!(expected_labels, actual_labels);
     }
 
-    fn impl_domain_labels_nth_iter_test(
-        domain: impl DomainName,
-        expected_labels: &[&RefLabel<CaseSensitive>],
-    ) {
+    fn impl_domain_labels_nth_iter_test(domain: impl DomainName, expected_labels: &[&RefLabel]) {
         for n in 0..(expected_labels.len() * 2) {
             let mut expected_labels = expected_labels.into_iter().copied();
-            let mut domain_labels = domain.labels_iter::<CaseSensitive>();
+            let mut domain_labels = domain.labels_iter();
             for _ in 0..(expected_labels.len() * 2) {
-                assert_eq!(expected_labels.nth(n), domain_labels.nth(n));
+                assert_eq!(
+                    expected_labels.nth(n).map(CaseSensitive),
+                    domain_labels.nth(n).map(CaseSensitive)
+                );
                 domain_labels_iter_verify_extra_properties(
                     domain_labels.clone(),
                     expected_labels.clone(),
@@ -2312,16 +2295,19 @@ mod test {
 
     fn impl_domain_labels_reverse_nth_iter_test(
         domain: impl DomainName,
-        expected_labels: &[&RefLabel<CaseSensitive>],
+        expected_labels: &[&RefLabel],
     ) {
         let mut expected_labels = expected_labels.to_vec();
         expected_labels.reverse();
 
         for n in 0..(expected_labels.len() * 2) {
             let mut expected_labels = expected_labels.iter().copied();
-            let mut domain_labels = domain.labels_iter::<CaseSensitive>().rev();
+            let mut domain_labels = domain.labels_iter().rev();
             for _ in 0..(expected_labels.len() * 2) {
-                assert_eq!(expected_labels.nth(n), domain_labels.nth(n));
+                assert_eq!(
+                    expected_labels.nth(n).map(CaseSensitive),
+                    domain_labels.nth(n).map(CaseSensitive)
+                );
                 domain_labels_iter_verify_extra_properties(
                     domain_labels.clone(),
                     expected_labels.clone(),
@@ -2332,23 +2318,17 @@ mod test {
 
     fn impl_domain_labels_to_str_test(
         domain: impl DomainName,
-        expected_labels: &[&RefLabel<CaseSensitive>],
+        expected_labels: &[&RefLabel],
         expected_label_strings: &[&str],
     ) {
-        assert_eq!(
-            domain.labels_iter::<CaseSensitive>().count(),
-            expected_labels.len()
-        );
-        assert_eq!(
-            domain.labels_iter::<CaseSensitive>().count(),
-            expected_label_strings.len()
-        );
+        assert_eq!(domain.labels_iter().count(), expected_labels.len());
+        assert_eq!(domain.labels_iter().count(), expected_label_strings.len());
         for ((domain_label, &expected_label), &expected_label_str) in domain
-            .labels_iter::<CaseSensitive>()
+            .labels_iter()
             .zip(expected_labels)
             .zip(expected_label_strings)
         {
-            assert_eq!(expected_label, domain_label);
+            assert_eq!(CaseSensitive(expected_label), CaseSensitive(domain_label));
             assert_eq!(expected_label_str, domain_label.to_string().as_str());
             assert_eq!(expected_label_str, expected_label.to_string().as_str());
         }
@@ -2374,8 +2354,8 @@ mod test {
                     const name: SubDomainName<'static> = ref_domain![$($label),+];
                 });
                 concat_idents!(name = LABELS_, $name {
-                    const name: &[&RefLabel<CaseSensitive>] = &[
-                        $(ref_label![$label, CaseSensitive]),+
+                    const name: &[&RefLabel] = &[
+                        $(ref_label![$label]),+
                     ];
                 });
                 concat_idents!(name = LABEL_STRINGS_, $name {
@@ -2418,7 +2398,7 @@ mod test {
             )*
             fn $call(
                 #[case] domain: impl DomainName,
-                #[case] expected_labels: &[&RefLabel<CaseSensitive>],
+                #[case] expected_labels: &[&RefLabel],
             ) {
                 generate!(@ident impl_, $call)(domain, expected_labels);
             }
@@ -2439,7 +2419,7 @@ mod test {
             )*
             fn $call(
                 #[case] domain: impl DomainName,
-                #[case] expected_labels: &[&RefLabel<CaseSensitive>],
+                #[case] expected_labels: &[&RefLabel],
                 #[case] expected_label_strings: &[&str],
             ) {
                 generate!(@ident impl_, $call)(domain, expected_labels, expected_label_strings);
