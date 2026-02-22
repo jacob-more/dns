@@ -477,14 +477,15 @@ impl DomainVec {
         if labels.is_empty() {
             return Err(DomainNameError::EmptyString);
         }
-        let total_octets = labels.len() + (labels.iter().map(T::len).sum::<u16>() as usize);
+        let total_octets =
+            labels.len() + (labels.iter().map(T::len).map(u16::from).sum::<u16>() as usize);
         if total_octets > MAX_OCTETS as usize {
             return Err(DomainNameError::LongDomain);
         }
         let mut length_octets = TinyVec::with_capacity(labels.len());
         let mut octets = Vec::with_capacity(total_octets);
         for label in labels {
-            let length_octet = label.len() as u8;
+            let length_octet = label.len();
             octets.push(length_octet);
             octets.extend(label.octets());
             length_octets.push(length_octet);

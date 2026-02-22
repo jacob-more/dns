@@ -294,7 +294,7 @@ where
                         subdomain_names
                             .into_iter()
                             .map(|mut subdomain_name| {
-                                subdomain_name.push(OwnedLabel::new_root().into());
+                                subdomain_name.push(OwnedLabel::new().into());
                                 subdomain_name
                             })
                             .filter_map(|domain_name| {

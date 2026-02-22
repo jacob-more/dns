@@ -684,7 +684,7 @@ pub trait DomainName {
         &self,
     ) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + FusedIterator + Debug + Clone
     {
-        self.labels_iter().map(|label| label.len() as u8)
+        self.labels_iter().map(RefLabel::len)
     }
 }
 

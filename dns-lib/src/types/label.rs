@@ -36,8 +36,8 @@ pub const fn assert_domain_name_label_invariants(octets: &[u8]) {
 pub trait Label: Debug {
     fn octets(&self) -> &[AsciiChar];
 
-    fn len(&self) -> u16 {
-        self.octets().len() as u16
+    fn len(&self) -> u8 {
+        self.octets().len() as u8
     }
 
     fn is_empty(&self) -> bool {
@@ -106,9 +106,76 @@ pub trait MutLabel: Debug {
     }
 }
 
+macro_rules! impl_label {
+    ($($label_type:ty)*; {$($pre_self:tt)*} self {$($post_self:tt)*}) => {
+        impl<L: Label + ?Sized> Label for $($label_type)* {
+            fn octets(&self) -> &[AsciiChar] {
+                ($($pre_self)* self $($post_self)*).octets()
+            }
+
+            fn len(&self) -> u8 {
+                ($($pre_self)* self $($post_self)*).len()
+            }
+
+            fn is_empty(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_empty()
+            }
+
+            fn is_root(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_root()
+            }
+
+            fn is_lowercase(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_lowercase()
+            }
+
+            fn is_uppercase(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_uppercase()
+            }
+
+            fn as_ref_label(&self) -> &RefLabel {
+                ($($pre_self)* self $($post_self)*).as_ref_label()
+            }
+
+            fn as_owned(&self) -> OwnedLabel {
+                ($($pre_self)* self $($post_self)*).as_owned()
+            }
+
+            fn as_case_sensitive(&self) -> &CaseSensitive<RefLabel> {
+                ($($pre_self)* self $($post_self)*).as_case_sensitive()
+            }
+
+            fn as_case_insensitive(&self) -> &CaseInsensitive<RefLabel> {
+                ($($pre_self)* self $($post_self)*).as_case_insensitive()
+            }
+
+            fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
+                ($($pre_self)* self $($post_self)*).iter_escaped()
+            }
+        }
+    };
+}
+impl_label!(&L;     {*}   self {});
+impl_label!(&mut L; {&**} self {});
+
+impl<T: MutLabel + ?Sized> MutLabel for &mut T {
+    fn octets_mut(&mut self) -> &mut [AsciiChar] {
+        (*self).octets_mut()
+    }
+
+    fn make_uppercase(&mut self) {
+        (*self).make_uppercase()
+    }
+
+    fn make_lowercase(&mut self) {
+        (*self).make_lowercase()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct OwnedLabel {
-    // A TinyVec with a length of 14 has a size of 24 bytes. This is the same size as a Vec.
+    /// A TinyVec with a length of 14 has a size of 24 bytes. This is the same
+    /// size as a Vec.
     octets: TinyVec<[AsciiChar; 14]>,
 }
 
@@ -119,7 +186,7 @@ pub struct RefLabel {
 }
 
 impl OwnedLabel {
-    pub fn new_root() -> Self {
+    pub fn new() -> Self {
         Self {
             octets: tiny_vec![],
         }
@@ -135,9 +202,7 @@ impl OwnedLabel {
 }
 
 impl RefLabel {
-    pub const fn new_root() -> &'static Self {
-        Self::from_octets(&[])
-    }
+    pub const ROOT: &RefLabel = Self::from_octets(&[]);
 
     /// Creates a reference to `RefLabel` from a slice of bytes.
     ///
@@ -231,32 +296,6 @@ impl Label for OwnedLabel {
         self
     }
 }
-impl Label for &OwnedLabel {
-    fn octets(&self) -> &[AsciiChar] {
-        &self.octets
-    }
-
-    fn as_ref_label(&self) -> &RefLabel {
-        &*self
-    }
-
-    fn as_owned(&self) -> OwnedLabel {
-        (*self).clone()
-    }
-}
-impl Label for &mut OwnedLabel {
-    fn octets(&self) -> &[AsciiChar] {
-        &self.octets
-    }
-
-    fn as_ref_label(&self) -> &RefLabel {
-        &*self
-    }
-
-    fn as_owned(&self) -> OwnedLabel {
-        (*self).clone()
-    }
-}
 impl Label for RefLabel {
     fn octets(&self) -> &[AsciiChar] {
         &self.octets
@@ -269,49 +308,13 @@ impl Label for RefLabel {
     // TODO: implement `as_owned()` using unsafe to skip invariant check on
     //       `octets` since they should be already valid.
 }
-impl Label for &RefLabel {
-    fn octets(&self) -> &[AsciiChar] {
-        &self.octets
-    }
-
-    fn as_ref_label(&self) -> &RefLabel {
-        *self
-    }
-
-    fn as_owned(&self) -> OwnedLabel {
-        (**self).as_owned()
-    }
-}
-impl Label for &mut RefLabel {
-    fn octets(&self) -> &[AsciiChar] {
-        &self.octets
-    }
-
-    fn as_ref_label(&self) -> &RefLabel {
-        *self
-    }
-
-    fn as_owned(&self) -> OwnedLabel {
-        (**self).as_owned()
-    }
-}
 
 impl MutLabel for OwnedLabel {
     fn octets_mut(&mut self) -> &mut [AsciiChar] {
         &mut self.octets
     }
 }
-impl MutLabel for &mut OwnedLabel {
-    fn octets_mut(&mut self) -> &mut [AsciiChar] {
-        &mut self.octets
-    }
-}
 impl MutLabel for RefLabel {
-    fn octets_mut(&mut self) -> &mut [AsciiChar] {
-        &mut self.octets
-    }
-}
-impl MutLabel for &mut RefLabel {
     fn octets_mut(&mut self) -> &mut [AsciiChar] {
         &mut self.octets
     }
@@ -353,6 +356,7 @@ impl AsRef<OwnedLabel> for OwnedLabel {
 }
 impl<T> AsRef<T> for OwnedLabel
 where
+    T: ?Sized,
     <Self as Deref>::Target: AsRef<T>,
 {
     fn as_ref(&self) -> &T {
@@ -366,6 +370,7 @@ impl AsRef<RefLabel> for RefLabel {
 }
 impl<T> AsRef<T> for RefLabel
 where
+    T: ?Sized,
     <Self as Deref>::Target: AsRef<T>,
 {
     fn as_ref(&self) -> &T {
@@ -373,57 +378,7 @@ where
     }
 }
 
-impl Borrow<CaseInsensitive<RefLabel>> for OwnedLabel {
-    fn borrow(&self) -> &CaseInsensitive<RefLabel> {
-        self.deref().borrow()
-    }
-}
-impl Borrow<CaseSensitive<RefLabel>> for OwnedLabel {
-    fn borrow(&self) -> &CaseSensitive<RefLabel> {
-        self.deref().borrow()
-    }
-}
-impl Borrow<CaseInsensitive<RefLabel>> for &OwnedLabel {
-    fn borrow(&self) -> &CaseInsensitive<RefLabel> {
-        (*self).deref().borrow()
-    }
-}
-impl Borrow<CaseSensitive<RefLabel>> for &OwnedLabel {
-    fn borrow(&self) -> &CaseSensitive<RefLabel> {
-        (*self).deref().borrow()
-    }
-}
-impl Borrow<CaseInsensitive<RefLabel>> for RefLabel {
-    fn borrow(&self) -> &CaseInsensitive<RefLabel> {
-        // TODO: The unsafe blocks for the ref labels are based on code in the
-        //       standard library. Need to go through and make sure I am
-        //       upholding the safety guarantees in this particular case.
-        unsafe { &*(&self.octets as *const [AsciiChar] as *const CaseInsensitive<RefLabel>) }
-    }
-}
-impl Borrow<CaseSensitive<RefLabel>> for RefLabel {
-    fn borrow(&self) -> &CaseSensitive<RefLabel> {
-        // TODO: The unsafe blocks for the ref labels are based on code in the
-        //       standard library. Need to go through and make sure I am
-        //       upholding the safety guarantees in this particular case.
-        unsafe { &*(&self.octets as *const [AsciiChar] as *const CaseSensitive<RefLabel>) }
-    }
-}
-impl Borrow<CaseInsensitive<RefLabel>> for &RefLabel {
-    fn borrow(&self) -> &CaseInsensitive<RefLabel> {
-        (*self).borrow()
-    }
-}
-impl Borrow<CaseSensitive<RefLabel>> for &RefLabel {
-    fn borrow(&self) -> &CaseSensitive<RefLabel> {
-        (*self).borrow()
-    }
-}
-
-impl Display for OwnedLabel
-where
-    <OwnedLabel as Deref>::Target: Display,
-{
+impl Display for OwnedLabel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.deref())
     }
@@ -448,140 +403,134 @@ impl<'a> From<&'a OwnedLabel> for &'a RefLabel {
     }
 }
 
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct CaseSensitive<L: Label + ?Sized>(pub L);
-
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct CaseInsensitive<L: Label + ?Sized>(pub L);
-
-impl<L: Label + ?Sized> Label for CaseSensitive<L> {
-    fn octets(&self) -> &[AsciiChar] {
-        self.0.octets()
-    }
-
-    fn len(&self) -> u16 {
-        self.0.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    fn is_root(&self) -> bool {
-        self.0.is_root()
-    }
-
-    fn as_ref_label(&self) -> &RefLabel {
-        self.0.as_ref_label()
-    }
-
-    fn as_owned(&self) -> OwnedLabel {
-        self.0.as_owned()
-    }
-
-    fn as_case_sensitive(&self) -> &CaseSensitive<RefLabel> {
-        self.0.as_case_sensitive()
-    }
-
-    fn as_case_insensitive(&self) -> &CaseInsensitive<RefLabel> {
-        self.0.as_case_insensitive()
-    }
-
-    fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
-        self.0.iter_escaped()
-    }
-}
-impl<L: Label + ?Sized> Label for CaseInsensitive<L> {
-    fn octets(&self) -> &[AsciiChar] {
-        self.0.octets()
-    }
-
-    fn len(&self) -> u16 {
-        self.0.len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    fn is_root(&self) -> bool {
-        self.0.is_root()
-    }
-
-    fn as_ref_label(&self) -> &RefLabel {
-        self.0.as_ref_label()
-    }
-
-    fn as_owned(&self) -> OwnedLabel {
-        self.0.as_owned()
-    }
-
-    fn as_case_sensitive(&self) -> &CaseSensitive<RefLabel> {
-        self.0.as_case_sensitive()
-    }
-
-    fn as_case_insensitive(&self) -> &CaseInsensitive<RefLabel> {
-        self.0.as_case_insensitive()
-    }
-
-    fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
-        self.0.iter_escaped()
-    }
+macro_rules! impl_borrow_as_case_ref_label {
+    ($sensitivity:ident; $($impl_tt:tt)*) => {
+        impl $($impl_tt)* {
+            fn borrow(&self) -> &$sensitivity<RefLabel> {
+                self.as_ref_label().borrow()
+            }
+        }
+    };
 }
 
-impl<L: Label + ?Sized> Deref for CaseSensitive<L> {
-    type Target = L;
+/// The caller still needs to manually implement `PartialEq` and `Hash`.
+/// Everything else is shared.
+macro_rules! impl_case_sensitivity {
+    ($sensitivity:ident) => {
+        #[derive(Debug)]
+        #[repr(transparent)]
+        pub struct $sensitivity<L: ?Sized>(pub L);
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl<L: Label + ?Sized> Deref for CaseInsensitive<L> {
-    type Target = L;
+        impl_label!($sensitivity<L>; {} self {.0});
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
+        impl<L: Label + ?Sized> Deref for $sensitivity<L> {
+            type Target = L;
 
-impl<L: Label + ?Sized, T: ?Sized> AsRef<T> for CaseInsensitive<L>
-where
-    <Self as Deref>::Target: AsRef<T>,
-{
-    fn as_ref(&self) -> &T {
-        self.deref().as_ref()
-    }
-}
-impl<L: Label + ?Sized, T: ?Sized> AsRef<T> for CaseSensitive<L>
-where
-    <Self as Deref>::Target: AsRef<T>,
-{
-    fn as_ref(&self) -> &T {
-        self.deref().as_ref()
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl<L: Label + ?Sized, T: ?Sized> AsRef<T> for $sensitivity<L>
+        where
+            <Self as Deref>::Target: AsRef<T>,
+        {
+            fn as_ref(&self) -> &T {
+                self.deref().as_ref()
+            }
+        }
+
+        impl<L: Label + Clone + ?Sized> Clone for $sensitivity<L> {
+            fn clone(&self) -> Self {
+                Self(self.0.clone())
+            }
+        }
+        impl<L: Label + Copy + ?Sized> Copy for $sensitivity<L> {}
+
+        impl<L: Label + Display + ?Sized> Display for $sensitivity<L> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", &self.0)
+            }
+        }
+
+        impl Borrow<$sensitivity<RefLabel>> for RefLabel {
+            fn borrow(&self) -> &$sensitivity<RefLabel> {
+                // TODO: The unsafe blocks for the ref labels are based on code in the
+                //       standard library. Need to go through and make sure I am
+                //       upholding the safety guarantees in this particular case.
+                unsafe { &*(&self.octets as *const [AsciiChar] as *const $sensitivity<RefLabel>) }
+            }
+        }
+        impl_borrow_as_case_ref_label!($sensitivity; Borrow<$sensitivity<RefLabel>> for &RefLabel);
+        impl_borrow_as_case_ref_label!($sensitivity; Borrow<$sensitivity<RefLabel>> for &mut RefLabel);
+        impl_borrow_as_case_ref_label!($sensitivity; Borrow<$sensitivity<RefLabel>> for OwnedLabel);
+        impl_borrow_as_case_ref_label!($sensitivity; Borrow<$sensitivity<RefLabel>> for &OwnedLabel);
+        impl_borrow_as_case_ref_label!($sensitivity; Borrow<$sensitivity<RefLabel>> for &mut OwnedLabel);
+        impl_borrow_as_case_ref_label!($sensitivity; <L: Label> Borrow<$sensitivity<RefLabel>> for $sensitivity<L>);
+
+        impl<L: Label + ?Sized> Eq for $sensitivity<L> {}
+        impl<L1: Label + ?Sized, L2: Label + ?Sized> PartialEq<$sensitivity<L1>> for &$sensitivity<L2> {
+            fn eq(&self, other: &$sensitivity<L1>) -> bool {
+                (*self).eq(other)
+            }
+        }
+        impl<L1: Label + ?Sized, L2: Label + ?Sized> PartialEq<$sensitivity<L1>>
+            for &mut $sensitivity<L2>
+        {
+            fn eq(&self, other: &$sensitivity<L1>) -> bool {
+                (&**self).eq(other)
+            }
+        }
+
+        impl<'a> From<&'a RefLabel> for &'a $sensitivity<RefLabel> {
+            fn from(value: &'a RefLabel) -> Self {
+                value.borrow()
+            }
+        }
+        impl<'a> From<&'a mut RefLabel> for &'a $sensitivity<RefLabel> {
+            fn from(value: &'a mut RefLabel) -> Self {
+                (&*value).borrow()
+            }
+        }
+        impl From<OwnedLabel> for $sensitivity<OwnedLabel> {
+            fn from(value: OwnedLabel) -> Self {
+                $sensitivity(value)
+            }
+        }
+        impl<'a> From<&'a OwnedLabel> for $sensitivity<&'a OwnedLabel> {
+            fn from(value: &'a OwnedLabel) -> Self {
+                $sensitivity(value)
+            }
+        }
+        // TODO: this implementation requires transmutation. Not sure about the
+        //       safety on this one.
+        //
+        //impl<'a> From<&'a OwnedLabel> for &'a $sensitivity<OwnedLabel> {
+        //    fn from(value: &'a OwnedLabel) -> Self {
+        //        todo!()
+        //    }
+        //}
     }
 }
 
-impl<L: Label + ?Sized> Eq for CaseSensitive<L> {}
-impl<L: Label + ?Sized> Eq for CaseInsensitive<L> {}
-
+impl_case_sensitivity!(CaseSensitive);
 impl<L1: Label + ?Sized, L2: Label + ?Sized> PartialEq<CaseSensitive<L1>> for CaseSensitive<L2> {
     fn eq(&self, other: &CaseSensitive<L1>) -> bool {
         self.0.octets().eq(other.0.octets())
     }
 }
+impl<L: Label + ?Sized> Hash for CaseSensitive<L> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.octets().hash(state);
+    }
+}
+
+impl_case_sensitivity!(CaseInsensitive);
 impl<L1: Label + ?Sized, L2: Label + ?Sized> PartialEq<CaseInsensitive<L1>>
     for CaseInsensitive<L2>
 {
     fn eq(&self, other: &CaseInsensitive<L1>) -> bool {
         self.0.octets().eq_ignore_ascii_case(other.0.octets())
-    }
-}
-
-impl<L: Label + ?Sized> Hash for CaseSensitive<L> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.octets().hash(state);
     }
 }
 impl<L: Label + ?Sized> Hash for CaseInsensitive<L> {
@@ -591,62 +540,5 @@ impl<L: Label + ?Sized> Hash for CaseInsensitive<L> {
         for character in octets {
             character.to_ascii_lowercase().hash(state);
         }
-    }
-}
-
-impl<L: Label + Clone + ?Sized> Clone for CaseSensitive<L> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-impl<L: Label + Clone + ?Sized> Clone for CaseInsensitive<L> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<L: Label + Copy + ?Sized> Copy for CaseSensitive<L> {}
-impl<L: Label + Copy + ?Sized> Copy for CaseInsensitive<L> {}
-
-impl<L: Label> Borrow<CaseInsensitive<RefLabel>> for CaseInsensitive<L> {
-    fn borrow(&self) -> &CaseInsensitive<RefLabel> {
-        self.as_ref_label().borrow()
-    }
-}
-impl<L: Label> Borrow<CaseSensitive<RefLabel>> for CaseSensitive<L> {
-    fn borrow(&self) -> &CaseSensitive<RefLabel> {
-        self.as_ref_label().borrow()
-    }
-}
-
-impl<L: Label + Display + ?Sized> Display for CaseSensitive<L> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.0)
-    }
-}
-impl<L: Label + Display + ?Sized> Display for CaseInsensitive<L> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.0)
-    }
-}
-
-impl<'a> From<&'a RefLabel> for &'a CaseSensitive<RefLabel> {
-    fn from(value: &'a RefLabel) -> Self {
-        value.borrow()
-    }
-}
-impl<'a> From<&'a RefLabel> for &'a CaseInsensitive<RefLabel> {
-    fn from(value: &'a RefLabel) -> Self {
-        value.borrow()
-    }
-}
-impl From<OwnedLabel> for CaseSensitive<OwnedLabel> {
-    fn from(value: OwnedLabel) -> Self {
-        CaseSensitive(value)
-    }
-}
-impl From<OwnedLabel> for CaseInsensitive<OwnedLabel> {
-    fn from(value: OwnedLabel) -> Self {
-        CaseInsensitive(value)
     }
 }
