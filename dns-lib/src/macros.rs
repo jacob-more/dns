@@ -133,6 +133,8 @@ macro_rules! ref_label {
 #[macro_export]
 macro_rules! label {
     ($label:expr $(,)?) => {
-        $crate::ref_label!($label).as_owned()
+        <$crate::types::label::RefLabel as $crate::types::label::Label>::as_owned(
+            $crate::ref_label!($label),
+        )
     };
 }
