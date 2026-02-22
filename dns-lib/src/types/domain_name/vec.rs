@@ -852,6 +852,55 @@ impl_domain_name_as_domain_slice!(impl for DomainVec);
 impl_domain_name_as_domain_slice!(impl (const OCTETS: usize, const LABELS: usize) for DomainArray<OCTETS, LABELS>);
 impl_domain_name_as_domain_slice!(impl for MutDomainSlice<'_>);
 
+/// Implements `get_mut()`, `first_mut()`, and `last_mut()` for the trait
+/// `DomainNameMut`.
+///
+/// I have not yet found a way to implement these for the owned domain variants
+/// by calling the MutDomainSlice implementation. This macro ensures that they
+/// all use the same implementation.
+macro_rules! impl_domain_name_mut {
+    () => {
+        fn get_mut(&mut self, index: usize) -> Option<&mut RefLabel> {
+            let (leading_length_octets, &[length_octet, ..]) =
+                self.length_octets.split_at_checked(index)?
+            else {
+                return None;
+            };
+
+            // Notes on overflow:
+            //
+            // Since a domain name cannot exceed 256 bytes, the maximum sum of octet
+            // lengths cannot exceed 256 either. Since we bounded the `index` above,
+            // and `length_octets.len() <= MAX_LABELS (128)`, this sum will never
+            // overflow.
+            let octets_start = (index * LENGTH_OCTET_WIDTH)
+                + leading_length_octets
+                    .iter()
+                    .map(|length_octet| *length_octet as usize)
+                    .sum::<usize>();
+            Some(RefLabel::from_octets_mut(
+                &mut self.octets[(octets_start + LENGTH_OCTET_WIDTH)
+                    ..(octets_start + (length_octet as usize) + LENGTH_OCTET_WIDTH)],
+            ))
+        }
+
+        fn first_mut(&mut self) -> Option<&mut RefLabel> {
+            let &length_octet = self.length_octets.first()?;
+            Some(RefLabel::from_octets_mut(
+                &mut self.octets[LENGTH_OCTET_WIDTH..((length_octet as usize) + LENGTH_OCTET_WIDTH)],
+            ))
+        }
+
+        fn last_mut(&mut self) -> Option<&mut RefLabel> {
+            let &length_octet = self.length_octets.last()?;
+            let octets_length = self.octets.len();
+            Some(RefLabel::from_octets_mut(
+                &mut self.octets[(octets_length - (length_octet as usize))..],
+            ))
+        }
+    }
+}
+
 impl DomainNameMut for MutDomainSlice<'_> {
     fn make_lowercase(&mut self) {
         // Most hardware is very capable of performing ASCII vector operations.
@@ -875,6 +924,8 @@ impl DomainNameMut for MutDomainSlice<'_> {
         self.debug_assert_invariants();
     }
 
+    impl_domain_name_mut!();
+
     fn labels_iter_mut<'a>(
         &'a mut self,
     ) -> impl 'a + DoubleEndedIterator<Item = &'a mut RefLabel> + ExactSizeIterator + FusedIterator + Debug
@@ -897,6 +948,8 @@ impl DomainNameMut for DomainVec {
         self.debug_assert_invariants();
     }
 
+    impl_domain_name_mut!();
+
     fn labels_iter_mut<'a>(
         &'a mut self,
     ) -> impl 'a + DoubleEndedIterator<Item = &'a mut RefLabel> + ExactSizeIterator + FusedIterator + Debug
@@ -918,6 +971,8 @@ impl<const OCTETS: usize, const LABELS: usize> DomainNameMut for DomainArray<OCT
         self.as_domain_slice_mut().make_uppercase();
         self.debug_assert_invariants();
     }
+
+    impl_domain_name_mut!();
 
     fn labels_iter_mut<'a>(
         &'a mut self,
@@ -1279,49 +1334,6 @@ impl<'a> MutDomainSlice<'a> {
 
         Some(RefLabel::from_octets_mut(
             &mut last_octets[LENGTH_OCTET_WIDTH..],
-        ))
-    }
-
-    /// Gets the `n`th label in the domain or `None` if `index` is out of
-    /// bounds.
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut RefLabel> {
-        let (leading_length_octets, &[length_octet, ..]) =
-            self.length_octets.split_at_checked(index)?
-        else {
-            return None;
-        };
-
-        // Notes on overflow:
-        //
-        // Since a domain name cannot exceed 256 bytes, the maximum sum of octet
-        // lengths cannot exceed 256 either. Since we bounded the `index` above,
-        // and `length_octets.len() <= MAX_LABELS (128)`, this sum will never
-        // overflow.
-        let octets_start = (index * LENGTH_OCTET_WIDTH)
-            + leading_length_octets
-                .iter()
-                .map(|length_octet| *length_octet as usize)
-                .sum::<usize>();
-        Some(RefLabel::from_octets_mut(
-            &mut self.octets[(octets_start + LENGTH_OCTET_WIDTH)
-                ..(octets_start + (length_octet as usize) + LENGTH_OCTET_WIDTH)],
-        ))
-    }
-
-    /// Returns the first label of the domain, or `None` if it is empty.
-    pub fn first_mut(&mut self) -> Option<&mut RefLabel> {
-        let &length_octet = self.length_octets.first()?;
-        Some(RefLabel::from_octets_mut(
-            &mut self.octets[LENGTH_OCTET_WIDTH..((length_octet as usize) + LENGTH_OCTET_WIDTH)],
-        ))
-    }
-
-    /// Returns the last label of the domain, or `None` if it is empty.
-    pub fn last_mut(&mut self) -> Option<&mut RefLabel> {
-        let &length_octet = self.length_octets.last()?;
-        let octets_length = self.octets.len();
-        Some(RefLabel::from_octets_mut(
-            &mut self.octets[(octets_length - (length_octet as usize))..],
         ))
     }
 }

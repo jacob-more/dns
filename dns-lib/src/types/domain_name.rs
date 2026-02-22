@@ -719,6 +719,58 @@ pub trait DomainNameMut {
         self.labels_iter_mut().for_each(MutLabel::make_uppercase);
     }
 
+    /// Gets the nth label in the domain or `None` if `index` is out of
+    /// bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, ref_label, domain, types::domain_name::DomainNameMut};
+    ///
+    /// let mut domain_name = domain!("www", "example", "com", "");
+    /// let label = domain_name.get_mut(1);
+    /// assert_eq!(label, ref_label!("example"));
+    /// label.make_uppercase();
+    /// assert_eq!(domain_name, ref_domain!("www", "EXAMPLE", "com", ""));
+    /// ```
+    fn get_mut(&mut self, index: usize) -> Option<&mut RefLabel> {
+        self.labels_iter_mut().nth(index)
+    }
+
+    /// Returns the first label of the domain, or `None` if it is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, ref_label, domain, types::domain_name::DomainNameMut};
+    ///
+    /// let mut domain_name = domain!("www", "example", "com", "");
+    /// let label = domain_name.first_mut();
+    /// assert_eq!(label, ref_label!("www"));
+    /// label.make_uppercase();
+    /// assert_eq!(domain_name, ref_domain!("WWW", "example", "com", ""));
+    /// ```
+    fn first_mut(&mut self) -> Option<&mut RefLabel> {
+        self.labels_iter_mut().next()
+    }
+
+    /// Returns the last label of the domain, or `None` if it is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, ref_label, domain, types::domain_name::DomainNameMut};
+    ///
+    /// let mut domain_name = domain!("www", "example", "com");
+    /// let label = domain_name.last_mut();
+    /// assert_eq!(label, ref_label!("com"));
+    /// label.make_uppercase();
+    /// assert_eq!(domain_name, ref_domain!("WWW", "example", "COM"));
+    /// ```
+    fn last_mut(&mut self) -> Option<&mut RefLabel> {
+        self.labels_iter_mut().last()
+    }
+
     /// Returns an iterator over the labels of this domain name, starting from
     /// the left-most label, and iterating towards the right-most label (often,
     /// the root label).
