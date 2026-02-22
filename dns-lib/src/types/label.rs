@@ -97,6 +97,10 @@ pub trait Label: Debug {
 pub trait MutLabel: Debug {
     fn octets_mut(&mut self) -> &mut [AsciiChar];
 
+    fn as_ref_mut_label(&mut self) -> &mut RefLabel {
+        RefLabel::from_octets_mut(self.octets_mut())
+    }
+
     fn make_uppercase(&mut self) {
         self.octets_mut().make_ascii_uppercase();
     }
@@ -161,6 +165,10 @@ impl_label!(&mut L; {&**} self {});
 impl<T: MutLabel + ?Sized> MutLabel for &mut T {
     fn octets_mut(&mut self) -> &mut [AsciiChar] {
         (*self).octets_mut()
+    }
+
+    fn as_ref_mut_label(&mut self) -> &mut RefLabel {
+        (*self).as_ref_mut_label()
     }
 
     fn make_uppercase(&mut self) {
