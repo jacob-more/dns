@@ -34,40 +34,163 @@ pub const fn assert_domain_name_label_invariants(octets: &[u8]) {
 }
 
 pub trait Label: Debug {
+    /// Get the slice of bytes that represent the underlying label, not
+    /// including the length octet.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_label, types::label::Label};
+    ///
+    /// let label = ref_label!("foo");
+    /// assert_eq!(label.octets(), &[b'f', b'o', b'o']);
+    /// ```
     fn octets(&self) -> &[AsciiChar];
 
+    /// Get the number of bytes that a label contains, not including the length
+    /// octet. This is the same as getting the length of `Label::octets()`
+    /// although this provides a stronger type guarantee on the integer range.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_label, types::label::Label};
+    ///
+    /// let label = ref_label!("foo");
+    /// assert_eq!(label.len(), 3);
+    /// assert_eq!(label.octets().len(), 3);
+    /// ```
     fn len(&self) -> u8 {
         self.octets().len() as u8
     }
 
+    /// Returns `true` if a label contains any bytes not including the length
+    /// octet or `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_label, types::label::Label};
+    ///
+    /// assert!(ref_label!("").is_empty());
+    ///
+    /// assert!(!ref_label!("a").is_empty());
+    /// assert!(!ref_label!("ab").is_empty());
+    /// assert!(!ref_label!("foo").is_empty());
+    /// ```
     fn is_empty(&self) -> bool {
         self.octets().is_empty()
     }
 
+    /// Returns `true` if a label represents a root label or `false` otherwise.
+    /// Since a root label is one which has a length octet of zero, it is
+    /// guaranteed that `Label::is_root()` and `Label::is_empty()` return the
+    /// same result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_label, types::label::Label};
+    ///
+    /// assert!(ref_label!("").is_root());
+    ///
+    /// assert!(!ref_label!("a").is_root());
+    /// assert!(!ref_label!("ab").is_root());
+    /// assert!(!ref_label!("foo").is_root());
+    /// ```
     fn is_root(&self) -> bool {
         self.is_empty()
     }
 
+    /// Returns `true` if a label does not contain any uppercase ASCII
+    /// characters or `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_label, types::label::Label};
+    ///
+    /// assert!(ref_label!("").is_lowercase());
+    /// assert!(ref_label!("a 1&").is_lowercase());
+    ///
+    /// assert!(!ref_label!("A").is_lowercase());
+    /// ```
     fn is_lowercase(&self) -> bool {
         self.octets()
             .iter()
             .all(|character| !character.is_ascii_uppercase())
     }
 
+    /// Returns `true` if a label does not contain any lowercase ASCII
+    /// characters or `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_label, types::label::Label};
+    ///
+    /// assert!(ref_label!("").is_uppercase());
+    /// assert!(ref_label!("A 1&").is_uppercase());
+    ///
+    /// assert!(!ref_label!("a").is_uppercase());
+    /// ```
     fn is_uppercase(&self) -> bool {
         self.octets()
             .iter()
             .all(|character| !character.is_ascii_lowercase())
     }
 
+    /// Borrows the `Label` as an immutable slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, Label, OwnedLabel, RefLabel}};
+    ///
+    /// let owned_label: OwnedLabel = label!("foo");
+    /// let ref_label: &RefLabel = ref_label!("foo");
+    ///
+    /// assert_eq!(CaseSensitive(owned_label.as_ref_label()), CaseSensitive(ref_label));
+    /// ```
     fn as_ref_label(&self) -> &RefLabel {
         RefLabel::from_octets(self.octets())
     }
 
+    /// Creates a `OwnedLabel` from `self`'s octets. This always allocates a new
+    /// label, even if `self` is an owned label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, Label, OwnedLabel, RefLabel}};
+    ///
+    /// let owned_label: OwnedLabel = label!("foo");
+    /// let ref_label: &RefLabel = ref_label!("foo");
+    ///
+    /// assert_eq!(CaseSensitive(ref_label.as_owned()), CaseSensitive(&owned_label));
+    /// assert_eq!(CaseSensitive(ref_label.as_owned()), CaseSensitive(&owned_label));
+    /// ```
     fn as_owned(&self) -> OwnedLabel {
         OwnedLabel::from_octets(self.octets().into())
     }
 
+    /// Creates a `OwnedLabel` from `self`'s octets. This may re-use the current
+    /// allocation if `self` is an `OwnedLabel`, although it may allocate a new
+    /// label like `Label::as_owned()` does.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{label, types::label::{CaseSensitive, Label, OwnedLabel}};
+    ///
+    /// let label_a: OwnedLabel = label!("foo");
+    /// let label_b: OwnedLabel = label!("foo");
+    ///
+    /// assert_eq!(CaseSensitive(label_a.into_owned()), CaseSensitive(&label_b));
+    /// // Unlike `Label::as_owned()`, calling `Label::into_owned()` again would
+    /// // result in a compile-time error because `label_a` was moved.
+    /// //assert_eq!(CaseSensitive(label_a.into_owned()), CaseSensitive(&label_b));
+    /// ```
     fn into_owned(self) -> OwnedLabel
     where
         Self: Sized,
@@ -75,14 +198,66 @@ pub trait Label: Debug {
         self.as_owned()
     }
 
+    /// Borrows the `Label` as an immutable slice that when compared using
+    /// `PartialEq`, uses a case-sensitive form of equality.
+    ///
+    /// This is especially useful when comparing `OwnedLabel` or `RefLabel`
+    /// types because they do not implement `PartialEq`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_label, types::label::Label};
+    ///
+    /// assert_eq!(
+    ///     ref_label!("FOO").as_case_sensitive(),
+    ///     ref_label!("FOO").as_case_sensitive(),
+    /// );
+    ///
+    /// assert_ne!(
+    ///     ref_label!("FOO").as_case_sensitive(),
+    ///     ref_label!("foo").as_case_sensitive(),
+    /// );
+    /// assert_ne!(
+    ///     ref_label!("FOO").as_case_sensitive(),
+    ///     ref_label!("bar").as_case_sensitive(),
+    /// );
+    /// ```
     fn as_case_sensitive(&self) -> &CaseSensitive<RefLabel> {
         self.as_ref_label().borrow()
     }
 
+    /// Borrows the `Label` as an immutable slice that when compared using
+    /// `PartialEq`, uses a case-insensitive form of equality.
+    ///
+    /// This is especially useful when comparing `OwnedLabel` or `RefLabel`
+    /// types because they do not implement `PartialEq`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_label, types::label::Label};
+    ///
+    /// assert_eq!(
+    ///     ref_label!("FOO").as_case_insensitive(),
+    ///     ref_label!("FOO").as_case_insensitive(),
+    /// );
+    /// assert_eq!(
+    ///     ref_label!("FOO").as_case_insensitive(),
+    ///     ref_label!("foo").as_case_insensitive(),
+    /// );
+    ///
+    /// assert_ne!(
+    ///     ref_label!("FOO").as_case_insensitive(),
+    ///     ref_label!("bar").as_case_insensitive(),
+    /// );
+    /// ```
     fn as_case_insensitive(&self) -> &CaseInsensitive<RefLabel> {
         self.as_ref_label().borrow()
     }
 
+    /// Iterates over the bytes that make up the label, not including the length
+    /// octet, and returns the escaped form of each.
     fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
         non_escaped_to_escaped::NonEscapedIntoEscapedIter::from(self.octets().iter().copied()).map(
             |character| match character {
@@ -95,16 +270,69 @@ pub trait Label: Debug {
 }
 
 pub trait MutLabel: Debug {
+    /// Get the mutable slice of bytes that represent the underlying label, not
+    /// including the length octet.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, MutLabel}};
+    ///
+    /// let mut label = label!("foo");
+    /// assert_eq!(label.octets_mut(), &mut [b'f', b'o', b'o']);
+    ///
+    /// label.octets_mut()[0] = b'b';
+    /// assert_eq!(CaseSensitive(label), CaseSensitive(ref_label!("boo")));
+    /// ```
     fn octets_mut(&mut self) -> &mut [AsciiChar];
 
+    /// Borrows the `MutLabel` as a mutable slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, MutLabel}};
+    ///
+    /// let mut label = label!("foo");
+    /// label.as_ref_mut_label().make_uppercase();
+    /// assert_eq!(CaseSensitive(label), CaseSensitive(ref_label!("FOO")));
+    /// ```
     fn as_ref_mut_label(&mut self) -> &mut RefLabel {
         RefLabel::from_octets_mut(self.octets_mut())
     }
 
+    /// Converts the body of the label to ASCII uppercase.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, MutLabel}};
+    ///
+    /// let mut label = label!("foo");
+    /// label.make_uppercase();
+    /// assert_eq!(
+    ///     CaseSensitive(label),
+    ///     CaseSensitive(ref_label!("FOO")),
+    /// );
+    /// ```
     fn make_uppercase(&mut self) {
         self.octets_mut().make_ascii_uppercase();
     }
 
+    /// Converts the body of the label to ASCII lowercase.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, MutLabel}};
+    ///
+    /// let mut label = label!("FOO");
+    /// label.make_lowercase();
+    /// assert_eq!(
+    ///     CaseSensitive(label),
+    ///     CaseSensitive(ref_label!("foo")),
+    /// );
+    /// ```
     fn make_lowercase(&mut self) {
         self.octets_mut().make_ascii_lowercase();
     }
