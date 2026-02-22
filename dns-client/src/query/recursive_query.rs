@@ -13,7 +13,7 @@ use dns_lib::{
         types::ns::NS,
     },
     types::
-        domain_name::{DomainName, DomainNameCompare, DomainNameVec}
+        domain_name::{DomainName, DomainVec}
     ,
 };
 use log::{debug, trace};
@@ -401,7 +401,7 @@ where
                 }
                 .into();
             }
-            let dname = DomainNameVec::from_labels(
+            let dname = DomainVec::from_labels(
                 context
                     .qname()
                     .labels_iter()

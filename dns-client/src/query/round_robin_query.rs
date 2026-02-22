@@ -21,7 +21,7 @@ use dns_lib::{
         resource_record::{RecordData, ResourceRecord},
         rtype::RType,
     },
-    types::domain_name::DomainNameVec,
+    types::domain_name::DomainVec,
 };
 use futures::{FutureExt, future::BoxFuture};
 use log::{debug, info, trace};
@@ -44,7 +44,7 @@ fn rr_to_ip(record: ResourceRecord) -> Option<IpAddr> {
 }
 
 async fn query_cache_for_ns_addresses<'a, 'b, 'c, CCache>(
-    ns_domain: DomainNameVec,
+    ns_domain: DomainVec,
     address_rtype: RType,
     context: Arc<Context>,
     client: Arc<DNSAsyncClient>,
@@ -104,7 +104,7 @@ struct NSQuery<'a, 'b, 'c, CCache>
 where
     CCache: AsyncCache + Send + Sync,
 {
-    ns_domain: DomainNameVec,
+    ns_domain: DomainVec,
     ns_address_rtype: RType,
     context: Arc<Context>,
 
@@ -672,7 +672,7 @@ where
     'd: 'b,
 {
     Fresh {
-        name_servers: &'a [DomainNameVec],
+        name_servers: &'a [DomainVec],
     },
     GetCachedNSAddresses {
         name_server_address_queries: Vec<BoxFuture<'b, NSQuery<'c, 'd, 'e, CCache>>>,
@@ -694,7 +694,7 @@ where
         client: &'a Arc<DNSAsyncClient>,
         joined_cache: &'b Arc<CCache>,
         question: &'c Arc<Context>,
-        name_servers: &'d [DomainNameVec],
+        name_servers: &'d [DomainVec],
     ) -> Self {
         Self {
             client,
@@ -1010,7 +1010,7 @@ where
         client: &'a Arc<DNSAsyncClient>,
         joined_cache: &'b Arc<CCache>,
         question: &'c Arc<Context>,
-        name_servers: &'d [DomainNameVec],
+        name_servers: &'d [DomainVec],
     ) -> Self {
         Self {
             round_robin: NSRoundRobin::new(client, joined_cache, question, name_servers),
@@ -1202,7 +1202,7 @@ pub async fn query_name_servers<CCache>(
     client: &Arc<DNSAsyncClient>,
     joined_cache: &Arc<CCache>,
     context: Arc<Context>,
-    name_servers: &[DomainNameVec],
+    name_servers: &[DomainVec],
 ) -> QResult
 where
     CCache: AsyncCache + Send + Sync + 'static,

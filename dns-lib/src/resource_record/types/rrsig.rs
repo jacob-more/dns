@@ -31,7 +31,7 @@ mod circular_serde_sanity_test {
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
         types::{
             base64::Base64,
-            domain_name::{DomainNameVec, IncompressibleDomainVec},
+            domain_name::{DomainVec, IncompressibleDomainVec},
         },
     };
 
@@ -47,7 +47,7 @@ mod circular_serde_sanity_test {
             signature_expiration: 100,  //< TODO: value should be '20030322173103', using form YYYYMMDDHHmmSS
             signature_inception: 50,    //< TODO: value should be '20030220173103', using form YYYYMMDDHHmmSS
             key_tag: 2642,
-            signers_name: IncompressibleDomainVec(DomainNameVec::from_utf8("example.com.").unwrap()),
+            signers_name: IncompressibleDomainVec(DomainVec::from_utf8("example.com.").unwrap()),
             signature: Base64::from_utf8("oJB1W6WNGv+ldvQ3WDG0MQkg5IEhjRip8WTrPYGv07h108dUKGMeDPKijVCHX3DDKdfb+v6oB9wfuh3DTJXUAfI/M0zmO/zz8bW0Rznl8O3tGNazPwQKkRN20XPXV6nwwfoXmJQbsLNrLfkGJ5D6fwFm8nN+6pBzeDQfsS3Ap3o=").unwrap(),
         }
     );

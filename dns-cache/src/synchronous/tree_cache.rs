@@ -11,14 +11,14 @@ use dns_lib::{
     query::question::Question,
     resource_record::{rclass::RClass, rtype::RType},
     types::{
-        domain_name::{DomainName, DomainNameVec},
+        domain_name::{DomainName, DomainVec},
         label::{CaseInsensitive, Label, OwnedLabel},
     },
 };
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum TreeCacheError {
-    NonFullyQualifiedDomainName(DomainNameVec),
+    NonFullyQualifiedDomainName(DomainVec),
     InconsistentState(String),
 }
 impl Error for TreeCacheError {}
@@ -137,7 +137,7 @@ impl<Records> TreeCache<Records> {
     #[inline]
     pub fn remove_node(
         &mut self,
-        qname: &DomainNameVec,
+        qname: &DomainVec,
         qclass: &RClass,
     ) -> Result<Option<TreeNode<Records>>, TreeCacheError> {
         // Checks if domain name ends in root node.

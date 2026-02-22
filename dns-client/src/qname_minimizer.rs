@@ -1,17 +1,17 @@
-use dns_lib::types::domain_name::{DomainName, DomainNameVec};
+use dns_lib::types::domain_name::{DomainName, DomainVec};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc7816
 /// (Updated)  https://datatracker.ietf.org/doc/html/rfc9156
 pub enum QNameMinimizer<'a, I>
 where
-    I: 'a + Iterator<Item = DomainNameVec> + ExactSizeIterator + DoubleEndedIterator,
+    I: 'a + Iterator<Item = DomainVec> + ExactSizeIterator + DoubleEndedIterator,
 {
     None {
-        qname: &'a DomainNameVec,
+        qname: &'a DomainVec,
         repeat_n: usize,
     },
     LimitedMinimizer {
-        qname: &'a DomainNameVec,
+        qname: &'a DomainVec,
         remaining_minimized_qnames: usize,
         qname_iter: I,
     },
@@ -19,10 +19,10 @@ where
 
 impl<'a, I> QNameMinimizer<'a, I>
 where
-    I: 'a + Iterator<Item = DomainNameVec> + ExactSizeIterator + DoubleEndedIterator,
+    I: 'a + Iterator<Item = DomainVec> + ExactSizeIterator + DoubleEndedIterator,
 {
     pub fn new_limited_minimizer(
-        qname: &'a DomainNameVec,
+        qname: &'a DomainVec,
         search_names: I,
         qname_minimization_limit: usize,
     ) -> Self {
@@ -33,7 +33,7 @@ where
         }
     }
 
-    pub fn new_repeater(qname: &'a DomainNameVec, skip: usize) -> Self {
+    pub fn new_repeater(qname: &'a DomainVec, skip: usize) -> Self {
         Self::None {
             qname,
             repeat_n: (qname.label_count() as usize).saturating_sub(skip),
@@ -43,9 +43,9 @@ where
 
 impl<'a, I> Iterator for QNameMinimizer<'a, I>
 where
-    I: 'a + Iterator<Item = DomainNameVec> + ExactSizeIterator + DoubleEndedIterator,
+    I: 'a + Iterator<Item = DomainVec> + ExactSizeIterator + DoubleEndedIterator,
 {
-    type Item = DomainNameVec;
+    type Item = DomainVec;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
@@ -105,7 +105,7 @@ where
 
 impl<'a, I> ExactSizeIterator for QNameMinimizer<'a, I>
 where
-    I: 'a + Iterator<Item = DomainNameVec> + ExactSizeIterator + DoubleEndedIterator,
+    I: 'a + Iterator<Item = DomainVec> + ExactSizeIterator + DoubleEndedIterator,
 {
     fn len(&self) -> usize {
         match self {
@@ -121,7 +121,7 @@ where
 
 impl<'a, I> DoubleEndedIterator for QNameMinimizer<'a, I>
 where
-    I: 'a + Iterator<Item = DomainNameVec> + ExactSizeIterator + DoubleEndedIterator,
+    I: 'a + Iterator<Item = DomainVec> + ExactSizeIterator + DoubleEndedIterator,
 {
     fn next_back(&mut self) -> Option<Self::Item> {
         match self {

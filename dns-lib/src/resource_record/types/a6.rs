@@ -260,7 +260,7 @@ mod circular_serde_sanity_test {
     use super::A6;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
+        types::domain_name::{DomainVec, IncompressibleDomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
@@ -277,7 +277,7 @@ mod circular_serde_sanity_test {
             prefix_length: 128,
             ipv6_address: None,
             domain_name: Some(IncompressibleDomainVec(
-                DomainNameVec::from_utf8("www.example.org.").unwrap()
+                DomainVec::from_utf8("www.example.org.").unwrap()
             ))
         }
     );
@@ -287,7 +287,7 @@ mod circular_serde_sanity_test {
             prefix_length: 64,
             ipv6_address: Some(Ipv6Addr::new(0, 0, 0, 0, 10, 9, 8, 7)),
             domain_name: Some(IncompressibleDomainVec(
-                DomainNameVec::from_utf8("www.example.org.").unwrap()
+                DomainVec::from_utf8("www.example.org.").unwrap()
             ))
         }
     );
@@ -300,7 +300,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
+        types::domain_name::{DomainVec, IncompressibleDomainVec},
     };
     use std::net::Ipv6Addr;
 
@@ -326,7 +326,7 @@ mod tokenizer_tests {
             prefix_length: 128,
             ipv6_address: None,
             domain_name: Some(IncompressibleDomainVec(
-                DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap()
+                DomainVec::from_utf8(GOOD_DOMAIN).unwrap()
             ))
         },
         ["128", GOOD_DOMAIN]
@@ -338,7 +338,7 @@ mod tokenizer_tests {
             prefix_length: 64,
             ipv6_address: Some(Ipv6Addr::new(0, 0, 0, 0, 10, 9, 8, 7)),
             domain_name: Some(IncompressibleDomainVec(
-                DomainNameVec::from_utf8("www.example.org.").unwrap()
+                DomainVec::from_utf8("www.example.org.").unwrap()
             ))
         },
         ["64", "::a:9:8:7", GOOD_DOMAIN]

@@ -8,7 +8,7 @@ use dns_lib::{
     interface::cache::{CacheQuery, CacheRecord, CacheResponse, main_cache::AsyncMainCache},
     query::question::Question,
     resource_record::{rcode::RCode, rtype::RType},
-    types::domain_name::DomainNameVec,
+    types::domain_name::DomainVec,
 };
 
 use super::async_tree_cache::{AsyncTreeCache, AsyncTreeCacheError};
@@ -160,7 +160,7 @@ impl AsyncMainTreeCache {
         Ok(())
     }
 
-    pub async fn get_domains(&self) -> HashSet<DomainNameVec> {
+    pub async fn get_domains(&self) -> HashSet<DomainVec> {
         self.cache.get_domains().await
     }
 }

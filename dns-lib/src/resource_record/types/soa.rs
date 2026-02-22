@@ -2,7 +2,7 @@ use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
 use crate::{
     resource_record::time::Time,
-    types::domain_name::{CompressibleDomainVec, DomainNameVec},
+    types::domain_name::{CompressibleDomainVec, DomainVec},
 };
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.13
@@ -22,8 +22,8 @@ pub struct SOA {
 impl SOA {
     #[inline]
     pub fn new(
-        mname: DomainNameVec,
-        rname: DomainNameVec,
+        mname: DomainVec,
+        rname: DomainVec,
         serial: u32,
         refresh: Time,
         retry: Time,
@@ -42,12 +42,12 @@ impl SOA {
     }
 
     #[inline]
-    pub fn main_domain_name(&self) -> &DomainNameVec {
+    pub fn main_domain_name(&self) -> &DomainVec {
         &self.mname
     }
 
     #[inline]
-    pub fn responsible_mailbox_domain_name(&self) -> &DomainNameVec {
+    pub fn responsible_mailbox_domain_name(&self) -> &DomainVec {
         &self.rname
     }
 
@@ -83,17 +83,15 @@ mod circular_serde_sanity_test {
     use crate::{
         resource_record::time::Time,
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::{CompressibleDomainVec, DomainNameVec},
+        types::domain_name::{CompressibleDomainVec, DomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         SOA {
-            mname: CompressibleDomainVec(
-                DomainNameVec::from_utf8("name_server.example.com.").unwrap()
-            ),
+            mname: CompressibleDomainVec(DomainVec::from_utf8("name_server.example.com.").unwrap()),
             rname: CompressibleDomainVec(
-                DomainNameVec::from_utf8("responsible_person.example.com.").unwrap()
+                DomainVec::from_utf8("responsible_person.example.com.").unwrap()
             ),
             serial: 12,
             refresh: Time::new(60),
@@ -112,7 +110,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::{CompressibleDomainVec, DomainNameVec},
+        types::domain_name::{CompressibleDomainVec, DomainVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";
@@ -126,8 +124,8 @@ mod tokenizer_tests {
         test_ok,
         SOA,
         SOA {
-            mname: CompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap()),
-            rname: CompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap()),
+            mname: CompressibleDomainVec(DomainVec::from_utf8(GOOD_DOMAIN).unwrap()),
+            rname: CompressibleDomainVec(DomainVec::from_utf8(GOOD_DOMAIN).unwrap()),
             serial: 10,
             refresh: Time::new(10),
             retry: Time::new(10),

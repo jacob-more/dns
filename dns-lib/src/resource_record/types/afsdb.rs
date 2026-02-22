@@ -1,6 +1,6 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::types::domain_name::{DomainNameVec, IncompressibleDomainVec};
+use crate::types::domain_name::{DomainVec, IncompressibleDomainVec};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc3596
 #[derive(
@@ -13,7 +13,7 @@ pub struct AFSDB {
 
 impl AFSDB {
     #[inline]
-    pub fn new(subtype: u16, hostname: DomainNameVec) -> Self {
+    pub fn new(subtype: u16, hostname: DomainVec) -> Self {
         Self {
             subtype,
             hostname: IncompressibleDomainVec(hostname),
@@ -26,12 +26,12 @@ impl AFSDB {
     }
 
     #[inline]
-    pub fn hostname(&self) -> &DomainNameVec {
+    pub fn hostname(&self) -> &DomainVec {
         &self.hostname
     }
 
     #[inline]
-    pub fn into_hostname(self) -> DomainNameVec {
+    pub fn into_hostname(self) -> DomainVec {
         self.hostname.0
     }
 }
@@ -41,16 +41,14 @@ mod circular_serde_sanity_test {
     use super::AFSDB;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
+        types::domain_name::{DomainVec, IncompressibleDomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         AFSDB {
             subtype: 1,
-            hostname: IncompressibleDomainVec(
-                DomainNameVec::from_utf8("www.example.org.").unwrap()
-            )
+            hostname: IncompressibleDomainVec(DomainVec::from_utf8("www.example.org.").unwrap())
         }
     );
 }
@@ -62,7 +60,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
+        types::domain_name::{DomainVec, IncompressibleDomainVec},
     };
 
     const GOOD_SUBTYPE: &str = "1";
@@ -77,7 +75,7 @@ mod tokenizer_tests {
         AFSDB,
         AFSDB {
             subtype: 1,
-            hostname: IncompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
+            hostname: IncompressibleDomainVec(DomainVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [GOOD_SUBTYPE, GOOD_DOMAIN]
     );

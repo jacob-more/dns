@@ -6,7 +6,7 @@ use std::{
 use dns_lib::{
     interface::client::ContextErr,
     resource_record::{rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::ns::NS},
-    types::domain_name::{DomainNameError, DomainNameVec},
+    types::domain_name::{DomainNameError, DomainVec},
 };
 
 use crate::network::errors::QueryError;
@@ -34,11 +34,11 @@ pub(crate) enum QError {
     DomainNameErr(DomainNameError),
     NetworkQueryErr(QueryError),
     CacheFailure(RCode),
-    NoClosestNameServerFound(DomainNameVec),
+    NoClosestNameServerFound(DomainVec),
     MissingRecord(RType),
     QNameIsNotChildOfDName {
-        dname: DomainNameVec,
-        qname: DomainNameVec,
+        dname: DomainVec,
+        qname: DomainVec,
     },
 }
 

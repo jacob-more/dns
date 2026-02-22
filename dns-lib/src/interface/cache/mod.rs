@@ -8,7 +8,7 @@ use crate::{
     resource_record::{
         rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType,
     },
-    types::domain_name::DomainNameVec,
+    types::domain_name::DomainVec,
 };
 
 pub mod cache;
@@ -26,7 +26,7 @@ pub struct CacheQuery<'a> {
 
 impl<'a> CacheQuery<'a> {
     #[inline]
-    pub const fn qname(&self) -> &DomainNameVec {
+    pub const fn qname(&self) -> &DomainVec {
         self.question.qname()
     }
 

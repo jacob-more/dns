@@ -1,6 +1,6 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::types::domain_name::{DomainNameVec, IncompressibleDomainVec};
+use crate::types::domain_name::{DomainVec, IncompressibleDomainVec};
 
 /// TODO: read RFC 2672
 ///
@@ -14,14 +14,14 @@ pub struct DNAME {
 
 impl DNAME {
     #[inline]
-    pub fn new(target: DomainNameVec) -> Self {
+    pub fn new(target: DomainVec) -> Self {
         Self {
             target: IncompressibleDomainVec(target),
         }
     }
 
     #[inline]
-    pub fn target_name(&self) -> &DomainNameVec {
+    pub fn target_name(&self) -> &DomainVec {
         &self.target
     }
 }
@@ -31,13 +31,13 @@ mod circular_serde_sanity_test {
     use super::DNAME;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
+        types::domain_name::{DomainVec, IncompressibleDomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         DNAME {
-            target: IncompressibleDomainVec(DomainNameVec::from_utf8("www.example.com.").unwrap())
+            target: IncompressibleDomainVec(DomainVec::from_utf8("www.example.com.").unwrap())
         }
     );
 }
@@ -49,7 +49,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::{DomainNameVec, IncompressibleDomainVec},
+        types::domain_name::{DomainVec, IncompressibleDomainVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";
@@ -59,7 +59,7 @@ mod tokenizer_tests {
         test_ok,
         DNAME,
         DNAME {
-            target: IncompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
+            target: IncompressibleDomainVec(DomainVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [GOOD_DOMAIN]
     );

@@ -49,7 +49,7 @@ mod circular_serde_sanity_test {
         resource_record::rtype::RType,
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
         types::{
-            domain_name::{DomainNameVec, IncompressibleDomainVec},
+            domain_name::{DomainVec, IncompressibleDomainVec},
             rtype_bitmap::RTypeBitmap,
         },
     };
@@ -60,7 +60,7 @@ mod circular_serde_sanity_test {
         rfc_4034_example_record_circular_serde_sanity_test,
         NSEC {
             next_domain_name: IncompressibleDomainVec(
-                DomainNameVec::from_utf8("host.example.com.").unwrap()
+                DomainVec::from_utf8("host.example.com.").unwrap()
             ),
             type_bit_map: RTypeBitmap::from_rtypes(
                 [

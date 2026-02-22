@@ -1,6 +1,6 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::types::domain_name::{DomainNameVec, IncompressibleDomainVec};
+use crate::types::domain_name::{DomainVec, IncompressibleDomainVec};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc2782
 #[derive(
@@ -15,7 +15,7 @@ pub struct SRV {
 
 impl SRV {
     #[inline]
-    pub fn new(priority: u16, weight: u16, port: u16, target: DomainNameVec) -> Self {
+    pub fn new(priority: u16, weight: u16, port: u16, target: DomainVec) -> Self {
         Self {
             priority,
             weight,
@@ -40,7 +40,7 @@ impl SRV {
     }
 
     #[inline]
-    pub fn target(&self) -> &DomainNameVec {
+    pub fn target(&self) -> &DomainVec {
         &self.target
     }
 }

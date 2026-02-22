@@ -7,7 +7,7 @@ use crate::{
     resource_record::{
         rclass::RClass, rcode::RCode, resource_record::ResourceRecord, rtype::RType, types::ns::NS,
     },
-    types::domain_name::{DomainNameCompare, DomainNameVec},
+    types::domain_name::{DomainName, DomainVec},
 };
 
 #[derive(Debug)]
@@ -233,7 +233,7 @@ impl Context {
     }
 
     #[inline]
-    pub fn new_cname(self: Arc<Self>, qname: DomainNameVec) -> Result<Context, ContextErr> {
+    pub fn new_cname(self: Arc<Self>, qname: DomainVec) -> Result<Context, ContextErr> {
         let query = Question::new(qname, self.qtype(), self.qclass());
         match (self.is_cname_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
@@ -317,7 +317,7 @@ impl Context {
     }
 
     #[inline]
-    pub fn new_dname(self: Arc<Self>, qname: DomainNameVec) -> Result<Context, ContextErr> {
+    pub fn new_dname(self: Arc<Self>, qname: DomainVec) -> Result<Context, ContextErr> {
         let query = Question::new(qname, self.qtype(), self.qclass());
         match (self.is_dname_allowed(&query), self.as_ref()) {
             (Err(error), _) => Err(error),
@@ -503,7 +503,7 @@ impl Context {
     }
 
     #[inline]
-    pub const fn qname(&self) -> &DomainNameVec {
+    pub const fn qname(&self) -> &DomainVec {
         self.query().qname()
     }
 

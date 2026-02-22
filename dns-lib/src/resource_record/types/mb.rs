@@ -1,6 +1,6 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::types::domain_name::{CompressibleDomainVec, DomainNameVec};
+use crate::types::domain_name::{CompressibleDomainVec, DomainVec};
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc1035#section-3.3.3
 #[derive(
@@ -12,14 +12,14 @@ pub struct MB {
 
 impl MB {
     #[inline]
-    pub fn new(ma_domain_name: DomainNameVec) -> Self {
+    pub fn new(ma_domain_name: DomainVec) -> Self {
         Self {
             ma_domain_name: CompressibleDomainVec(ma_domain_name),
         }
     }
 
     #[inline]
-    pub fn mailbox_domain_name(&self) -> &DomainNameVec {
+    pub fn mailbox_domain_name(&self) -> &DomainVec {
         &self.ma_domain_name
     }
 }
@@ -29,14 +29,14 @@ mod circular_serde_sanity_test {
     use super::MB;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::{CompressibleDomainVec, DomainNameVec},
+        types::domain_name::{CompressibleDomainVec, DomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         MB {
             ma_domain_name: CompressibleDomainVec(
-                DomainNameVec::from_utf8("www.example.com.").unwrap()
+                DomainVec::from_utf8("www.example.com.").unwrap()
             )
         }
     );
@@ -49,7 +49,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::{CompressibleDomainVec, DomainNameVec},
+        types::domain_name::{CompressibleDomainVec, DomainVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";
@@ -59,7 +59,7 @@ mod tokenizer_tests {
         test_ok,
         MB,
         MB {
-            ma_domain_name: CompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
+            ma_domain_name: CompressibleDomainVec(DomainVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [GOOD_DOMAIN]
     );

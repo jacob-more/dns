@@ -11,7 +11,7 @@ use crate::{
     },
     types::{
         character_string::CharacterString,
-        domain_name::{DomainName, DomainNameError, DomainNameVec, IncompressibleDomainVec},
+        domain_name::{DomainName, DomainNameError, DomainVec, IncompressibleDomainVec},
     },
 };
 
@@ -34,7 +34,7 @@ impl NAPTR {
         flags: CharacterString,
         service: CharacterString,
         regexp: CharacterString,
-        replacement: DomainNameVec,
+        replacement: DomainVec,
     ) -> Self {
         Self {
             order,
@@ -72,7 +72,7 @@ impl NAPTR {
     }
 
     #[inline]
-    pub fn replacement(&self) -> &DomainNameVec {
+    pub fn replacement(&self) -> &DomainVec {
         &self.replacement
     }
 }
@@ -184,7 +184,7 @@ mod circular_serde_sanity_test {
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
         types::{
             character_string::CharacterString,
-            domain_name::{DomainNameVec, IncompressibleDomainVec},
+            domain_name::{DomainVec, IncompressibleDomainVec},
         },
     };
 
@@ -198,7 +198,7 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("").unwrap(),
             service: CharacterString::from_utf8("").unwrap(),
             regexp: CharacterString::from_utf8(r"!^urn:cid:.+@([^\.]+\.)(.*)$!\2!i").unwrap(),
-            replacement: IncompressibleDomainVec(DomainNameVec::from_utf8(".").unwrap())
+            replacement: IncompressibleDomainVec(DomainVec::from_utf8(".").unwrap())
         }
     );
 
@@ -211,7 +211,7 @@ mod circular_serde_sanity_test {
             service: CharacterString::from_utf8("z3950+N2L+N2C").unwrap(),
             regexp: CharacterString::from_utf8("").unwrap(),
             replacement: IncompressibleDomainVec(
-                DomainNameVec::from_utf8("cidserver.example.com.").unwrap()
+                DomainVec::from_utf8("cidserver.example.com.").unwrap()
             )
         }
     );
@@ -225,7 +225,7 @@ mod circular_serde_sanity_test {
             service: CharacterString::from_utf8("rcds+N2C").unwrap(),
             regexp: CharacterString::from_utf8("").unwrap(),
             replacement: IncompressibleDomainVec(
-                DomainNameVec::from_utf8("cidserver.example.com.").unwrap()
+                DomainVec::from_utf8("cidserver.example.com.").unwrap()
             )
         }
     );
@@ -238,9 +238,7 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("s").unwrap(),
             service: CharacterString::from_utf8("http+N2L+N2C+N2R").unwrap(),
             regexp: CharacterString::from_utf8("").unwrap(),
-            replacement: IncompressibleDomainVec(
-                DomainNameVec::from_utf8("www.example.com.").unwrap()
-            )
+            replacement: IncompressibleDomainVec(DomainVec::from_utf8("www.example.com.").unwrap())
         }
     );
 
@@ -252,7 +250,7 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("u").unwrap(),
             service: CharacterString::from_utf8("sip+E2U").unwrap(),
             regexp: CharacterString::from_utf8(r"!^.*$!sip:information@foo.se!i").unwrap(),
-            replacement: IncompressibleDomainVec(DomainNameVec::from_utf8(".").unwrap())
+            replacement: IncompressibleDomainVec(DomainVec::from_utf8(".").unwrap())
         }
     );
 
@@ -264,7 +262,7 @@ mod circular_serde_sanity_test {
             flags: CharacterString::from_utf8("u").unwrap(),
             service: CharacterString::from_utf8("smtp+E2U").unwrap(),
             regexp: CharacterString::from_utf8(r"!^.*$!mailto:information@foo.se!i").unwrap(),
-            replacement: IncompressibleDomainVec(DomainNameVec::from_utf8(".").unwrap())
+            replacement: IncompressibleDomainVec(DomainVec::from_utf8(".").unwrap())
         }
     );
 }

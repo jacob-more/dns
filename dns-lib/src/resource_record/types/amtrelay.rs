@@ -11,9 +11,7 @@ use crate::{
         },
         wire::{from_wire::FromWire, to_wire::ToWire},
     },
-    types::domain_name::{
-        DomainName, DomainNameVec, IncompressibleDomainVec, IncompressibleSubDomain,
-    },
+    types::domain_name::{DomainName, DomainVec, IncompressibleDomainVec, IncompressibleSubDomain},
 };
 
 /// (Original) https://datatracker.ietf.org/doc/html/rfc8777#name-amtrelay-rdata-format
@@ -64,7 +62,7 @@ pub enum RelayType {
     Empty,
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
-    DomainName(DomainNameVec),
+    DomainName(DomainVec),
 }
 
 impl RelayType {
@@ -98,7 +96,7 @@ impl ToWire for AMTRELAY {
             RelayType::Ipv4(address) => address.to_wire_format(wire, compression),
             RelayType::Ipv6(address) => address.to_wire_format(wire, compression),
             RelayType::DomainName(dn) => {
-                IncompressibleSubDomain(dn.as_subdomain()).to_wire_format(wire, compression)
+                IncompressibleSubDomain(dn.as_domain_slice()).to_wire_format(wire, compression)
             }
             RelayType::Unknown(_, data) => {
                 wire.write_bytes(data)?;
@@ -116,7 +114,7 @@ impl ToWire for AMTRELAY {
                 RelayType::Ipv4(address) => address.serial_length(),
                 RelayType::Ipv6(address) => address.serial_length(),
                 RelayType::DomainName(dn) => {
-                    IncompressibleSubDomain(dn.as_subdomain()).serial_length()
+                    IncompressibleSubDomain(dn.as_domain_slice()).serial_length()
                 }
                 RelayType::Unknown(_, data) => data.len() as u16,
             }
@@ -170,7 +168,7 @@ impl FromTokenizedRData for AMTRELAY {
                 let (relay_type, _) = u7::from_token_format(&[relay_type])?;
                 let relay = match u8::from(relay_type) {
                     0 => {
-                        let (root_domain, _) = DomainNameVec::from_token_format(&[relay])?;
+                        let (root_domain, _) = DomainVec::from_token_format(&[relay])?;
                         // According to RFC 8777,
                         // "If the relay type field is 0, the relay field MUST be ".""
                         // In other words, the relay type is equivalent to the root domain encoding.
@@ -183,7 +181,7 @@ impl FromTokenizedRData for AMTRELAY {
                     }
                     1 => RelayType::Ipv4(Ipv4Addr::from_token_format(&[relay])?.0),
                     2 => RelayType::Ipv6(Ipv6Addr::from_token_format(&[relay])?.0),
-                    3 => RelayType::DomainName(DomainNameVec::from_token_format(&[relay])?.0),
+                    3 => RelayType::DomainName(DomainVec::from_token_format(&[relay])?.0),
                     _ => {
                         return Err(
                             crate::serde::presentation::errors::TokenizedRecordError::ValueError(
@@ -245,7 +243,7 @@ mod circular_serde_sanity_test {
     use super::{AMTRELAY, RelayType};
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::DomainNameVec,
+        types::domain_name::DomainVec,
     };
 
     gen_test_circular_serde_sanity_test!(
@@ -253,7 +251,7 @@ mod circular_serde_sanity_test {
         AMTRELAY {
             precedence: 1,
             discovery_optional: u1::new(0),
-            relay: RelayType::DomainName(DomainNameVec::from_utf8("www.example.org.").unwrap())
+            relay: RelayType::DomainName(DomainVec::from_utf8("www.example.org.").unwrap())
         }
     );
     gen_test_circular_serde_sanity_test!(
@@ -302,7 +300,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::DomainNameVec,
+        types::domain_name::DomainVec,
     };
 
     const GOOD_PRECEDENCE: &str = "1";
@@ -371,7 +369,7 @@ mod tokenizer_tests {
         AMTRELAY {
             precedence: 1,
             discovery_optional: u1::new(1),
-            relay: RelayType::DomainName(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
+            relay: RelayType::DomainName(DomainVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [
             GOOD_PRECEDENCE,

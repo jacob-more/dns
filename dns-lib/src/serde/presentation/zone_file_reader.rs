@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::{resource_record::resource_record::ResourceRecord, types::domain_name::DomainNameVec};
+use crate::{resource_record::resource_record::ResourceRecord, types::domain_name::DomainVec};
 
 use super::{
     errors::TokenizedRecordError,
@@ -13,7 +13,7 @@ pub enum ZoneToken<'a> {
     ResourceRecord(ResourceRecord),
     Include {
         file_path: &'a Path,
-        domain_name: Option<DomainNameVec>,
+        domain_name: Option<DomainVec>,
     },
 }
 
@@ -56,7 +56,7 @@ impl<'a> Iterator for ZoneFileReader<'a> {
             } => {
                 let domain_name = match domain_name {
                     Some(domain_name_str) => {
-                        match DomainNameVec::from_token_format(&[domain_name_str]) {
+                        match DomainVec::from_token_format(&[domain_name_str]) {
                             Ok((domain_name, _)) => Some(domain_name),
                             Err(error) => {
                                 return Some(Err(TokenizedRecordError::TokenError(error)));

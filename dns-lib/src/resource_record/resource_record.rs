@@ -12,7 +12,7 @@ use crate::{
             to_wire::ToWire,
         },
     },
-    types::domain_name::{CompressibleDomainVec, DomainNameVec},
+    types::domain_name::{CompressibleDomainVec, DomainVec},
 };
 
 use super::{
@@ -59,7 +59,7 @@ pub struct ResourceRecord<RDataT: RData = RecordData> {
 
 impl<RDataT: RData> ResourceRecord<RDataT> {
     #[inline]
-    pub const fn new(name: DomainNameVec, rclass: RClass, ttl: Time, rdata: RDataT) -> Self {
+    pub const fn new(name: DomainVec, rclass: RClass, ttl: Time, rdata: RDataT) -> Self {
         Self {
             name: CompressibleDomainVec(name),
             rclass,
@@ -69,12 +69,12 @@ impl<RDataT: RData> ResourceRecord<RDataT> {
     }
 
     #[inline]
-    pub const fn get_name(&self) -> &DomainNameVec {
+    pub const fn get_name(&self) -> &DomainVec {
         &self.name.0
     }
 
     #[inline]
-    pub fn into_name(self) -> DomainNameVec {
+    pub fn into_name(self) -> DomainVec {
         self.name.0
     }
 

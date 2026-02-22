@@ -9,7 +9,7 @@ use dns_lib::{
     query::question::Question,
     resource_record::{rclass::RClass, rtype::RType},
     types::{
-        domain_name::{DomainName, DomainNameVec},
+        domain_name::{DomainName, DomainVec},
         label::{CaseInsensitive, Label, OwnedLabel},
     },
 };
@@ -18,7 +18,7 @@ use tokio::sync::{Mutex, RwLock};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum AsyncTreeCacheError {
-    NonFullyQualifiedDomainName(DomainNameVec),
+    NonFullyQualifiedDomainName(DomainVec),
     InconsistentState(String),
 }
 impl Error for AsyncTreeCacheError {}
@@ -188,7 +188,7 @@ where
     #[inline]
     pub async fn remove_node(
         &self,
-        qname: &DomainNameVec,
+        qname: &DomainVec,
         qclass: &RClass,
     ) -> Result<Option<Arc<TreeNode<Records>>>, AsyncTreeCacheError> {
         // Checks if domain name ends in root node.
@@ -278,7 +278,7 @@ where
             .into_inner()
     }
 
-    pub async fn get_domains(&self) -> HashSet<DomainNameVec> {
+    pub async fn get_domains(&self) -> HashSet<DomainVec> {
         let read_root_node = self.root_nodes.read().await;
         let root_nodes = read_root_node.clone();
         drop(read_root_node);
@@ -298,10 +298,10 @@ where
                                 subdomain_name
                             })
                             .filter_map(|domain_name| {
-                                DomainNameVec::from_labels(domain_name).ok()
+                                DomainVec::from_labels(domain_name).ok()
                             }),
                     );
-                    write_domains.insert(DomainNameVec::new_root());
+                    write_domains.insert(DomainVec::new_root());
                     drop(write_domains);
                     drop(domains);
                 }

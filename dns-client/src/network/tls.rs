@@ -23,7 +23,7 @@ use dns_lib::{
     interface::ports::DOT_TCP_PORT,
     query::{message::Message, question::Question},
     serde::wire::write_wire::WriteWire,
-    types::domain_name::{CompressionMap, DomainNameVec},
+    types::domain_name::{CompressionMap, DomainVec},
 };
 use futures::FutureExt;
 use pin_project::{pin_project, pinned_drop};
@@ -752,7 +752,7 @@ impl crate::network::socket::tls::TlsSocket for TlsSocket {
     }
 
     #[inline]
-    fn peer_name(&self) -> &DomainNameVec {
+    fn peer_name(&self) -> &DomainVec {
         &self.ns_name
     }
 
@@ -860,7 +860,7 @@ impl ActiveQueries {
 }
 
 pub struct TlsSocket {
-    ns_name: DomainNameVec,
+    ns_name: DomainVec,
     upstream_address: IpAddr,
     tls: std::sync::RwLock<TlsState>,
     active_queries: std::sync::RwLock<ActiveQueries>,
@@ -879,7 +879,7 @@ impl TlsSocket {
     #[inline]
     pub fn new(
         upstream_address: IpAddr,
-        ns_name: DomainNameVec,
+        ns_name: DomainVec,
         client_config: Arc<ClientConfig>,
     ) -> Arc<Self> {
         Arc::new(TlsSocket {

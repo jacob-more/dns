@@ -48,6 +48,18 @@ pub trait Label: Debug {
         self.is_empty()
     }
 
+    fn is_lowercase(&self) -> bool {
+        self.octets()
+            .iter()
+            .all(|character| !character.is_ascii_uppercase())
+    }
+
+    fn is_uppercase(&self) -> bool {
+        self.octets()
+            .iter()
+            .all(|character| !character.is_ascii_lowercase())
+    }
+
     fn as_ref_label(&self) -> &RefLabel {
         RefLabel::from_octets(self.octets())
     }
@@ -79,6 +91,18 @@ pub trait Label: Debug {
                 _ => character,
             },
         )
+    }
+}
+
+pub trait MutLabel: Debug {
+    fn octets_mut(&mut self) -> &mut [AsciiChar];
+
+    fn make_uppercase(&mut self) {
+        self.octets_mut().make_ascii_uppercase();
+    }
+
+    fn make_lowercase(&mut self) {
+        self.octets_mut().make_ascii_lowercase();
     }
 }
 
@@ -269,6 +293,27 @@ impl Label for &mut RefLabel {
 
     fn as_owned(&self) -> OwnedLabel {
         (**self).as_owned()
+    }
+}
+
+impl MutLabel for OwnedLabel {
+    fn octets_mut(&mut self) -> &mut [AsciiChar] {
+        &mut self.octets
+    }
+}
+impl MutLabel for &mut OwnedLabel {
+    fn octets_mut(&mut self) -> &mut [AsciiChar] {
+        &mut self.octets
+    }
+}
+impl MutLabel for RefLabel {
+    fn octets_mut(&mut self) -> &mut [AsciiChar] {
+        &mut self.octets
+    }
+}
+impl MutLabel for &mut RefLabel {
+    fn octets_mut(&mut self) -> &mut [AsciiChar] {
+        &mut self.octets
     }
 }
 

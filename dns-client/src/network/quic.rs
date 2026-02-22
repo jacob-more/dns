@@ -23,7 +23,7 @@ use dns_lib::{
     interface::ports::DOQ_UDP_PORT,
     query::{message::Message, question::Question},
     serde::wire::write_wire::WriteWire,
-    types::domain_name::{CompressionMap, DomainNameVec},
+    types::domain_name::{CompressionMap, DomainVec},
 };
 use futures::{FutureExt, future::BoxFuture};
 use log::debug;
@@ -679,7 +679,7 @@ impl crate::network::socket::quic::QuicSocket for QuicSocket {
     }
 
     #[inline]
-    fn peer_name(&self) -> &DomainNameVec {
+    fn peer_name(&self) -> &DomainVec {
         &self.ns_name
     }
 
@@ -765,7 +765,7 @@ impl ActiveQueries {
 }
 
 pub struct QuicSocket {
-    ns_name: DomainNameVec,
+    ns_name: DomainVec,
     upstream_address: IpAddr,
     quic: std::sync::RwLock<QuicState>,
     active_queries: std::sync::RwLock<ActiveQueries>,
@@ -784,7 +784,7 @@ impl QuicSocket {
     #[inline]
     pub fn new(
         upstream_address: IpAddr,
-        ns_name: DomainNameVec,
+        ns_name: DomainVec,
         client_config: Arc<quinn::ClientConfig>,
     ) -> Arc<Self> {
         Arc::new(QuicSocket {

@@ -88,7 +88,7 @@ macro_rules! ref_domain {
         // evaluating the expressions more than once will be caught by those
         // checks.
         unsafe {
-            $crate::types::domain_name::SubDomainName::from_raw_parts(
+            $crate::types::domain_name::DomainSlice::from_raw_parts(
                 &OCTETS_BUFFER,
                 &LENGTH_OCTETS_BUFFER
             )

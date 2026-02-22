@@ -12,7 +12,7 @@ use dns_lib::{
     },
     query::question::Question,
     resource_record::{rclass::RClass, rtype::RType},
-    types::domain_name::DomainNameVec,
+    types::domain_name::DomainVec,
 };
 use futures::StreamExt;
 
@@ -90,7 +90,7 @@ async fn main() {
 
     let search_domains = search_domains.into_iter()
         .map(|domain_str| {
-            let mut domain = DomainNameVec::from_utf8(&domain_str).expect("All input domain names must be valid but '{domain_str}' is not");
+            let mut domain = DomainVec::from_utf8(&domain_str).expect("All input domain names must be valid but '{domain_str}' is not");
             domain.make_fully_qualified().expect("All input domains must be able to be represented as valid fully-qualified names but '{domain_str}' could not");
             domain
         });
@@ -106,7 +106,7 @@ async fn main() {
     client.close().await;
 }
 
-async fn test_many_dns(client: Arc<DNSAsyncClient>, domains: impl Iterator<Item = DomainNameVec>) {
+async fn test_many_dns(client: Arc<DNSAsyncClient>, domains: impl Iterator<Item = DomainVec>) {
     let total_start = Instant::now();
 
     let domain_rtype_pairs = domains
@@ -129,7 +129,7 @@ async fn test_many_dns(client: Arc<DNSAsyncClient>, domains: impl Iterator<Item 
     println!("Total Time For All Queries: {total_time} ms");
 }
 
-async fn query_dn(client: Arc<DNSAsyncClient>, rtype: RType, domain: DomainNameVec) {
+async fn query_dn(client: Arc<DNSAsyncClient>, rtype: RType, domain: DomainVec) {
     println!("Start: Query for '{domain}'");
     let question = Question::new(domain, rtype, RClass::Internet);
 

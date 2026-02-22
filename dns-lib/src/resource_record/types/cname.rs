@@ -1,6 +1,6 @@
 use dns_macros::{FromTokenizedRData, FromWire, RData, ToPresentation, ToWire};
 
-use crate::types::domain_name::{CompressibleDomainVec, DomainNameVec};
+use crate::types::domain_name::{CompressibleDomainVec, DomainVec};
 
 #[derive(
     Clone, PartialEq, Eq, Hash, Debug, ToWire, FromWire, ToPresentation, FromTokenizedRData, RData,
@@ -11,14 +11,14 @@ pub struct CNAME {
 
 impl CNAME {
     #[inline]
-    pub fn new(primary_name: DomainNameVec) -> Self {
+    pub fn new(primary_name: DomainVec) -> Self {
         Self {
             primary_name: CompressibleDomainVec(primary_name),
         }
     }
 
     #[inline]
-    pub fn primary_name(&self) -> &DomainNameVec {
+    pub fn primary_name(&self) -> &DomainVec {
         &self.primary_name
     }
 }
@@ -28,15 +28,13 @@ mod circular_serde_sanity_test {
     use super::CNAME;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::{CompressibleDomainVec, DomainNameVec},
+        types::domain_name::{CompressibleDomainVec, DomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
         record_circular_serde_sanity_test,
         CNAME {
-            primary_name: CompressibleDomainVec(
-                DomainNameVec::from_utf8("www.example.com.").unwrap()
-            )
+            primary_name: CompressibleDomainVec(DomainVec::from_utf8("www.example.com.").unwrap())
         }
     );
 }
@@ -48,7 +46,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::{CompressibleDomainVec, DomainNameVec},
+        types::domain_name::{CompressibleDomainVec, DomainVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";
@@ -58,7 +56,7 @@ mod tokenizer_tests {
         test_ok,
         CNAME,
         CNAME {
-            primary_name: CompressibleDomainVec(DomainNameVec::from_utf8(GOOD_DOMAIN).unwrap())
+            primary_name: CompressibleDomainVec(DomainVec::from_utf8(GOOD_DOMAIN).unwrap())
         },
         [GOOD_DOMAIN]
     );

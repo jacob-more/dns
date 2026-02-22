@@ -4,35 +4,19 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     iter::FusedIterator,
-    ops::{Add, Deref, DerefMut},
 };
 
 use static_assertions::const_assert;
-use tinyvec::{ArrayVec, TinyVec, tiny_vec};
 
 use crate::{
-    serde::{
-        presentation::{
-            errors::TokenError,
-            from_presentation::FromPresentation,
-            parse_chars::{
-                char_token::EscapableChar,
-                escaped_to_escapable::{EscapedCharsEnumerateIter, ParseError},
-            },
-            to_presentation::ToPresentation,
-        },
-        wire::{from_wire::FromWire, to_wire::ToWire},
-    },
+    serde::presentation::parse_chars::escaped_to_escapable::ParseError,
     types::{
-        ascii::{AsciiError, AsciiString, constants::ASCII_PERIOD},
-        label::{CaseInsensitive, CaseSensitive},
+        ascii::AsciiError,
+        label::{CaseInsensitive, CaseSensitive, MutLabel},
     },
 };
 
-use super::{
-    ascii::AsciiChar,
-    label::{Label, RefLabel},
-};
+use super::label::{Label, RefLabel};
 
 /// Maximum number of bytes that can make up a domain name, including the length
 /// octets. This limit is specified in
@@ -175,12 +159,38 @@ pub enum MakeFullyQualifiedError {
     TooManyOctets,
 }
 
+fn impl_is_parent_of<L>(
+    child: impl DoubleEndedIterator<Item = L> + ExactSizeIterator,
+    parent: impl DoubleEndedIterator<Item = L> + ExactSizeIterator,
+) -> bool
+where
+    L: Label + Eq,
+{
+    let mut parent_iter = parent.rev();
+    child
+        .rev()
+        .zip(&mut parent_iter)
+        .all(|(child_label, parent_label)| child_label == parent_label)
+        && parent_iter.next().is_none()
+}
+
 pub trait DomainName {
     /// The number of bytes this domain name has in its non-compressed wire
     /// form. This should never exceed `MAX_OCTETS`.
     ///
     /// e.g., The domain name "example.org." has an octet count of 13, including
     /// the root label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert_eq!(1, ref_domain!("").octet_count());
+    /// assert_eq!(5, ref_domain!("com", "").octet_count());
+    /// assert_eq!(13, ref_domain!("example", "com", "").octet_count());
+    /// assert_eq!(17, ref_domain!("www", "example", "com", "").octet_count());
+    /// ```
     fn octet_count(&self) -> u16 {
         const_assert!(
             (MAX_OCTETS as usize) <= (u16::MAX as usize),
@@ -191,8 +201,8 @@ pub trait DomainName {
             "LENGTH_OCTET_WIDTH cannot exceed u16::MAX because u16s are used for the octet count"
         );
 
-        self.labels_iter()
-            .map(|label| label.len() + (LENGTH_OCTET_WIDTH as u16))
+        self.length_octets_iter()
+            .map(|length_octet| (length_octet as u16) + (LENGTH_OCTET_WIDTH as u16))
             .sum()
     }
 
@@ -200,70 +210,449 @@ pub trait DomainName {
     ///
     /// e.g., The domain name "example.org." has 3 labels, including the root
     /// label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert_eq!(1, ref_domain!("").label_count());
+    /// assert_eq!(2, ref_domain!("com", "").label_count());
+    /// assert_eq!(3, ref_domain!("example", "com", "").label_count());
+    /// assert_eq!(4, ref_domain!("www", "example", "com", "").label_count());
+    /// ```
     fn label_count(&self) -> u16 {
         const_assert!(
             (MAX_LABELS as usize) <= (u16::MAX as usize),
             "MAX_LABELS cannot exceed u16::MAX because u16s are used for the label count"
         );
 
-        u16::try_from(self.labels_iter().count())
+        u16::try_from(self.length_octets_iter().count())
             .expect("domain names cannot have more than u16:MAX labels")
     }
 
     /// A domain name is root if and only if it has exactly 1 label and that
     /// label has a length of zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert!(ref_domain!("").is_root());
+    /// assert!(!ref_domain!("com", "").is_root());
+    /// assert!(!ref_domain!("example", "com", "").is_root());
+    /// ```
     fn is_root(&self) -> bool {
-        let mut labels = self.labels_iter();
-        labels.next().is_some_and(|label| label.is_root()) && labels.next().is_none()
+        let mut length_octets = self.length_octets_iter();
+        length_octets
+            .next()
+            .is_some_and(|length_octet| 0 == length_octet)
+            && length_octets.next().is_none()
     }
 
     /// A domain name is lowercase if and only if all non-length ASCII bytes are
     /// not uppercase characters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert!(ref_domain!("").is_lowercase());
+    /// assert!(ref_domain!("example", "com").is_lowercase());
+    /// assert!(ref_domain!("example", "com", "").is_lowercase());
+    ///
+    /// assert!(!ref_domain!("EXAMPLE", "com").is_lowercase());
+    /// assert!(!ref_domain!("EXAMPLE", "COM", "").is_lowercase());
+    /// ```
     fn is_lowercase(&self) -> bool {
-        self.labels_iter().all(|label| {
-            label
-                .octets()
-                .iter()
-                .all(|character| !character.is_ascii_uppercase())
-        })
+        self.labels_iter().all(Label::is_lowercase)
     }
 
     /// A domain name is uppercase if and only if all non-length ASCII bytes are
     /// not lowercase characters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert!(ref_domain!("").is_uppercase());
+    /// assert!(ref_domain!("EXAMPLE", "COM").is_uppercase());
+    /// assert!(ref_domain!("EXAMPLE", "COM", "").is_uppercase());
+    ///
+    /// assert!(!ref_domain!("EXAMPLE", "com").is_uppercase());
+    /// assert!(!ref_domain!("example", "com", "").is_uppercase());
+    /// ```
     fn is_uppercase(&self) -> bool {
-        self.labels_iter().all(|label| {
-            label
-                .octets()
-                .iter()
-                .all(|character| !character.is_ascii_lowercase())
-        })
+        self.labels_iter().all(Label::is_uppercase)
     }
 
     /// A domain name is fully qualified if and only if it ends with a root
     /// label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert!(ref_domain!("").is_fully_qualified());
+    /// assert!(ref_domain!("example", "com", "").is_fully_qualified());
+    /// assert!(ref_domain!("EXAMPLE", "COM", "").is_fully_qualified());
+    ///
+    /// assert!(!ref_domain!("com").is_fully_qualified());
+    /// assert!(!ref_domain!("example", "com").is_fully_qualified());
+    /// assert!(!ref_domain!("EXAMPLE", "COM").is_fully_qualified());
+    /// ```
     fn is_fully_qualified(&self) -> bool {
-        self.labels_iter()
-            .next_back()
-            .is_some_and(|label| label.is_root())
+        self.last_length_octet()
+            .is_some_and(|length_octet| 0 == length_octet)
     }
 
     /// A domain name is canonical if and only if `is_lowercase()` is true and
     /// `is_fully_qualified()` is true. See those methods for details.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert!(ref_domain!("").is_canonical());
+    /// assert!(ref_domain!("com", "").is_canonical());
+    /// assert!(ref_domain!("example", "com", "").is_canonical());
+    ///
+    /// // The next set of examples fail because they don't end in a root label.
+    /// // Some of them also fail because they are not lowercase.
+    /// assert!(!ref_domain!("com").is_canonical());
+    /// assert!(!ref_domain!("COM").is_canonical());
+    /// assert!(!ref_domain!("example", "com").is_canonical());
+    /// assert!(!ref_domain!("EXAMPLE", "COM").is_canonical());
+    /// assert!(!ref_domain!("example", "COM").is_canonical());
+    ///
+    /// // The next set of examples fail because they are not lowercase.
+    /// assert!(!ref_domain!("EXAMPLE", "COM", "").is_canonical());
+    /// assert!(!ref_domain!("example", "COM", "").is_canonical());
+    /// ```
     fn is_canonical(&self) -> bool {
         self.is_fully_qualified() && self.is_lowercase()
     }
 
+    /// Checks if this domain is indeed a parent of the `other` domain name. If
+    /// `self` and `other` are the same domain name, the result is `true`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// let parent = ref_domain!("example", "com", "");
+    /// let upper_parent = ref_domain!("EXAMPLE", "COM", "");
+    ///
+    /// let child = ref_domain!("www", "example", "com", "");
+    /// let upper_child = ref_domain!("WWW", "EXAMPLE", "COM", "");
+    ///
+    /// assert!(parent.is_parent_of(&parent));
+    /// assert!(parent.is_parent_of(&child));
+    ///
+    /// assert!(!upper_parent.is_parent_of(&parent));
+    /// assert!(!upper_parent.is_parent_of(&child));
+    ///
+    /// assert!(upper_parent.is_parent_of(&upper_parent));
+    /// assert!(upper_parent.is_parent_of(&upper_child));
+    ///
+    /// assert!(!child.is_parent_of(&parent));
+    /// assert!(!child.is_parent_of(&upper_parent));
+    /// ```
+    fn is_parent_of<D: DomainName>(&self, other: &D) -> bool {
+        impl_is_parent_of(
+            other.labels_iter().map(CaseSensitive),
+            self.labels_iter().map(CaseSensitive),
+        )
+    }
+
+    /// Checks if this domain is indeed a parent of the `other` domain name. If
+    /// `self` and `other` are the same domain name, the result is `true`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// let parent = ref_domain!("example", "com", "");
+    /// let upper_parent = ref_domain!("EXAMPLE", "COM", "");
+    ///
+    /// let child = ref_domain!("www", "example", "com", "");
+    /// let upper_child = ref_domain!("WWW", "EXAMPLE", "COM", "");
+    ///
+    /// assert!(parent.is_parent_of_ignore_case(&parent));
+    /// assert!(parent.is_parent_of_ignore_case(&child));
+    ///
+    /// assert!(upper_parent.is_parent_of_ignore_case(&parent));
+    /// assert!(upper_parent.is_parent_of_ignore_case(&child));
+    ///
+    /// assert!(upper_parent.is_parent_of_ignore_case(&upper_parent));
+    /// assert!(upper_parent.is_parent_of_ignore_case(&upper_child));
+    ///
+    /// assert!(!child.is_parent_of_ignore_case(&parent));
+    /// assert!(!child.is_parent_of_ignore_case(&upper_parent));
+    /// ```
+    fn is_parent_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        impl_is_parent_of(
+            other.labels_iter().map(CaseInsensitive),
+            self.labels_iter().map(CaseInsensitive),
+        )
+    }
+
+    /// Checks if this domain is indeed a child of the `other` domain name. If
+    /// `self` and `other` are the same domain name, the result is `true`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// let parent = ref_domain!("example", "com", "");
+    /// let upper_parent = ref_domain!("EXAMPLE", "COM", "");
+    ///
+    /// let child = ref_domain!("www", "example", "com", "");
+    /// let upper_child = ref_domain!("WWW", "EXAMPLE", "COM", "");
+    ///
+    /// assert!(parent.is_child_of(&parent));
+    /// assert!(child.is_child_of(&parent));
+    ///
+    /// assert!(!parent.is_child_of(&upper_parent));
+    /// assert!(!child.is_child_of(&upper_parent));
+    ///
+    /// assert!(upper_parent.is_child_of(&upper_parent));
+    /// assert!(upper_child.is_child_of(&upper_parent));
+    ///
+    /// assert!(!parent.is_child_of(&child));
+    /// assert!(!upper_parent.is_child_of(&child));
+    /// ```
+    fn is_child_of<D: DomainName>(&self, other: &D) -> bool {
+        impl_is_parent_of(
+            self.labels_iter().map(CaseSensitive),
+            other.labels_iter().map(CaseSensitive),
+        )
+    }
+
+    /// Checks if this domain is indeed a child of the `other` domain name. If
+    /// `self` and `other` are the same domain name, the result is `true`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// let parent = ref_domain!("example", "com", "");
+    /// let upper_parent = ref_domain!("EXAMPLE", "COM", "");
+    ///
+    /// let child = ref_domain!("www", "example", "com", "");
+    /// let upper_child = ref_domain!("WWW", "EXAMPLE", "COM", "");
+    ///
+    /// assert!(parent.is_child_of_ignore_case(&parent));
+    /// assert!(child.is_child_of_ignore_case(&parent));
+    ///
+    /// assert!(parent.is_child_of_ignore_case(&upper_parent));
+    /// assert!(child.is_child_of_ignore_case(&upper_parent));
+    ///
+    /// assert!(upper_parent.is_child_of_ignore_case(&upper_parent));
+    /// assert!(upper_child.is_child_of_ignore_case(&upper_parent));
+    ///
+    /// assert!(!parent.is_child_of_ignore_case(&child));
+    /// assert!(!upper_parent.is_child_of_ignore_case(&child));
+    /// ```
+    fn is_child_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        impl_is_parent_of(
+            self.labels_iter().map(CaseInsensitive),
+            other.labels_iter().map(CaseInsensitive),
+        )
+    }
+
+    /// determines if two sets of labels are identical, ignoring capitalization
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// let lower_example_com_root = ref_domain!("example", "com", "");
+    /// let upper_example_com_root = ref_domain!("EXAMPLE", "COM", "");
+    /// let mixed_example_com_root = ref_domain!("EXAMPLE", "com", "");
+    ///
+    /// let lower_www_example_com_root = ref_domain!("www", "example", "com", "");
+    /// let upper_www_example_com_root = ref_domain!("WWW", "EXAMPLE", "COM", "");
+    /// let mixed_www_example_com_root = ref_domain!("www", "EXAMPLE", "com", "");
+    ///
+    /// assert!(lower_example_com_root.eq_ignore_case(&lower_example_com_root));
+    /// assert!(lower_example_com_root.eq_ignore_case(&upper_example_com_root));
+    /// assert!(lower_example_com_root.eq_ignore_case(&mixed_example_com_root));
+    ///
+    /// assert!(!lower_example_com_root.eq_ignore_case(&lower_www_example_com_root));
+    /// assert!(!lower_example_com_root.eq_ignore_case(&upper_www_example_com_root));
+    /// assert!(!lower_example_com_root.eq_ignore_case(&mixed_www_example_com_root));
+    /// ```
+    fn eq_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        self.labels_iter()
+            .map(CaseInsensitive)
+            .eq(other.labels_iter().map(CaseInsensitive))
+    }
+
+    /// Get the label at the specified index. The left-most label is index 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::CaseInsensitive}};
+    ///
+    /// assert_eq!(
+    ///     ref_domain!("example", "com", "").get_label(0).map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!("example"))),
+    /// );
+    /// assert_eq!(
+    ///     ref_domain!("example", "com", "").get_label(1).map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!("com"))),
+    /// );
+    /// assert_eq!(
+    ///     ref_domain!("example", "com", "").get_label(2).map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!(""))),
+    /// );
+    /// assert_eq!(
+    ///     ref_domain!("example", "com", "").get_label(3).map(CaseInsensitive),
+    ///     None,
+    /// );
+    /// ```
+    fn get_label(&self, index: usize) -> Option<&RefLabel> {
+        self.labels_iter().nth(index)
+    }
+
+    /// Get the first (left-most) label. This is equivalent to getting the label
+    /// at index 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::CaseInsensitive}};
+    ///
+    /// assert_eq!(
+    ///     ref_domain!("").first_label().map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!(""))),
+    /// );
+    /// assert_eq!(
+    ///     ref_domain!("com", "").first_label().map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!("com"))),
+    /// );
+    /// assert_eq!(
+    ///     ref_domain!("example", "com", "").first_label().map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!("example"))),
+    /// );
+    /// ```
     fn first_label(&self) -> Option<&RefLabel> {
         self.labels_iter().next()
     }
 
+    /// Get the last (right-most) label. This is equivalent to getting the label
+    /// at the last index.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::CaseInsensitive}};
+    ///
+    /// assert_eq!(
+    ///     ref_domain!("").last_label().map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!(""))),
+    /// );
+    /// assert_eq!(
+    ///     ref_domain!("com", "").last_label().map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!(""))),
+    /// );
+    /// assert_eq!(
+    ///     ref_domain!("example", "com", "").last_label().map(CaseInsensitive),
+    ///     Some(CaseInsensitive(ref_label!(""))),
+    /// );
+    /// ```
     fn last_label(&self) -> Option<&RefLabel> {
-        self.labels_iter().last()
+        self.labels_iter().next_back()
+    }
+
+    /// Get the length of the label at the specified index. The left-most label
+    /// is index 0.
+    ///
+    /// This should always be equivalent to getting label at the specified
+    /// index, and then getting the length of that label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert_eq!(ref_domain!("example", "com", "").get_length_octet(0), Some(7));
+    /// assert_eq!(ref_domain!("example", "com", "").get_length_octet(1), Some(3));
+    /// assert_eq!(ref_domain!("example", "com", "").get_length_octet(2), Some(0));
+    /// assert_eq!(ref_domain!("example", "com", "").get_length_octet(3), None);
+    /// ```
+    fn get_length_octet(&self, index: usize) -> Option<u8> {
+        self.length_octets_iter().nth(index)
+    }
+
+    /// Get the length octet for the first (left-most) label. This is equivalent
+    /// to getting the length octet for the label at index 0.
+    ///
+    /// This should always be equivalent to getting first label and then getting
+    /// the length of that label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert_eq!(ref_domain!("").first_length_octet(), Some(0));
+    /// assert_eq!(ref_domain!("com", "").first_length_octet(), Some(3));
+    /// assert_eq!(ref_domain!("example", "com", "").first_length_octet(), Some(7));
+    /// ```
+    fn first_length_octet(&self) -> Option<u8> {
+        self.length_octets_iter().next()
+    }
+
+    /// Get the length octet for the last (right-most) label. This is equivalent
+    /// to getting the length octet for the label at the last index.
+    ///
+    /// This should always be equivalent to getting last label and then getting
+    /// the length of that label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// assert_eq!(ref_domain!("").last_length_octet(), Some(0));
+    /// assert_eq!(ref_domain!("example", "com").last_length_octet(), Some(3));
+    /// assert_eq!(ref_domain!("www", "example", "com").last_length_octet(), Some(3));
+    /// ```
+    fn last_length_octet(&self) -> Option<u8> {
+        self.length_octets_iter().next_back()
     }
 
     /// Returns an iterator over the labels of this domain name, starting from
     /// the left-most label, and iterating towards the right-most label (often,
     /// the root label).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::CaseInsensitive}};
+    ///
+    /// let domain_name = ref_domain!("www", "example", "com", "");
+    /// let mut labels_iter = domain_name.labels_iter();
+    ///
+    /// assert_eq!(labels_iter.next().map(CaseInsensitive), Some(CaseInsensitive(ref_label!("www"))));
+    /// assert_eq!(labels_iter.next().map(CaseInsensitive), Some(CaseInsensitive(ref_label!("example"))));
+    /// assert_eq!(labels_iter.next().map(CaseInsensitive), Some(CaseInsensitive(ref_label!("com"))));
+    /// assert_eq!(labels_iter.next().map(CaseInsensitive), Some(CaseInsensitive(ref_label!(""))));
+    /// assert_eq!(labels_iter.next().map(CaseInsensitive), None);
+    /// ```
     fn labels_iter<'a>(
         &'a self,
     ) -> impl 'a
@@ -271,252 +660,304 @@ pub trait DomainName {
     + ExactSizeIterator
     + FusedIterator
     + Debug
-    + Copy;
+    + Clone;
+
+    /// Returns an iterator over the length octets of this domain name, starting
+    /// from the left-most label's length octet, and iterating towards the
+    /// right-most label's length octet (often, the root label).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, types::domain_name::DomainName};
+    ///
+    /// let domain_name = ref_domain!("www", "example", "com", "");
+    /// let mut length_octets_iter = domain_name.length_octets_iter();
+    ///
+    /// assert_eq!(length_octets_iter.next(), Some(3));
+    /// assert_eq!(length_octets_iter.next(), Some(7));
+    /// assert_eq!(length_octets_iter.next(), Some(3));
+    /// assert_eq!(length_octets_iter.next(), Some(0));
+    /// assert_eq!(length_octets_iter.next(), None);
+    /// ```
+    fn length_octets_iter(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + FusedIterator + Debug + Clone
+    {
+        self.labels_iter().map(|label| label.len() as u8)
+    }
 }
 
 pub trait DomainNameMut {
     /// Converts this domain to use all lowercase characters.
-    fn make_lowercase(&mut self);
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, domain, types::domain_name::DomainNameMut};
+    ///
+    /// let mut domain_name = domain!("WWW", "EXAMPLE", "COM", "");
+    /// domain_name.make_lowercase();
+    /// assert_eq!(domain_name, ref_domain!("www", "example", "com", ""));
+    /// ```
+    fn make_lowercase(&mut self) {
+        self.labels_iter_mut().for_each(MutLabel::make_lowercase);
+    }
 
     /// Converts this domain to use all uppercase characters.
-    fn make_uppercase(&mut self);
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, domain, types::domain_name::DomainNameMut};
+    ///
+    /// let mut domain_name = domain!("www", "example", "com", "");
+    /// domain_name.make_uppercase();
+    /// assert_eq!(domain_name, ref_domain!("WWW", "EXAMPLE", "COM", ""));
+    /// ```
+    fn make_uppercase(&mut self) {
+        self.labels_iter_mut().for_each(MutLabel::make_uppercase);
+    }
 
-    // TODO: Iterator over mutable labels.
-    //
-    //fn labels_iter_mut<'a>(
-    //    &'a self,
-    //) -> impl 'a + DoubleEndedIterator<Item = &'a RefLabel> + ExactSizeIterator + FusedIterator + Debug;
+    /// Returns an iterator over the labels of this domain name, starting from
+    /// the left-most label, and iterating towards the right-most label (often,
+    /// the root label).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{ref_domain, domain, types::{domain_name::DomainNameMut, label::MutLabel}};
+    ///
+    /// let mut domain_name = domain!("www", "example", "com", "");
+    /// domain_name.labels_iter_mut()
+    ///     .nth(1)
+    ///     .expect("the domain has 4 labels. Index 1 must be in-range")
+    ///     .make_uppercase();
+    /// assert_eq!(domain_name, ref_domain!("www", "EXAMPLE", "com", ""));
+    /// ```
+    fn labels_iter_mut<'a>(
+        &'a mut self,
+    ) -> impl 'a + DoubleEndedIterator<Item = &'a mut RefLabel> + ExactSizeIterator + FusedIterator + Debug;
 }
 
-pub trait DomainNameCompare<T: ?Sized> {
-    /// determines if two sets of labels are identical, ignoring capitalization
-    fn eq_ignore_case(&self, other: &T) -> bool;
+// Need to explicitly implement each trait method so that if a more efficient
+// implementation is available for that particular type, it gets used instead of
+// the default one.
+impl<T: DomainName> DomainName for &T {
+    fn octet_count(&self) -> u16 {
+        (*self).octet_count()
+    }
 
-    /// Checks if this domain is indeed a parent of the `other` domain name. If
-    /// `self` and `other` are the same domain name, the result is `true`.
-    fn is_parent_of(&self, other: &T) -> bool;
+    fn label_count(&self) -> u16 {
+        (*self).label_count()
+    }
 
-    /// Checks if this domain is indeed a parent of the `other` domain name. If
-    /// `self` and `other` are the same domain name, the result is `true`.
-    fn is_parent_of_ignore_case(&self, other: &T) -> bool;
+    fn is_root(&self) -> bool {
+        (*self).is_root()
+    }
 
-    /// Checks if this domain is indeed a child of the `other` domain name. If
-    /// `self` and `other` are the same domain name, the result is `true`.
-    fn is_child_of(&self, other: &T) -> bool
-    where
-        T: DomainNameCompare<Self>,
+    fn is_lowercase(&self) -> bool {
+        (*self).is_lowercase()
+    }
+
+    fn is_uppercase(&self) -> bool {
+        (*self).is_uppercase()
+    }
+
+    fn is_fully_qualified(&self) -> bool {
+        (*self).is_fully_qualified()
+    }
+
+    fn is_canonical(&self) -> bool {
+        (*self).is_canonical()
+    }
+
+    fn is_parent_of<D: DomainName>(&self, other: &D) -> bool {
+        (*self).is_parent_of(other)
+    }
+
+    fn is_parent_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        (*self).is_parent_of_ignore_case(other)
+    }
+
+    fn is_child_of<D: DomainName>(&self, other: &D) -> bool {
+        (*self).is_child_of(other)
+    }
+
+    fn is_child_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        (*self).is_child_of_ignore_case(other)
+    }
+
+    fn eq_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        (*self).eq_ignore_case(other)
+    }
+
+    fn get_label(&self, index: usize) -> Option<&RefLabel> {
+        (*self).get_label(index)
+    }
+
+    fn first_label(&self) -> Option<&RefLabel> {
+        (*self).first_label()
+    }
+
+    fn last_label(&self) -> Option<&RefLabel> {
+        (*self).last_label()
+    }
+
+    fn get_length_octet(&self, index: usize) -> Option<u8> {
+        (*self).get_length_octet(index)
+    }
+
+    fn first_length_octet(&self) -> Option<u8> {
+        (*self).first_length_octet()
+    }
+
+    fn last_length_octet(&self) -> Option<u8> {
+        (*self).last_length_octet()
+    }
+
+    fn labels_iter<'a>(
+        &'a self,
+    ) -> impl 'a
+    + DoubleEndedIterator<Item = &'a RefLabel>
+    + ExactSizeIterator
+    + FusedIterator
+    + Debug
+    + Clone {
+        (*self).labels_iter()
+    }
+
+    fn length_octets_iter(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + FusedIterator + Debug + Clone
     {
-        other.is_parent_of(self)
+        (*self).length_octets_iter()
+    }
+}
+
+// Need to explicitly implement each trait method so that if a more efficient
+// implementation is available for that particular type, it gets used instead of
+// the default one.
+impl<T: DomainName> DomainName for &mut T {
+    fn octet_count(&self) -> u16 {
+        (&**self).octet_count()
     }
 
-    /// Checks if this domain is indeed a child of the `other` domain name. If
-    /// `self` and `other` are the same domain name, the result is `true`.
-    fn is_child_of_ignore_case(&self, other: &T) -> bool
-    where
-        T: DomainNameCompare<Self>,
+    fn label_count(&self) -> u16 {
+        (&**self).label_count()
+    }
+
+    fn is_root(&self) -> bool {
+        (&**self).is_root()
+    }
+
+    fn is_lowercase(&self) -> bool {
+        (&**self).is_lowercase()
+    }
+
+    fn is_uppercase(&self) -> bool {
+        (&**self).is_uppercase()
+    }
+
+    fn is_fully_qualified(&self) -> bool {
+        (&**self).is_fully_qualified()
+    }
+
+    fn is_canonical(&self) -> bool {
+        (&**self).is_canonical()
+    }
+
+    fn is_parent_of<D: DomainName>(&self, other: &D) -> bool {
+        (&**self).is_parent_of(other)
+    }
+
+    fn is_parent_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        (&**self).is_parent_of_ignore_case(other)
+    }
+
+    fn is_child_of<D: DomainName>(&self, other: &D) -> bool {
+        (&**self).is_child_of(other)
+    }
+
+    fn is_child_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        (&**self).is_child_of_ignore_case(other)
+    }
+
+    fn eq_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+        (&**self).eq_ignore_case(other)
+    }
+
+    fn get_label(&self, index: usize) -> Option<&RefLabel> {
+        (&**self).get_label(index)
+    }
+
+    fn first_label(&self) -> Option<&RefLabel> {
+        (&**self).first_label()
+    }
+
+    fn last_label(&self) -> Option<&RefLabel> {
+        (&**self).last_label()
+    }
+
+    fn get_length_octet(&self, index: usize) -> Option<u8> {
+        (&**self).get_length_octet(index)
+    }
+
+    fn first_length_octet(&self) -> Option<u8> {
+        (&**self).first_length_octet()
+    }
+
+    fn last_length_octet(&self) -> Option<u8> {
+        (&**self).last_length_octet()
+    }
+
+    fn labels_iter<'a>(
+        &'a self,
+    ) -> impl 'a
+    + DoubleEndedIterator<Item = &'a RefLabel>
+    + ExactSizeIterator
+    + FusedIterator
+    + Debug
+    + Clone {
+        (&**self).labels_iter()
+    }
+
+    fn length_octets_iter(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + FusedIterator + Debug + Clone
     {
-        other.is_parent_of_ignore_case(self)
+        (&**self).length_octets_iter()
     }
 }
 
-/// This is a compressible domain name. This should only be used in situations where domain name
-/// compression is allowed. In all other cases, use a regular DomainName.
-///
-/// https://www.rfc-editor.org/rfc/rfc1035
-///
-/// "Domain names in messages are expressed in terms of a sequence of labels.
-/// Each label is represented as a one octet length field followed by that
-/// number of octets.  Since every domain name ends with the null label of
-/// the root, a domain name is terminated by a length byte of zero.  The
-/// high order two bits of every length octet must be zero, and the
-/// remaining six bits of the length field limit the label to 63 octets or
-/// less."
-///
-/// "To simplify implementations, the total length of a domain name (i.e.,
-/// label octets and label length octets) is restricted to 255 octets or
-/// less."
-///
-/// "Although labels can contain any 8 bit values in octets that make up a
-/// label, it is strongly recommended that labels follow the preferred
-/// syntax described elsewhere in this memo, which is compatible with
-/// existing host naming conventions.  Name servers and resolvers must
-/// compare labels in a case-insensitive manner (i.e., A=a), assuming ASCII
-/// with zero parity.  Non-alphabetic codes must match exactly."
-///
-/// https://www.rfc-editor.org/rfc/rfc1034
-///
-/// "The labels must follow the rules for ARPANET host names.  They must
-/// start with a letter, end with a letter or digit, and have as interior
-/// characters only letters, digits, and hyphen.  There are also some
-/// restrictions on the length.  Labels must be 63 characters or less."
-///
-/// https://www.rfc-editor.org/rfc/rfc1123#page-72
-///
-/// This RFC lists a number of the requirements for a DNS system.
-///
-/// Domain names cannot be compressed: Those not defined in RFC 1035
-#[derive(Debug, Clone)]
-pub struct DomainNameVec {
-    /// Octets still contains label lengths inline despite `length_octets`
-    /// containing all the length octets. This way, `octets` maintains the exact
-    /// same layout as the wire format for speedy serialization/deserialization.
-    octets: Vec<AsciiChar>,
-    /// A separate list with all the length octets. This allows for reverse
-    /// iteration and keeping track of the number of labels.
-    /// A TinyVec with a length of 14 has a size of 24 bytes. This is the same
-    /// size as a Vec.
-    length_octets: TinyVec<[u8; 14]>,
-}
-
-#[derive(Debug)]
-pub struct MutSubDomainName<'a> {
-    /// Octets still contains label lengths inline despite `length_octets`
-    /// containing all the length octets. This way, `octets` maintains the exact
-    /// same layout as the wire format for speedy serialization/deserialization.
-    octets: &'a mut [AsciiChar],
-    /// A separate list with all the length octets. This allows for reverse
-    /// iteration and keeping track of the number of labels.
-    length_octets: &'a [u8],
-}
-
-#[derive(Debug, Copy, Clone)]
-pub struct SubDomainName<'a> {
-    /// Octets still contains label lengths inline despite `length_octets`
-    /// containing all the length octets. This way, `octets` maintains the exact
-    /// same layout as the wire format for speedy serialization/deserialization.
-    octets: &'a [AsciiChar],
-    /// A separate list with all the length octets. This allows for reverse
-    /// iteration and keeping track of the number of labels.
-    length_octets: &'a [u8],
-}
-
-const_assert!(
-    (MAX_LABEL_OCTETS as usize) <= (u8::MAX as usize),
-    "MAX_LABEL_OCTETS cannot exceed u8::MAX because if it were greater, we would need to represent them with a different type in the `length_octets` fields"
-);
-
-/// Assert all invariants required to ensure that the raw parts of a domain name
-/// are correct and that it is safe to pass those arguments to
-/// `SubDomainName::from_raw_parts()`.
-///
-/// This function is `const`. This means that it can be called at compile time
-/// in a `const` setting where it will cause compilation to fail if the
-/// invariants are not met.
-///
-/// # Panics
-///
-/// This function will panic if any required invariant to ensure that it is safe
-/// to use the arguments with `SubDomainName::from_raw_parts()` are not met.
-pub const fn assert_domain_name_invariants(octets: &[u8], length_octets: &[u8]) {
-    // Verify global invariants
-    // Note that we are allowed to have fewer than  `MIN_OCTETS`
-    // octets.
-    assert!(
-        octets.len() <= MAX_OCTETS as usize,
-        "domain name specified must be valid but its total length exceeds MAX_OCTETS",
-    );
-    assert!(
-        length_octets.len() <= MAX_LABELS as usize,
-        "domain name specified must be valid but its total label count exceeds MAX_LABELS",
-    );
-    let mut length_octets_index = 0;
-    while length_octets_index < length_octets.len() {
-        assert!(
-            (length_octets[length_octets_index] as usize) <= (MAX_LABEL_OCTETS as usize),
-            "domain name specified must be valid but the length of a label exceeds MAX_LABEL_OCTETS",
-        );
-        length_octets_index += 1;
+// Need to explicitly implement each trait method so that if a more efficient
+// implementation is available for that particular type, it gets used instead of
+// the default one.
+impl<T: DomainNameMut> DomainNameMut for &mut T {
+    fn make_lowercase(&mut self) {
+        (*self).make_lowercase();
     }
 
-    assert!(
-        length_octets.is_empty() == octets.is_empty(),
-        "domain name octets can only be empty of length octets is also empty",
-    );
-
-    // Verify that the length octets actually sum up to the total
-    // number of non-length octets in the `octets` field.
-    let mut expected_total_octet_len = 0;
-    let mut length_octets_index = 0;
-    while length_octets_index < length_octets.len() {
-        expected_total_octet_len += length_octets[length_octets_index] as usize;
-        expected_total_octet_len += LENGTH_OCTET_WIDTH;
-        length_octets_index += 1;
+    fn make_uppercase(&mut self) {
+        (*self).make_uppercase();
     }
-    assert!(
-        octets.len() == expected_total_octet_len,
-        "domain name length octets sum must match the count of non-length octets",
-    );
 
-    // Verify that the length octets in `octets` and `length_octets`
-    // are the same.
-    let mut octets_index = 0;
-    let mut length_octets_index = 0;
-    while length_octets_index < length_octets.len() {
-        assert!(
-            octets.len() > octets_index,
-            "domain name octets must align with length octets",
-        );
-        assert!(
-            octets[octets_index] == length_octets[length_octets_index],
-            "domain name octets must align with length octets",
-        );
-        octets_index += (length_octets[length_octets_index] as usize) + LENGTH_OCTET_WIDTH;
-        length_octets_index += 1;
-    }
-    assert!(
-        octets_index == octets.len(),
-        "domain name octets must align with length octets",
-    );
-    assert!(
-        length_octets_index == length_octets.len(),
-        "domain name octets must align with length octets",
-    );
-
-    // Verify that only the last label can be a root label.
-    let mut length_octets_index = 0;
-    while length_octets_index < length_octets.len().saturating_sub(1) {
-        assert!(
-            0 < length_octets[length_octets_index],
-            "domain name specified must be valid but a non-terminating label has a length of zero",
-        );
-        length_octets_index += 1;
+    fn labels_iter_mut<'a>(
+        &'a mut self,
+    ) -> impl 'a + DoubleEndedIterator<Item = &'a mut RefLabel> + ExactSizeIterator + FusedIterator + Debug
+    {
+        (*self).labels_iter_mut()
     }
 }
 
-impl DomainNameVec {
-    /// Verify that the `octets` and `length_octets` fields are in agreement and
-    /// any other obvious invariant violations.
-    fn assert_invariants(&self) {
-        // Note: this function is not `const` because `TinyVec::as_slice()` is
-        //       not currently `const`.
-        assert_domain_name_invariants(self.octets.as_slice(), self.length_octets.as_slice());
-    }
-}
-
-impl SubDomainName<'_> {
-    /// Verify that the `octets` and `length_octets` fields are in agreement and
-    /// any other obvious invariant violations.
-    const fn assert_invariants(&self) {
-        assert_domain_name_invariants(self.octets, self.length_octets);
-    }
-}
-
-impl MutSubDomainName<'_> {
-    /// Verify that the `octets` and `length_octets` fields are in agreement and
-    /// any other obvious invariant violations.
-    const fn assert_invariants(&self) {
-        assert_domain_name_invariants(self.octets, self.length_octets);
-    }
-}
-
-macro_rules! impl_domain_name_debug_assert_invariants {
-    ($domain_type:ty) => {
-        impl $domain_type {
-            /// Verify that the `octets` and `length_octets` fields are in
-            /// agreement and any other obvious invariant violations.
+macro_rules! impl_domain_name {
+    (impl $(( $($impl_generics:tt)+ ))? for $domain_type:ty) => {
+        impl $(<$($impl_generics)+>)? $domain_type {
+            /// Verify that the fields are in agreement and any other obvious
+            /// invariant violations.
             ///
             /// This is a no-op when debug_assertions is not enabled.
-            fn debug_assert_invariants(&self) {
+            pub(super) fn debug_assert_invariants(&self) {
                 // TODO: I call this function all over the place. Make sure to
                 //       remove the extra calls or lock them behind an
                 //       additional feature flag after things are properly
@@ -526,12 +967,12 @@ macro_rules! impl_domain_name_debug_assert_invariants {
                 }
             }
 
-            /// Verify that the `octets` and `length_octets` fields are in agreement and
-            /// any other obvious invariant violations. Transfer ownership to make it
-            /// easy to call on instantiation.
+            /// Verify that the fields are in agreement and any other obvious
+            /// invariant violations. Transfer ownership to make it easy to call
+            /// on instantiation.
             ///
             /// This is a no-op when debug_assertions is not enabled.
-            fn and_debug_assert_invariants(self) -> Self {
+            pub(super) fn and_debug_assert_invariants(self) -> Self {
                 // TODO: I call this function all over the place. Make sure to
                 //       remove the extra calls or lock them behind an
                 //       additional feature flag after things are properly
@@ -540,1618 +981,30 @@ macro_rules! impl_domain_name_debug_assert_invariants {
                 self
             }
         }
-    };
-}
-impl_domain_name_debug_assert_invariants!(DomainNameVec);
-impl_domain_name_debug_assert_invariants!(SubDomainName<'_>);
-impl_domain_name_debug_assert_invariants!(MutSubDomainName<'_>);
 
-impl DomainNameVec {
-    pub fn as_subdomain(&self) -> SubDomainName<'_> {
-        SubDomainName {
-            octets: &self.octets,
-            length_octets: &self.length_octets,
-        }
-        .and_debug_assert_invariants()
-    }
-
-    pub fn as_subdomain_mut(&mut self) -> MutSubDomainName<'_> {
-        MutSubDomainName {
-            octets: &mut self.octets,
-            length_octets: &self.length_octets,
-        }
-        .and_debug_assert_invariants()
-    }
-
-    pub fn to_domain_vec(&self) -> DomainNameVec {
-        self.clone().and_debug_assert_invariants()
-    }
-}
-
-impl<'a> MutSubDomainName<'a> {
-    pub fn as_subdomain(&self) -> SubDomainName<'_> {
-        SubDomainName {
-            octets: self.octets,
-            length_octets: self.length_octets,
-        }
-        .and_debug_assert_invariants()
-    }
-
-    pub fn to_domain_vec(&self) -> DomainNameVec {
-        self.as_subdomain()
-            .to_domain_vec()
-            .and_debug_assert_invariants()
-    }
-}
-
-impl<'a> SubDomainName<'a> {
-    pub fn as_subdomain(&self) -> SubDomainName<'a> {
-        (*self).and_debug_assert_invariants()
-    }
-
-    pub fn to_domain_vec(&self) -> DomainNameVec {
-        DomainNameVec {
-            octets: self.octets.to_vec(),
-            length_octets: TinyVec::from(self.length_octets),
-        }
-        .and_debug_assert_invariants()
-    }
-}
-
-impl DomainNameVec {
-    pub fn new_root() -> Self {
-        Self {
-            octets: vec![0],
-            length_octets: tiny_vec![0],
-        }
-        .and_debug_assert_invariants()
-    }
-
-    pub fn new(string: &AsciiString) -> Result<Self, DomainNameError> {
-        if string.is_empty() {
-            return Err(DomainNameError::EmptyString);
-        }
-        // As long as there are no escaped characters in the string and the name is fully qualified,
-        // we expect the length to just about match the number of characters + 1 for the root label.
-        let mut octets = Vec::with_capacity(string.len() + LENGTH_OCTET_WIDTH);
-        // The first byte represents the length of the first label.
-        octets.push(0);
-        let mut length_octets = TinyVec::new();
-        let mut length_octet_index = 0;
-
-        for escaped_char_result in
-            EscapedCharsEnumerateIter::from(string.iter().copied().enumerate())
-        {
-            match (escaped_char_result, (octets.len() - length_octet_index)) {
-                (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), _) => {
-                    // leading dots are illegal except for the root zone
-                    if string.len() > 1 {
-                        return Err(DomainNameError::LeadingDot);
-                    }
-
-                    length_octets.push(octets[length_octet_index]);
-                    break;
+        impl $(<$($impl_generics)+>)? ::std::fmt::Display for $domain_type {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                if self.is_root() {
+                    return write!(f, ".");
                 }
-                // consecutive dots are never legal
-                (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 1) => {
-                    return Err(DomainNameError::ConsecutiveDots);
+                let mut labels = self.labels_iter();
+                if let Some(label) = labels.next() {
+                    write!(f, "{label}")?;
                 }
-                // a label is found
-                (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 2..) => {
-                    length_octets.push(octets[length_octet_index]);
-
-                    if octets.len() > MAX_OCTETS as usize {
-                        return Err(DomainNameError::LongDomain);
-                    }
-
-                    length_octet_index = octets.len();
-                    octets.push(0);
+                for label in labels {
+                    write!(f, ".{label}")?;
                 }
-                (Ok((_, escapable_char)), _) => {
-                    octets.push(escapable_char.into_unescaped_character());
-                    octets[length_octet_index] += 1;
-
-                    // TODO: Can we optimize this check? It might be able to do once per label as
-                    // long as we still check against the maximum number of octets every time.
-                    if u16::from(octets[length_octet_index]) > MAX_LABEL_OCTETS {
-                        return Err(DomainNameError::LongLabel);
-                    }
-
-                    if octets.len() > MAX_OCTETS as usize {
-                        return Err(DomainNameError::LongDomain);
-                    }
-                }
-                (Err(error), _) => return Err(DomainNameError::ParseError(error)),
-            }
-        }
-
-        if octets.len() >= (length_octet_index + 1) && (octets != [0]) {
-            length_octets.push(octets[length_octet_index]);
-        }
-
-        octets.shrink_to_fit();
-        Ok(Self {
-            octets,
-            length_octets,
-        }
-        .and_debug_assert_invariants())
-    }
-
-    pub fn from_utf8(string: &str) -> Result<Self, DomainNameError> {
-        Self::new(&AsciiString::from_utf8(string)?)
-    }
-
-    pub fn from_labels<T: Label>(labels: Vec<T>) -> Result<Self, DomainNameError> {
-        if labels.is_empty() {
-            return Err(DomainNameError::EmptyString);
-        }
-        let total_octets = labels.len() + (labels.iter().map(T::len).sum::<u16>() as usize);
-        if total_octets > MAX_OCTETS as usize {
-            return Err(DomainNameError::LongDomain);
-        }
-        let mut length_octets = TinyVec::with_capacity(labels.len());
-        let mut octets = Vec::with_capacity(total_octets);
-        for label in labels {
-            let length_octet = label.len() as u8;
-            octets.push(length_octet);
-            octets.extend(label.octets());
-            length_octets.push(length_octet);
-        }
-        Ok(Self {
-            octets,
-            length_octets,
-        }
-        .and_debug_assert_invariants())
-    }
-
-    /// Converts this domain into a fully qualified domain. A domain name is
-    /// fully qualified if it ends with the root label.
-    pub fn make_fully_qualified(&mut self) -> Result<(), MakeFullyQualifiedError> {
-        if self.is_fully_qualified() {
-            Ok(())
-        // aka. Would adding a byte exceed the limit?
-        } else if self.octet_count() >= MAX_OCTETS {
-            Err(MakeFullyQualifiedError::TooManyOctets)
-        } else {
-            self.octets.push(0);
-            self.length_octets.push(0);
-            self.debug_assert_invariants();
-            Ok(())
-        }
-    }
-
-    /// Converts this domain into its canonical form: lowercase and fully
-    /// qualified.
-    pub fn make_canonical(&mut self) -> Result<(), MakeCanonicalError> {
-        match self.make_fully_qualified() {
-            Ok(()) => (),
-            Err(MakeFullyQualifiedError::TooManyOctets) => {
-                return Err(MakeCanonicalError::TooManyOctets);
-            }
-        }
-        self.make_lowercase();
-        self.debug_assert_invariants();
-        Ok(())
-    }
-
-    /// Returns an iterator over the labels of this domain name, starting from
-    /// the left-most label, and iterating towards the right-most label (often,
-    /// the root label).
-    pub fn subdomains_iter<'a>(
-        &'a self,
-    ) -> impl 'a + DoubleEndedIterator<Item = SubDomainName<'a>> + ExactSizeIterator + FusedIterator
-    {
-        SubDomainIter::new(self.as_subdomain())
-    }
-
-    /// Returns an iterator over the sub-domains that make up this domain name,
-    /// starting from the longest sub-domain, and returning shorter domain names
-    /// with each iteration by removing the left-most label.
-    #[inline]
-    pub fn search_domain_iter<'a>(
-        &'a self,
-    ) -> impl 'a + DoubleEndedIterator<Item = Self> + ExactSizeIterator<Item = Self> {
-        SearchDomainIter::new(self)
-    }
-}
-
-impl<'a> SubDomainName<'a> {
-    /// Create a `SubDomainName` from its raw components.
-    ///
-    /// # Safety
-    ///
-    /// The `octets` must be a valid non-compressed wire-encoded domain name,
-    /// although it is not required to be fully qualified. Requirements include:
-    ///
-    ///  - The total number of labels must be less than `MAX_LABELS` (128).
-    ///  - The total length of this field cannot exceed `MAX_OCTETS` (256)
-    ///    bytes.
-    ///  - No single label may exceed a length of `MAX_LABEL_OCTETS` (63) bytes
-    ///    (not including the length octet).
-    ///  - Only the last label may be a root label.
-    ///
-    /// See RFC 1035 for details about this encoding scheme used for the
-    /// `octets`.
-    ///
-    /// The `length_octets` must contain the length octets that appear in
-    /// `octets` in the same order that they appear in `octets`.
-    pub const unsafe fn from_raw_parts(octets: &'a [u8], length_octets: &'a [u8]) -> Self {
-        SubDomainName {
-            octets,
-            length_octets,
-        }
-    }
-
-    /// Divides one domain into two halves at an index.
-    ///
-    /// The first will contain all labels from `[0, mid)` (excluding the index
-    /// `mid` itself) and the second will contain all indices from
-    /// `[mid, label_count)` (excluding the index `label_count` itself).
-    ///
-    /// # Panics
-    ///
-    /// Panics if `mid > label_count`.  For a non-panicking alternative see
-    /// `split_at_checked()`
-    pub fn split_at(&self, mid: usize) -> (SubDomainName<'a>, SubDomainName<'a>) {
-        const_assert!(
-            (MAX_LABELS as usize) < usize::MAX,
-            "MAX_LABELS must be less than usize::MAX because if it were equal to or larger, the `mid` after the end of `length_octets` could not be represented"
-        );
-
-        self.split_at_checked(mid).expect("mid > label_count")
-    }
-
-    /// Divides one domain into two at an index, returning `None` if the domain
-    /// is too short.
-    ///
-    /// If `mid ≤ label_count` returns a pair of domains where the first will
-    /// contain all indices from `[0, mid)` (excluding the index `mid` itself)
-    /// and the second will contain all indices from `[mid, label_count)`
-    /// (excluding the index `label_count` itself).
-    ///
-    /// Otherwise, if `mid > label_count`, returns `None`.
-    pub fn split_at_checked(&self, mid: usize) -> Option<(SubDomainName<'a>, SubDomainName<'a>)> {
-        const_assert!(
-            (MAX_LABELS as usize) < usize::MAX,
-            "MAX_LABELS must be less than usize::MAX because if it were equal to or larger, the `mid` after the end of `length_octets` could not be represented"
-        );
-        const_assert!(
-            (MAX_OCTETS as usize) < usize::MAX,
-            "MAX_OCTETS must be less than usize::MAX because if it were equal to or larger, the `octets_mid` after the end of `octets` could not be represented"
-        );
-
-        let (left_length_octets, right_length_octets) = self.length_octets.split_at_checked(mid)?;
-        // Notes on overflow:
-        //
-        // Since a domain name cannot exceed 256 bytes, the maximum sum of octet
-        // lengths cannot exceed 256 either. Since we bounded the `mid` above,
-        // and `length_octets.len() <= MAX_LABELS (128)`, this sum will never
-        // overflow.
-        let octets_mid = (mid * LENGTH_OCTET_WIDTH)
-            + left_length_octets
-                .iter()
-                .map(|length_octet| *length_octet as usize)
-                .sum::<usize>();
-        let (left_octets, right_octets) = self.octets.split_at(octets_mid);
-
-        Some((
-            Self {
-                octets: left_octets,
-                length_octets: left_length_octets,
-            }
-            .and_debug_assert_invariants(),
-            Self {
-                octets: right_octets,
-                length_octets: right_length_octets,
-            }
-            .and_debug_assert_invariants(),
-        ))
-    }
-
-    /// Returns the first label and all the rest of the labels of the domain, or
-    /// `None` if it is empty.
-    pub fn split_first(&self) -> Option<(&'a RefLabel, SubDomainName<'a>)> {
-        const_assert!(
-            (MAX_LABEL_OCTETS as usize) <= (usize::MAX - LENGTH_OCTET_WIDTH),
-            "MAX_LABEL_OCTETS must be at most `usize::MAX - LENGTH_OCTET_WIDTH` because if it were greater, `+ LENGTH_OCTET_WIDTH` would overflow"
-        );
-
-        let (&first_length_octet, remaining_length_octets) = self.length_octets.split_first()?;
-        let (first_octets, remaining_octets) = self
-            .octets
-            .split_at((first_length_octet as usize) + LENGTH_OCTET_WIDTH);
-
-        Some((
-            RefLabel::from_octets(&first_octets[LENGTH_OCTET_WIDTH..]),
-            Self {
-                octets: remaining_octets,
-                length_octets: remaining_length_octets,
-            }
-            .and_debug_assert_invariants(),
-        ))
-    }
-
-    /// Returns the last label and all the rest of the labels of the domain, or
-    /// `None` if it is empty.
-    pub fn split_last(&self) -> Option<(&'a RefLabel, SubDomainName<'a>)> {
-        let (&last_length_octet, remaining_length_octets) = self.length_octets.split_last()?;
-        let (remaining_octets, last_octets) = self
-            .octets
-            .split_at(self.octets.len() - (last_length_octet as usize) - LENGTH_OCTET_WIDTH);
-
-        Some((
-            RefLabel::from_octets(&last_octets[LENGTH_OCTET_WIDTH..]),
-            Self {
-                octets: remaining_octets,
-                length_octets: remaining_length_octets,
-            }
-            .and_debug_assert_invariants(),
-        ))
-    }
-
-    /// Gets the `n`th label in the domain or `None` if `index` is out of
-    /// bounds.
-    pub fn get(&self, index: usize) -> Option<&'a RefLabel> {
-        let (leading_length_octets, &[length_octet, ..]) =
-            self.length_octets.split_at_checked(index)?
-        else {
-            return None;
-        };
-
-        // Notes on overflow:
-        //
-        // Since a domain name cannot exceed 256 bytes, the maximum sum of octet
-        // lengths cannot exceed 256 either. Since we bounded the `index` above,
-        // and `length_octets.len() <= MAX_LABELS (128)`, this sum will never
-        // overflow.
-        let octets_start = (index * LENGTH_OCTET_WIDTH)
-            + leading_length_octets
-                .iter()
-                .map(|length_octet| *length_octet as usize)
-                .sum::<usize>();
-        Some(RefLabel::from_octets(
-            &self.octets[(octets_start + LENGTH_OCTET_WIDTH)
-                ..(octets_start + (length_octet as usize) + LENGTH_OCTET_WIDTH)],
-        ))
-    }
-
-    /// Returns the first label of the domain, or `None` if it is empty.
-    pub fn first(&self) -> Option<&'a RefLabel> {
-        let &length_octet = self.length_octets.first()?;
-        Some(RefLabel::from_octets(
-            &self.octets[LENGTH_OCTET_WIDTH..((length_octet as usize) + LENGTH_OCTET_WIDTH)],
-        ))
-    }
-
-    /// Returns the last label of the domain, or `None` if it is empty.
-    pub fn last(&self) -> Option<&'a RefLabel> {
-        let &length_octet = self.length_octets.last()?;
-        Some(RefLabel::from_octets(
-            &self.octets[(self.octets.len() - (length_octet as usize))..],
-        ))
-    }
-
-    fn into_labels_iter(
-        self,
-    ) -> impl 'a
-    + DoubleEndedIterator<Item = &'a RefLabel>
-    + ExactSizeIterator
-    + FusedIterator
-    + Debug
-    + Copy {
-        LabelIter::new(self)
-    }
-
-    /// Returns an iterator over the labels of this domain name, starting from
-    /// the left-most label, and iterating towards the right-most label (often,
-    /// the root label).
-    pub fn subdomains_iter(
-        &self,
-    ) -> impl 'a + DoubleEndedIterator<Item = SubDomainName<'a>> + ExactSizeIterator + FusedIterator
-    {
-        SubDomainIter::new(*self)
-    }
-}
-
-impl DomainName for SubDomainName<'_> {
-    fn octet_count(&self) -> u16 {
-        const_assert!(
-            MAX_OCTETS as usize <= u16::MAX as usize,
-            "MAX_OCTETS cannot exceed u16::MAX because u16s are used for the octet count"
-        );
-
-        self.octets.len() as u16
-    }
-
-    fn label_count(&self) -> u16 {
-        const_assert!(
-            MAX_LABELS as usize <= u16::MAX as usize,
-            "MAX_LABELS cannot exceed u16::MAX because u16s are used for the label count"
-        );
-
-        self.length_octets.len() as u16
-    }
-
-    fn is_root(&self) -> bool {
-        self.octets == [0]
-    }
-
-    fn is_fully_qualified(&self) -> bool {
-        self.length_octets.last().is_some_and(|octet| *octet == 0)
-    }
-
-    fn labels_iter<'a>(
-        &'a self,
-    ) -> impl 'a
-    + DoubleEndedIterator<Item = &'a RefLabel>
-    + ExactSizeIterator
-    + FusedIterator
-    + Debug
-    + Copy {
-        (*self).into_labels_iter()
-    }
-}
-
-macro_rules! impl_domain_name_as_subdomain {
-    ($domain_type:ty) => {
-        impl DomainName for $domain_type {
-            fn octet_count(&self) -> u16 {
-                self.as_subdomain().octet_count()
-            }
-
-            fn label_count(&self) -> u16 {
-                self.as_subdomain().label_count()
-            }
-
-            fn is_root(&self) -> bool {
-                self.as_subdomain().is_root()
-            }
-
-            fn is_lowercase(&self) -> bool {
-                self.as_subdomain().is_lowercase()
-            }
-
-            fn is_uppercase(&self) -> bool {
-                self.as_subdomain().is_uppercase()
-            }
-
-            fn is_fully_qualified(&self) -> bool {
-                self.as_subdomain().is_fully_qualified()
-            }
-
-            fn is_canonical(&self) -> bool {
-                self.as_subdomain().is_canonical()
-            }
-
-            fn first_label<'a>(&self) -> Option<&RefLabel> {
-                self.as_subdomain().first()
-            }
-
-            fn last_label<'a>(&self) -> Option<&RefLabel> {
-                self.as_subdomain().last()
-            }
-
-            fn labels_iter<'a>(
-                &'a self,
-            ) -> impl 'a
-            + DoubleEndedIterator<Item = &'a RefLabel>
-            + ExactSizeIterator
-            + FusedIterator
-            + Debug
-            + Copy {
-                self.as_subdomain().into_labels_iter()
+                Ok(())
             }
         }
     };
 }
 
-impl_domain_name_as_subdomain!(DomainNameVec);
-impl_domain_name_as_subdomain!(MutSubDomainName<'_>);
-
-impl DomainNameMut for MutSubDomainName<'_> {
-    fn make_lowercase(&mut self) {
-        // Most hardware is very capable of performing ASCII vector operations.
-        // So instead of iterating over each label and performing
-        // `make_ascii_lowercase()` on each, we can instead replace all bytes
-        // with lowercase version very quickly, and then restore the length
-        // bytes from the `length_octets` field.
-        self.octets.make_ascii_lowercase();
-        self.restore_from_length_octets();
-        self.debug_assert_invariants();
-    }
-
-    fn make_uppercase(&mut self) {
-        // Most hardware is very capable of performing ASCII vector operations.
-        // So instead of iterating over each label and performing
-        // `make_ascii_uppercase()` on each, we can instead replace all bytes
-        // with uppercase version very quickly, and then restore the length
-        // bytes from the `length_octets` field.
-        self.octets.make_ascii_uppercase();
-        self.restore_from_length_octets();
-        self.debug_assert_invariants();
-    }
-}
-
-impl DomainNameMut for DomainNameVec {
-    fn make_lowercase(&mut self) {
-        self.as_subdomain_mut().make_lowercase();
-        self.debug_assert_invariants();
-    }
-
-    fn make_uppercase(&mut self) {
-        self.as_subdomain_mut().make_uppercase();
-        self.debug_assert_invariants();
-    }
-}
-
-impl MutSubDomainName<'_> {
-    /// Restores the length octets in the `octets` field by copying them from
-    /// the `length_octets` field.
-    ///
-    /// This allows us to perform operations on the `octets` field that assume
-    /// the `octets` field is made of ASCII characters and therefore might
-    /// corrupt the length octets, and then restore the `octets` field to a
-    /// valid state using the `length_octets` field.
-    fn restore_from_length_octets(&mut self) {
-        let mut index = 0;
-        for &length_octet in self.length_octets {
-            // TODO: Consider checking the performance of this operation. Would
-            //       an unchecked index make sense here? Do we have strong
-            //       enough guarantees about the correctness of the length
-            //       octets and bounds of the vector?
-            self.octets[index] = length_octet;
-            index += (length_octet as usize) + LENGTH_OCTET_WIDTH;
-        }
-
-        // The invariants may not be upheld before this point in this function.
-        // But once the operation is completed, they should be upheld again.
-        self.debug_assert_invariants();
-    }
-
-    pub fn as_lowercase(&self) -> DomainNameVec {
-        let mut uppercase_domain = self.to_domain_vec();
-        uppercase_domain.make_lowercase();
-        uppercase_domain.and_debug_assert_invariants()
-    }
-
-    pub fn as_uppercase(&self) -> DomainNameVec {
-        let mut uppercase_domain = self.to_domain_vec();
-        uppercase_domain.make_uppercase();
-        uppercase_domain.and_debug_assert_invariants()
-    }
-
-    pub fn as_fully_qualified(&self) -> Result<DomainNameVec, MakeFullyQualifiedError> {
-        if self.is_fully_qualified() {
-            Ok(self.to_domain_vec())
-        // aka. Would adding a byte exceed the limit?
-        } else if self.octets.len() >= MAX_OCTETS as usize {
-            Err(MakeFullyQualifiedError::TooManyOctets)
-        } else {
-            let mut octets = Vec::with_capacity(self.octets.len() + LENGTH_OCTET_WIDTH);
-            octets.extend_from_slice(self.octets);
-            octets.push(0);
-
-            let mut length_octets =
-                TinyVec::with_capacity(self.length_octets.len() + LENGTH_OCTET_WIDTH);
-            length_octets.extend_from_slice(self.length_octets);
-            length_octets.push(0);
-
-            Ok(DomainNameVec {
-                octets,
-                length_octets,
-            }
-            .and_debug_assert_invariants())
-        }
-    }
-
-    pub fn as_canonical(&self) -> Result<DomainNameVec, MakeCanonicalError> {
-        let mut domain = match self.as_fully_qualified() {
-            Ok(domain) => domain,
-            Err(MakeFullyQualifiedError::TooManyOctets) => {
-                return Err(MakeCanonicalError::TooManyOctets);
-            }
-        };
-        domain.make_lowercase();
-        domain.debug_assert_invariants();
-        Ok(domain)
-    }
-
-    /// Returns an iterator over the labels of this domain name, starting from
-    /// the left-most label, and iterating towards the right-most label (often,
-    /// the root label).
-    pub fn subdomains_iter<'a>(
-        &'a self,
-    ) -> impl 'a + DoubleEndedIterator<Item = SubDomainName<'a>> + ExactSizeIterator + FusedIterator
-    {
-        SubDomainIter::new(self.as_subdomain())
-    }
-}
-
-impl PartialEq for SubDomainName<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.octets == other.octets
-    }
-}
-impl PartialEq<MutSubDomainName<'_>> for SubDomainName<'_> {
-    fn eq(&self, other: &MutSubDomainName<'_>) -> bool {
-        self.eq(&other.as_subdomain())
-    }
-}
-impl PartialEq<DomainNameVec> for SubDomainName<'_> {
-    fn eq(&self, other: &DomainNameVec) -> bool {
-        self.eq(&other.as_subdomain())
-    }
-}
-impl Eq for SubDomainName<'_> {}
-impl Hash for SubDomainName<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.octets.hash(state);
-    }
-}
-
-impl PartialEq for MutSubDomainName<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_subdomain().eq(&other.as_subdomain())
-    }
-}
-impl PartialEq<SubDomainName<'_>> for MutSubDomainName<'_> {
-    fn eq(&self, other: &SubDomainName<'_>) -> bool {
-        self.as_subdomain().eq(&other.as_subdomain())
-    }
-}
-impl PartialEq<DomainNameVec> for MutSubDomainName<'_> {
-    fn eq(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain().eq(&other.as_subdomain())
-    }
-}
-impl Eq for MutSubDomainName<'_> {}
-impl Hash for MutSubDomainName<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.as_subdomain().hash(state);
-    }
-}
-
-impl PartialEq for DomainNameVec {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_subdomain().eq(&other.as_subdomain())
-    }
-}
-impl PartialEq<SubDomainName<'_>> for DomainNameVec {
-    fn eq(&self, other: &SubDomainName<'_>) -> bool {
-        self.as_subdomain().eq(&other.as_subdomain())
-    }
-}
-impl PartialEq<MutSubDomainName<'_>> for DomainNameVec {
-    fn eq(&self, other: &MutSubDomainName<'_>) -> bool {
-        self.as_subdomain().eq(&other.as_subdomain())
-    }
-}
-impl Eq for DomainNameVec {}
-impl Hash for DomainNameVec {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.as_subdomain().hash(state);
-    }
-}
-
-impl Display for SubDomainName<'_> {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.is_root() {
-            return write!(f, ".");
-        }
-
-        let mut labels = self.labels_iter();
-        if let Some(label) = labels.next() {
-            write!(f, "{label}")?;
-        }
-        for label in labels {
-            write!(f, ".{label}")?;
-        }
-        Ok(())
-    }
-}
-impl Display for MutSubDomainName<'_> {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_subdomain())
-    }
-}
-impl Display for DomainNameVec {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_subdomain())
-    }
-}
-
-impl DomainNameCompare<SubDomainName<'_>> for SubDomainName<'_> {
-    fn eq_ignore_case(&self, other: &SubDomainName) -> bool {
-        (self.octet_count() == other.octet_count())
-            && (self.label_count() == other.label_count())
-            && self
-                .labels_iter()
-                .map(CaseInsensitive)
-                .eq(other.labels_iter().map(CaseInsensitive))
-    }
-
-    fn is_parent_of(&self, other: &SubDomainName) -> bool {
-        (self.octet_count() <= other.octet_count())
-            && (self.label_count() <= other.label_count())
-            // Entire parent is contained by the other (other = subdomain)
-            && self.labels_iter()
-                .map(CaseSensitive)
-                .rev()
-                .zip(other.labels_iter().map(CaseSensitive).rev())
-                .all(|(self_label, child_label)| self_label == child_label)
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &SubDomainName) -> bool {
-        (self.octet_count() <= other.octet_count())
-            && (self.label_count() <= other.label_count())
-            // Entire parent is contained by the other (other = subdomain)
-            && self.labels_iter()
-                .map(CaseSensitive)
-                .rev()
-                .zip(other.labels_iter().map(CaseSensitive).rev())
-                .all(|(self_label, child_label)| self_label == child_label)
-    }
-}
-impl DomainNameCompare<MutSubDomainName<'_>> for SubDomainName<'_> {
-    fn eq_ignore_case(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain().eq_ignore_case(&other.as_subdomain())
-    }
-
-    fn is_parent_of(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain().is_parent_of(&other.as_subdomain())
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain()
-            .is_parent_of_ignore_case(&other.as_subdomain())
-    }
-}
-impl DomainNameCompare<DomainNameVec> for SubDomainName<'_> {
-    fn eq_ignore_case(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain().eq_ignore_case(&other.as_subdomain())
-    }
-
-    fn is_parent_of(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain().is_parent_of(&other.as_subdomain())
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain()
-            .is_parent_of_ignore_case(&other.as_subdomain())
-    }
-}
-impl DomainNameCompare<MutSubDomainName<'_>> for MutSubDomainName<'_> {
-    fn eq_ignore_case(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain().eq_ignore_case(&other.as_subdomain())
-    }
-
-    fn is_parent_of(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain().is_parent_of(&other.as_subdomain())
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain()
-            .is_parent_of_ignore_case(&other.as_subdomain())
-    }
-}
-impl DomainNameCompare<SubDomainName<'_>> for MutSubDomainName<'_> {
-    fn eq_ignore_case(&self, other: &SubDomainName) -> bool {
-        self.as_subdomain().eq_ignore_case(&other.as_subdomain())
-    }
-
-    fn is_parent_of(&self, other: &SubDomainName) -> bool {
-        self.as_subdomain().is_parent_of(&other.as_subdomain())
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &SubDomainName) -> bool {
-        self.as_subdomain()
-            .is_parent_of_ignore_case(&other.as_subdomain())
-    }
-}
-impl DomainNameCompare<DomainNameVec> for MutSubDomainName<'_> {
-    fn eq_ignore_case(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain().eq_ignore_case(&other.as_subdomain())
-    }
-
-    fn is_parent_of(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain().is_parent_of(&other.as_subdomain())
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain()
-            .is_parent_of_ignore_case(&other.as_subdomain())
-    }
-}
-impl DomainNameCompare<DomainNameVec> for DomainNameVec {
-    fn eq_ignore_case(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain().eq_ignore_case(&other.as_subdomain())
-    }
-
-    fn is_parent_of(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain().is_parent_of(&other.as_subdomain())
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &DomainNameVec) -> bool {
-        self.as_subdomain()
-            .is_parent_of_ignore_case(&other.as_subdomain())
-    }
-}
-impl DomainNameCompare<SubDomainName<'_>> for DomainNameVec {
-    fn eq_ignore_case(&self, other: &SubDomainName) -> bool {
-        self.as_subdomain().eq_ignore_case(&other.as_subdomain())
-    }
-
-    fn is_parent_of(&self, other: &SubDomainName) -> bool {
-        self.as_subdomain().is_parent_of(&other.as_subdomain())
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &SubDomainName) -> bool {
-        self.as_subdomain()
-            .is_parent_of_ignore_case(&other.as_subdomain())
-    }
-}
-impl DomainNameCompare<MutSubDomainName<'_>> for DomainNameVec {
-    fn eq_ignore_case(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain().eq_ignore_case(&other.as_subdomain())
-    }
-
-    fn is_parent_of(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain().is_parent_of(&other.as_subdomain())
-    }
-
-    fn is_parent_of_ignore_case(&self, other: &MutSubDomainName) -> bool {
-        self.as_subdomain()
-            .is_parent_of_ignore_case(&other.as_subdomain())
-    }
-}
-
-impl Add for DomainNameVec {
-    type Output = Result<Self, DomainNameError>;
-
-    #[inline]
-    fn add(self, rhs: Self) -> Self::Output {
-        if self.is_fully_qualified() {
-            // If it is fully qualified, it already ends in a dot.
-            // To add a domain to the end, you would need to add a dot between
-            // them, resulting in consecutive dots.
-            // This might warrant a new error value.
-            return Err(DomainNameError::ConsecutiveDots);
-        }
-
-        if (self.octet_count() + rhs.octet_count()) > MAX_OCTETS {
-            return Err(DomainNameError::LongDomain);
-        }
-
-        let mut octets = self.octets.clone();
-        octets.extend(rhs.octets);
-        let mut length_octets = self.length_octets.clone();
-        length_octets.extend(rhs.length_octets);
-
-        Ok(Self {
-            octets,
-            length_octets,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LabelIter<'a> {
-    domain: SubDomainName<'a>,
-}
-
-impl<'a> LabelIter<'a> {
-    pub fn new(domain_name: SubDomainName<'a>) -> Self {
-        Self {
-            domain: domain_name.and_debug_assert_invariants(),
-        }
-    }
-}
-
-impl<'a> Iterator for LabelIter<'a> {
-    type Item = &'a RefLabel;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (first, remaining) = self.domain.split_first()?;
-        self.domain = remaining.and_debug_assert_invariants();
-        Some(first)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = self.domain.length_octets.len();
-        (size, Some(size))
-    }
-
-    fn count(self) -> usize {
-        self.domain.length_octets.len()
-    }
-
-    fn last(self) -> Option<Self::Item> {
-        self.domain.last()
-    }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        // Unlike generic iterators, it is safe to use `saturating_add()` to
-        // increment `n` because if `n` is `usize::MAX`, it is already past the
-        // last label of the domain name so it will return `None` either way.
-        match self.domain.split_at_checked(n.saturating_add(1)) {
-            Some((left, right)) => {
-                self.domain = right.and_debug_assert_invariants();
-                left.last()
-            }
-            None => {
-                self.domain = SubDomainName {
-                    octets: &[],
-                    length_octets: &[],
-                }
-                .and_debug_assert_invariants();
-                None
-            }
-        }
-    }
-}
-
-impl<'a> DoubleEndedIterator for LabelIter<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        let (last, remaining) = self.domain.split_last()?;
-        self.domain = remaining.and_debug_assert_invariants();
-        Some(last)
-    }
-
-    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
-        if n >= self.domain.length_octets.len() {
-            self.domain = SubDomainName {
-                octets: &[],
-                length_octets: &[],
-            }
-            .and_debug_assert_invariants();
-            None
-        } else {
-            let (left, right) = self.domain.split_at(
-                self.domain
-                    .length_octets
-                    .len()
-                    .saturating_sub(n.saturating_add(1)),
-            );
-            self.domain = left.and_debug_assert_invariants();
-            right.first()
-        }
-    }
-}
-
-impl<'a> ExactSizeIterator for LabelIter<'a> {}
-impl<'a> FusedIterator for LabelIter<'a> {}
-
-#[derive(Debug, Clone, Copy)]
-struct SubDomainIter<'a> {
-    domain: SubDomainName<'a>,
-    /// The number of times a `SubDomainName` has been taken from the back of
-    /// the iterator. Need to keep track of this value to know when to end, stop
-    /// returning values.
-    ///
-    /// Using a `u8` to represent this length is ok, because it can be at most
-    /// `MAX_LABELS`, which is less than `u8::MAX`.
-    consumed_tail: u8,
-}
-
-const_assert!(
-    (MAX_LABELS as usize) <= (u8::MAX as usize),
-    "MAX_LABELS cannot exceed u8::MAX because a u8 is used to represent a label count in SubDomainIter"
-);
-
-impl<'a> SubDomainIter<'a> {
-    pub fn new(domain_name: SubDomainName<'a>) -> Self {
-        Self {
-            domain: domain_name.and_debug_assert_invariants(),
-            consumed_tail: 0,
-        }
-    }
-}
-
-impl<'a> Iterator for SubDomainIter<'a> {
-    type Item = SubDomainName<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if (self.consumed_tail as usize) >= self.domain.length_octets.len() {
-            self.domain = SubDomainName {
-                octets: &[],
-                length_octets: &[],
-            }
-            .and_debug_assert_invariants();
-            None
-        } else {
-            let (_, remaining) = self.domain.split_first()?;
-            Some(std::mem::replace(
-                &mut self.domain,
-                remaining.and_debug_assert_invariants(),
-            ))
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = self
-            .domain
-            .length_octets
-            .len()
-            .saturating_sub(self.consumed_tail as usize);
-        (size, Some(size))
-    }
-
-    fn count(self) -> usize {
-        self.domain
-            .length_octets
-            .len()
-            .saturating_sub(self.consumed_tail as usize)
-    }
-
-    fn last(mut self) -> Option<Self::Item> {
-        self.next_back()
-    }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        if ((self.consumed_tail as usize) + n) >= self.domain.length_octets.len() {
-            self.domain = SubDomainName {
-                octets: &[],
-                length_octets: &[],
-            }
-            .and_debug_assert_invariants();
-            None
-        } else {
-            let (_, remaining) = self.domain.split_at(n);
-            self.domain = remaining.and_debug_assert_invariants();
-            self.next()
-        }
-    }
-}
-
-impl<'a> DoubleEndedIterator for SubDomainIter<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if (self.consumed_tail as usize) >= self.domain.length_octets.len() {
-            self.domain = SubDomainName {
-                octets: &[],
-                length_octets: &[],
-            }
-            .and_debug_assert_invariants();
-            None
-        } else {
-            let (_, back) = self
-                .domain
-                .split_at(self.domain.length_octets.len() - (self.consumed_tail as usize) - 1);
-            self.consumed_tail = self.consumed_tail.saturating_add(1);
-            Some(back.and_debug_assert_invariants())
-        }
-    }
-
-    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
-        if ((self.consumed_tail as usize) + n) >= self.domain.length_octets.len() {
-            self.domain = SubDomainName {
-                octets: &[],
-                length_octets: &[],
-            }
-            .and_debug_assert_invariants();
-            None
-        } else {
-            let (_, back) = self
-                .domain
-                .split_at(self.domain.length_octets.len() - (self.consumed_tail as usize) - n - 1);
-            self.consumed_tail = self.consumed_tail.saturating_add(n as u8);
-            Some(back)
-        }
-    }
-}
-
-impl<'a> ExactSizeIterator for SubDomainIter<'a> {}
-impl<'a> FusedIterator for SubDomainIter<'a> {}
-
-#[derive(Debug, Clone, Copy)]
-struct SearchDomainIter<'a> {
-    name: &'a DomainNameVec,
-    next_octet_index: u8,
-    next_length_index: u8,
-    last_octet_index: u8,
-    last_length_index: u8,
-}
-
-impl<'a> SearchDomainIter<'a> {
-    pub fn new(domain_name: &'a DomainNameVec) -> Self {
-        domain_name.debug_assert_invariants();
-        Self {
-            name: domain_name,
-            next_octet_index: 0,
-            next_length_index: 0,
-            last_octet_index: domain_name.octets.len() as u8,
-            last_length_index: domain_name.length_octets.len() as u8,
-        }
-    }
-}
-
-impl<'a> Iterator for SearchDomainIter<'a> {
-    type Item = DomainNameVec;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.next_length_index < self.last_length_index {
-            let octet_index = self.next_octet_index;
-            let length_octet_index = self.next_length_index;
-            self.next_octet_index += self.name.length_octets[length_octet_index as usize] + 1;
-            self.next_length_index += 1;
-            Some(DomainNameVec {
-                octets: self.name.octets[(octet_index as usize)..].to_vec(),
-                length_octets: TinyVec::from(
-                    &self.name.length_octets[(length_octet_index as usize)..],
-                ),
-            })
-        } else {
-            None
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = (self.last_length_index as usize) - (self.next_length_index as usize);
-        (size, Some(size))
-    }
-}
-
-impl<'a> DoubleEndedIterator for SearchDomainIter<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.next_length_index < self.last_length_index {
-            self.last_octet_index -=
-                self.name.length_octets[(self.last_length_index as usize) - 1] + 1;
-            self.last_length_index -= 1;
-            Some(DomainNameVec {
-                octets: self.name.octets[(self.last_octet_index as usize)..].to_vec(),
-                length_octets: TinyVec::from(
-                    &self.name.length_octets[(self.last_length_index as usize)..],
-                ),
-            })
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a> ExactSizeIterator for SearchDomainIter<'a> {}
-impl<'a> FusedIterator for SearchDomainIter<'a> {}
-
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for super::CompressibleDomainVec {}
-    impl Sealed for super::CompressibleSubDomain<'_> {}
-    impl Sealed for super::CompressibleMutSubDomain<'_> {}
-    impl Sealed for super::IncompressibleDomainVec {}
-    impl Sealed for super::IncompressibleSubDomain<'_> {}
-    impl Sealed for super::IncompressibleMutSubDomain<'_> {}
-}
-
-pub trait DomainNameCompression: sealed::Sealed {}
-impl DomainNameCompression for CompressibleDomainVec {}
-impl DomainNameCompression for CompressibleSubDomain<'_> {}
-impl DomainNameCompression for CompressibleMutSubDomain<'_> {}
-impl DomainNameCompression for IncompressibleDomainVec {}
-impl DomainNameCompression for IncompressibleSubDomain<'_> {}
-impl DomainNameCompression for IncompressibleMutSubDomain<'_> {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CompressibleDomainVec(pub DomainNameVec);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CompressibleSubDomain<'a>(pub SubDomainName<'a>);
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct CompressibleMutSubDomain<'a>(pub MutSubDomainName<'a>);
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IncompressibleDomainVec(pub DomainNameVec);
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IncompressibleSubDomain<'a>(pub SubDomainName<'a>);
-#[derive(Debug, PartialEq, Eq, Hash)]
-pub struct IncompressibleMutSubDomain<'a>(pub MutSubDomainName<'a>);
-
-impl Deref for CompressibleDomainVec {
-    type Target = DomainNameVec;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl<'a> Deref for CompressibleSubDomain<'a> {
-    type Target = SubDomainName<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl<'a> Deref for CompressibleMutSubDomain<'a> {
-    type Target = MutSubDomainName<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl Deref for IncompressibleDomainVec {
-    type Target = DomainNameVec;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl<'a> Deref for IncompressibleSubDomain<'a> {
-    type Target = SubDomainName<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl<'a> Deref for IncompressibleMutSubDomain<'a> {
-    type Target = MutSubDomainName<'a>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for CompressibleDomainVec {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl<'a> DerefMut for CompressibleSubDomain<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl<'a> DerefMut for CompressibleMutSubDomain<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl DerefMut for IncompressibleDomainVec {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl<'a> DerefMut for IncompressibleSubDomain<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-impl<'a> DerefMut for IncompressibleMutSubDomain<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl ToWire for CompressibleSubDomain<'_> {
-    #[inline]
-    fn to_wire_format<'a, 'b>(
-        &self,
-        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::domain_name::CompressionMap>,
-    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
-    where
-        'a: 'b,
-    {
-        if let Some(compression_map) = compression {
-            let mut length_byte_index = 0_usize;
-            while length_byte_index < self.octets.len() {
-                if let Some(pointer) =
-                    compression_map.find_sequence(&self.octets[length_byte_index..])
-                {
-                    // The pointer cannot make use of the first two bits. These are reserved for
-                    // use indicating that this label is a pointer. If they are needed for the
-                    // pointer itself, the pointer would be corrupted.
-                    //
-                    // To solve this issue, we will just not use a pointer if using one would
-                    // lead to a corrupted pointer. Easy as that.
-                    if (pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000 {
-                        break;
-                    }
-                    wire.write_bytes(&self.octets[..length_byte_index])?;
-                    return pointer.to_wire_format(wire, compression);
-                } else {
-                    // Don't insert malformed pointers. Otherwise, it might overwrite an
-                    // existing well-formed pointer. If we reach an index that would form a
-                    // malformed pointer, then none of the pointers after this one will be well
-                    // formed.
-                    let pointer = wire.current_len() as u16;
-                    if ((pointer & 0b1100_0000_0000_0000) != 0b0000_0000_0000_0000)
-                        || (self.octets[length_byte_index..] != [0])
-                    {
-                        break;
-                    }
-                    length_byte_index += (self.octets[length_byte_index] as usize) + 1;
-                }
-            }
-        }
-
-        wire.write_bytes(&self.octets)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        self.octets.len() as u16
-    }
-}
-impl ToWire for CompressibleMutSubDomain<'_> {
-    #[inline]
-    fn to_wire_format<'a, 'b>(
-        &self,
-        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::domain_name::CompressionMap>,
-    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
-    where
-        'a: 'b,
-    {
-        CompressibleSubDomain(self.as_subdomain()).to_wire_format(wire, compression)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        CompressibleSubDomain(self.as_subdomain()).serial_length()
-    }
-}
-impl ToWire for CompressibleDomainVec {
-    #[inline]
-    fn to_wire_format<'a, 'b>(
-        &self,
-        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::domain_name::CompressionMap>,
-    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
-    where
-        'a: 'b,
-    {
-        CompressibleSubDomain(self.as_subdomain()).to_wire_format(wire, compression)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        CompressibleSubDomain(self.as_subdomain()).serial_length()
-    }
-}
-impl ToWire for IncompressibleSubDomain<'_> {
-    #[inline]
-    fn to_wire_format<'a, 'b>(
-        &self,
-        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        _compression: &mut Option<crate::types::domain_name::CompressionMap>,
-    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
-    where
-        'a: 'b,
-    {
-        // Providing a None type compression map to the CompressibleSubDomain
-        // disables domain name compression while allowing us to re-use the rest
-        // of its implementation.
-        CompressibleSubDomain(self.0).to_wire_format(wire, &mut None)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        CompressibleSubDomain(self.0).serial_length()
-    }
-}
-impl ToWire for IncompressibleMutSubDomain<'_> {
-    #[inline]
-    fn to_wire_format<'a, 'b>(
-        &self,
-        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::domain_name::CompressionMap>,
-    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
-    where
-        'a: 'b,
-    {
-        IncompressibleSubDomain(self.as_subdomain()).to_wire_format(wire, compression)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        IncompressibleSubDomain(self.as_subdomain()).serial_length()
-    }
-}
-impl ToWire for IncompressibleDomainVec {
-    #[inline]
-    fn to_wire_format<'a, 'b>(
-        &self,
-        wire: &'b mut crate::serde::wire::write_wire::WriteWire<'a>,
-        compression: &mut Option<crate::types::domain_name::CompressionMap>,
-    ) -> Result<(), crate::serde::wire::write_wire::WriteWireError>
-    where
-        'a: 'b,
-    {
-        IncompressibleSubDomain(self.as_subdomain()).to_wire_format(wire, compression)
-    }
-
-    #[inline]
-    fn serial_length(&self) -> u16 {
-        IncompressibleSubDomain(self.as_subdomain()).serial_length()
-    }
-}
-
-impl FromWire for CompressibleDomainVec {
-    #[inline]
-    fn from_wire_format<'a, 'b>(
-        wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>,
-    ) -> Result<Self, crate::serde::wire::read_wire::ReadWireError>
-    where
-        Self: Sized,
-        'a: 'b,
-    {
-        let mut pointer_count = 0;
-        let mut fully_qualified = false;
-        let mut octets = ArrayVec::<[u8; MAX_OCTETS as usize]>::new();
-        let mut length_octets = TinyVec::new();
-
-        let mut final_offset = wire.current_offset();
-
-        while !fully_qualified {
-            // Peek at the first byte. It is read differently depending on the value.
-            let first_byte = u8::from_wire_format(&mut wire.get_as_read_wire(1)?)?;
-
-            match first_byte & 0b1100_0000 {
-                0b0000_0000 => {
-                    let label_length = first_byte;
-                    if (octets.len() + 1 + (label_length as usize)) > MAX_OCTETS as usize {
-                        return Err(DomainNameError::LongDomain)?;
-                    }
-
-                    octets.extend_from_slice(wire.take((label_length as usize) + 1)?);
-                    length_octets.push(label_length);
-                    fully_qualified = label_length == 0;
-                }
-                0b1100_0000 => {
-                    pointer_count += 1;
-                    if pointer_count > MAX_COMPRESSION_POINTERS {
-                        return Err(DomainNameError::TooManyPointers)?;
-                    }
-
-                    let pointer_bytes = u16::from_wire_format(wire)?;
-
-                    // The final offset will be determined by the position after the first pointer.
-                    // Once all the redirects have been followed, this is where we want our buffer
-                    // to return to.
-                    if pointer_count == 1 {
-                        final_offset = wire.current_offset();
-                    }
-
-                    let pointer = pointer_bytes & 0b0011_1111_1111_1111;
-                    // The pointer must point backwards in the wire. Forward pointers
-                    // are forbidden.
-                    if (pointer as usize) > wire.current_offset() {
-                        return Err(DomainNameError::ForwardPointers)?;
-                    }
-
-                    wire.set_offset(pointer as usize)?;
-                }
-                _ => {
-                    // 0x80 and 0x40 are reserved
-                    return Err(DomainNameError::BadRData)?;
-                }
-            }
-        }
-
-        if pointer_count != 0 {
-            wire.set_offset(final_offset)?;
-        }
-
-        let octets = octets.to_vec();
-        Ok(Self(DomainNameVec {
-            octets,
-            length_octets,
-        }))
-    }
-}
-impl FromWire for IncompressibleDomainVec {
-    #[inline]
-    fn from_wire_format<'a, 'b>(
-        wire: &'b mut crate::serde::wire::read_wire::ReadWire<'a>,
-    ) -> Result<Self, crate::serde::wire::read_wire::ReadWireError>
-    where
-        Self: Sized,
-        'a: 'b,
-    {
-        // IncompressibleDomainVec is REQUIRED to decompress domain names if
-        // compression was used.
-        Ok(Self(CompressibleDomainVec::from_wire_format(wire)?.0))
-    }
-}
-
-impl ToPresentation for SubDomainName<'_> {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        out_buffer.push(self.to_string())
-    }
-}
-impl ToPresentation for MutSubDomainName<'_> {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        self.as_subdomain().to_presentation_format(out_buffer);
-    }
-}
-impl ToPresentation for DomainNameVec {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        self.as_subdomain().to_presentation_format(out_buffer);
-    }
-}
-impl ToPresentation for CompressibleSubDomain<'_> {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        self.as_subdomain().to_presentation_format(out_buffer);
-    }
-}
-impl ToPresentation for CompressibleMutSubDomain<'_> {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        self.as_subdomain().to_presentation_format(out_buffer);
-    }
-}
-impl ToPresentation for CompressibleDomainVec {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        self.as_subdomain().to_presentation_format(out_buffer);
-    }
-}
-impl ToPresentation for IncompressibleSubDomain<'_> {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        self.as_subdomain().to_presentation_format(out_buffer);
-    }
-}
-impl ToPresentation for IncompressibleMutSubDomain<'_> {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        self.as_subdomain().to_presentation_format(out_buffer);
-    }
-}
-impl ToPresentation for IncompressibleDomainVec {
-    #[inline]
-    fn to_presentation_format(&self, out_buffer: &mut Vec<String>) {
-        self.as_subdomain().to_presentation_format(out_buffer);
-    }
-}
-
-impl FromPresentation for DomainNameVec {
-    #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(
-        tokens: &'c [&'a str],
-    ) -> Result<(Self, &'d [&'a str]), TokenError>
-    where
-        Self: Sized,
-        'a: 'b,
-        'c: 'd,
-        'c: 'd,
-    {
-        let (ascii_domain_name, tokens) = AsciiString::from_token_format(tokens)?;
-        Ok((Self::new(&ascii_domain_name)?, tokens))
-    }
-}
-impl FromPresentation for CompressibleDomainVec {
-    #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(
-        tokens: &'c [&'a str],
-    ) -> Result<(Self, &'d [&'a str]), TokenError>
-    where
-        Self: Sized,
-        'a: 'b,
-        'c: 'd,
-        'c: 'd,
-    {
-        let (domain, tokens) = DomainNameVec::from_token_format(tokens)?;
-        Ok((Self(domain), tokens))
-    }
-}
-impl FromPresentation for IncompressibleDomainVec {
-    #[inline]
-    fn from_token_format<'a, 'b, 'c, 'd>(
-        tokens: &'c [&'a str],
-    ) -> Result<(Self, &'d [&'a str]), TokenError>
-    where
-        Self: Sized,
-        'a: 'b,
-        'c: 'd,
-        'c: 'd,
-    {
-        let (domain, tokens) = DomainNameVec::from_token_format(tokens)?;
-        Ok((Self(domain), tokens))
-    }
-}
+mod raw;
+mod vec;
+
+pub use raw::*;
+pub use vec::*;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CompressionMap {
@@ -2179,7 +1032,10 @@ impl CompressionMap {
 
 #[cfg(test)]
 mod test {
-    use std::fmt::Debug;
+    use std::{
+        fmt::{Debug, Display},
+        iter::FusedIterator,
+    };
 
     use concat_idents::concat_idents;
     use rstest::rstest;
@@ -2190,15 +1046,241 @@ mod test {
         serde::wire::{from_wire::FromWire, to_wire::ToWire},
         types::{
             domain_name::{
-                CompressibleDomainVec, DomainName, DomainNameVec, IncompressibleDomainVec,
-                SubDomainName,
+                CompressibleDomainVec, DomainName, DomainNameMut, DomainSlice, DomainVec,
+                IncompressibleDomainVec, MAX_LABEL_OCTETS,
             },
             label::{CaseSensitive, RefLabel},
         },
     };
 
+    /// Prints domain names whose concrete type us unknown.
+    struct DomainDisplay<D>(D);
+    impl<D: DomainName> Display for DomainDisplay<D> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            if self.0.is_root() {
+                return write!(f, ".");
+            }
+            let mut labels = self.0.labels_iter();
+            if let Some(label) = labels.next() {
+                write!(f, "{label}")?;
+            }
+            for label in labels {
+                write!(f, ".{label}")?;
+            }
+            Ok(())
+        }
+    }
+
+    /// Implements `DomainName` using the default implementations instead of the
+    /// underlying specialized implementation. This allows us to verify the
+    /// default implementations using specialized types.
+    struct DefaultDomain<D>(D);
+    impl<D: DomainName> DomainName for DefaultDomain<D> {
+        fn labels_iter<'a>(
+            &'a self,
+        ) -> impl 'a
+        + DoubleEndedIterator<Item = &'a RefLabel>
+        + ExactSizeIterator
+        + std::iter::FusedIterator
+        + Debug
+        + Clone {
+            self.0.labels_iter()
+        }
+    }
+    impl<D: DomainNameMut> DomainNameMut for DefaultDomain<D> {
+        fn labels_iter_mut<'a>(
+            &'a mut self,
+        ) -> impl 'a
+        + DoubleEndedIterator<Item = &'a mut RefLabel>
+        + ExactSizeIterator
+        + FusedIterator
+        + Debug {
+            self.0.labels_iter_mut()
+        }
+    }
+
+    fn impl_domain_octet_count(domain: impl DomainName, octet_count: u16) {
+        assert_eq!(
+            domain.octet_count(),
+            octet_count,
+            "{} is expected to have {octet_count} octets",
+            DomainDisplay(domain)
+        );
+    }
+
+    fn impl_domain_label_count(domain: impl DomainName, expected_labels: &[&RefLabel]) {
+        let label_count = u16::try_from(expected_labels.len())
+            .expect("It must be possible to represent the number of labels using a u16");
+        assert_eq!(
+            domain.label_count(),
+            label_count,
+            "{} is expected to have {label_count} labels",
+            DomainDisplay(domain)
+        );
+    }
+
+    fn impl_domain_is_root(domain: impl DomainName, is_root: bool) {
+        assert_eq!(
+            domain.is_root(),
+            is_root,
+            "{} is {}expected to be to be root",
+            DomainDisplay(domain),
+            if is_root { "" } else { "not " }
+        );
+    }
+
+    fn impl_domain_is_lowercase(domain: impl DomainName, is_lowercase: bool) {
+        assert_eq!(
+            domain.is_lowercase(),
+            is_lowercase,
+            "{} is {}expected to be to be lowercase",
+            DomainDisplay(domain),
+            if is_lowercase { "" } else { "not " }
+        );
+    }
+
+    fn impl_domain_is_uppercase(domain: impl DomainName, is_uppercase: bool) {
+        assert_eq!(
+            domain.is_uppercase(),
+            is_uppercase,
+            "{} is {}expected to be to be uppercase",
+            DomainDisplay(domain),
+            if is_uppercase { "" } else { "not " }
+        );
+    }
+
+    fn impl_domain_is_fully_qualified(domain: impl DomainName, is_fully_qualified: bool) {
+        assert_eq!(
+            domain.is_fully_qualified(),
+            is_fully_qualified,
+            "{} is {}expected to be to be fully qualified",
+            DomainDisplay(domain),
+            if is_fully_qualified { "" } else { "not " }
+        );
+    }
+
+    fn impl_domain_is_canonical(domain: impl DomainName, is_canonical: bool) {
+        assert_eq!(
+            domain.is_canonical(),
+            is_canonical,
+            "{} is {}expected to be to be canonical",
+            DomainDisplay(domain),
+            if is_canonical { "" } else { "not " }
+        );
+    }
+
+    fn impl_domain_get_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
+        for (index, expected_label) in expected_labels.iter().enumerate() {
+            assert_eq!(
+                domain.get_label(index).map(CaseSensitive),
+                Some(CaseSensitive(*expected_label))
+            );
+        }
+        assert!(domain.get_label(expected_labels.len()).is_none());
+        assert!(domain.get_label(usize::MAX).is_none());
+    }
+
+    fn impl_domain_first_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
+        assert_eq!(
+            domain.first_label().map(CaseSensitive),
+            expected_labels.first().copied().map(CaseSensitive)
+        );
+        assert_eq!(
+            domain.first_label().map(CaseSensitive),
+            domain.get_label(0).map(CaseSensitive)
+        );
+        assert_eq!(
+            domain.first_label().map(CaseSensitive),
+            domain.labels_iter().next().map(CaseSensitive)
+        );
+    }
+
+    fn impl_domain_last_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
+        assert_eq!(
+            domain.last_label().map(CaseSensitive),
+            expected_labels.last().copied().map(CaseSensitive)
+        );
+        assert_eq!(
+            domain.last_label().map(CaseSensitive),
+            domain
+                .get_label(expected_labels.len() - 1)
+                .map(CaseSensitive)
+        );
+        assert_eq!(
+            domain.last_label().map(CaseSensitive),
+            domain.labels_iter().last().map(CaseSensitive)
+        );
+    }
+
+    fn impl_domain_get_length_octet(domain: impl DomainName, expected_labels: &[&RefLabel]) {
+        for (index, expected_label) in expected_labels.iter().enumerate() {
+            assert_eq!(
+                domain.get_length_octet(index),
+                Some(
+                    u8::try_from(expected_label.len())
+                        .expect("the length of a label must fit into u8")
+                )
+            );
+        }
+        assert!(domain.get_length_octet(expected_labels.len()).is_none());
+        assert!(domain.get_length_octet(usize::MAX).is_none());
+    }
+
+    fn impl_domain_first_length_octet(domain: impl DomainName, expected_labels: &[&RefLabel]) {
+        assert_eq!(
+            domain.first_length_octet(),
+            expected_labels
+                .first()
+                .map(|label| u8::try_from(label.len())
+                    .expect("the length of a label must fit into u8"))
+        );
+        assert_eq!(domain.first_length_octet(), domain.get_length_octet(0),);
+        assert_eq!(
+            domain.first_length_octet(),
+            domain
+                .labels_iter()
+                .next()
+                .map(|label| u8::try_from(label.len())
+                    .expect("the length of a label must fit into u8"))
+        );
+
+        if expected_labels.is_empty() {
+            assert!(domain.first_length_octet().is_none());
+        } else {
+            assert!(domain.first_length_octet().is_some());
+        }
+    }
+
+    fn impl_domain_last_length_octet(domain: impl DomainName, expected_labels: &[&RefLabel]) {
+        assert_eq!(
+            domain.last_length_octet(),
+            expected_labels
+                .last()
+                .map(|label| u8::try_from(label.len())
+                    .expect("the length of a label must fit into u8"))
+        );
+        assert_eq!(
+            domain.last_length_octet(),
+            domain.get_length_octet(expected_labels.len() - 1),
+        );
+        assert_eq!(
+            domain.last_length_octet(),
+            domain
+                .labels_iter()
+                .last()
+                .map(|label| u8::try_from(label.len())
+                    .expect("the length of a label must fit into u8"))
+        );
+
+        if expected_labels.is_empty() {
+            assert!(domain.last_length_octet().is_none());
+        } else {
+            assert!(domain.last_length_octet().is_some());
+        }
+    }
+
     fn domain_labels_iter_verify_extra_properties<'a, 'b>(
-        domain_labels: impl DoubleEndedIterator<Item = &'a RefLabel> + ExactSizeIterator + Debug + Clone,
+        domain_labels: impl DoubleEndedIterator<Item = &'a RefLabel> + Debug + Clone,
         expected_labels: impl DoubleEndedIterator<Item = &'b RefLabel>
         + ExactSizeIterator
         + Debug
@@ -2224,19 +1306,16 @@ mod test {
             expected_labels.clone().count(),
             domain_labels.clone().count(),
         );
-        assert_eq!(
-            expected_labels.clone().count(),
-            domain_labels.clone().size_hint().0,
+        assert!(expected_labels.clone().count() == domain_labels.clone().size_hint().0);
+        assert!(
+            expected_labels.clone().count()
+                == domain_labels
+                    .clone()
+                    .size_hint()
+                    .1
+                    .expect("domain label iterators should always have a known length upper bound")
         );
-        assert_eq!(
-            expected_labels.clone().count(),
-            domain_labels
-                .clone()
-                .size_hint()
-                .1
-                .expect("domain label iterators should always have a known length"),
-        );
-        for n in 0..(domain_labels.size_hint().0 + 1) {
+        for n in 0..(domain_labels.clone().count() + 1) {
             assert_eq!(
                 expected_labels.clone().nth(n).map(CaseSensitive),
                 domain_labels.clone().nth(n).map(CaseSensitive)
@@ -2334,9 +1413,24 @@ mod test {
         }
     }
 
+    fn impl_domain_length_octets_match_labels_test(
+        domain: impl DomainName,
+        expected_labels: &[&RefLabel],
+    ) {
+        assert_eq!(domain.length_octets_iter().count(), expected_labels.len());
+        for (domain_length_octet, expected_length_octet) in domain
+            .length_octets_iter()
+            .map(usize::from)
+            .zip(expected_labels.iter().map(|label| label.len()))
+        {
+            assert_eq!(domain_length_octet, expected_length_octet);
+            assert!(domain_length_octet <= usize::from(MAX_LABEL_OCTETS));
+        }
+    }
+
     /// Generates a 3 constants, each with a different prefix:
     ///
-    /// - DOMAIN_* - has the specified labels in the form of a `SubDomainName`.
+    /// - DOMAIN_* - has the specified labels in the form of a `DomainSlice`.
     /// - LABELS_* - has the specified labels in the form of slice of `RefLabel`s.
     /// - LABEL_STRINGS_* - has the specified labels in the form of a slice of string slices.
     ///
@@ -2351,7 +1445,7 @@ mod test {
         (@make_constants $([$name:tt; $($label:expr),+ $(,)?]),* $(,)?) => {
             $(
                 concat_idents!(name = DOMAIN_, $name {
-                    const name: SubDomainName<'static> = ref_domain![$($label),+];
+                    const name: DomainSlice<'static> = ref_domain![$($label),+];
                 });
                 concat_idents!(name = LABELS_, $name {
                     const name: &[&RefLabel] = &[
@@ -2384,48 +1478,100 @@ mod test {
                 );
             )*
         };
-        (@make_domain_test DOMAIN_ LABELS_; $call:ident [$($name:tt),* $(,)?]) => {
+        (@make_domain_rstest_cases [$($name:tt $(, $remaining_args:expr)* $(,)?);* $(;)?] $($impl_fn:tt)*) => {
             #[rstest]
             $(
+                // Test specializations
                 #[case(
                     generate!(@ident DOMAIN_, $name).to_domain_vec(),
-                    generate!(@ident LABELS_, $name),
+                    $($remaining_args),*
                 )]
                 #[case(
-                    generate!(@ident DOMAIN_, $name).as_subdomain(),
-                    generate!(@ident LABELS_, $name),
+                    generate!(@ident DOMAIN_, $name).as_domain_slice(),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    generate!(@ident DOMAIN_, $name).to_raw_domain_vec(),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    generate!(@ident DOMAIN_, $name).as_raw_domain_slice(),
+                    $($remaining_args),*
+                )]
+
+                // Test default implementation using specialized iterator
+                #[case(
+                    DefaultDomain(generate!(@ident DOMAIN_, $name).to_domain_vec()),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    DefaultDomain(generate!(@ident DOMAIN_, $name).as_domain_slice()),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    DefaultDomain(generate!(@ident DOMAIN_, $name).to_raw_domain_vec()),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    DefaultDomain(generate!(@ident DOMAIN_, $name).as_raw_domain_slice()),
+                    $($remaining_args),*
                 )]
             )*
-            fn $call(
-                #[case] domain: impl DomainName,
-                #[case] expected_labels: &[&RefLabel],
-            ) {
-                generate!(@ident impl_, $call)(domain, expected_labels);
-            }
+            $($impl_fn)*
+        };
+        (@make_domain_test DOMAIN_ $attribute_type:ty; $call:ident [$($name:tt, $attribute_value:literal),* $(,)?]) => {
+            generate!(@make_domain_rstest_cases
+                [$(
+                    $name,
+                    $attribute_value
+                );*]
+                fn $call(
+                    #[case] domain: impl DomainName,
+                    #[case] attribute: $attribute_type,
+                ) {
+                    generate!(@ident impl_, $call)(domain, attribute);
+                }
+            );
+        };
+        (@make_domain_test DOMAIN_ LABELS_; $call:ident [$($name:tt),* $(,)?]) => {
+            generate!(@make_domain_rstest_cases
+                [$(
+                    $name,
+                    generate!(@ident LABELS_, $name)
+                );*]
+                fn $call(
+                    #[case] domain: impl DomainName,
+                    #[case] expected_labels: &[&RefLabel],
+                ) {
+                    generate!(@ident impl_, $call)(domain, expected_labels);
+                }
+            );
         };
         (@make_domain_test DOMAIN_ LABELS_ LABEL_STRINGS_; $call:ident [$($name:tt),* $(,)?]) => {
-            #[rstest]
-            $(
-                #[case(
-                    generate!(@ident DOMAIN_, $name).to_domain_vec(),
+            generate!(@make_domain_rstest_cases
+                [$(
+                    $name,
                     generate!(@ident LABELS_, $name),
                     generate!(@ident LABEL_STRINGS_, $name),
-                )]
-                #[case(
-                    generate!(@ident DOMAIN_, $name).as_subdomain(),
-                    generate!(@ident LABELS_, $name),
-                    generate!(@ident LABEL_STRINGS_, $name),
-                )]
-            )*
-            fn $call(
-                #[case] domain: impl DomainName,
-                #[case] expected_labels: &[&RefLabel],
-                #[case] expected_label_strings: &[&str],
-            ) {
-                generate!(@ident impl_, $call)(domain, expected_labels, expected_label_strings);
-            }
+                );*]
+                fn $call(
+                    #[case] domain: impl DomainName,
+                    #[case] expected_labels: &[&RefLabel],
+                    #[case] expected_label_strings: &[&str],
+                ) {
+                    generate!(@ident impl_, $call)(domain, expected_labels, expected_label_strings);
+                }
+            );
         };
-        (@make_tests $($name:tt),* $(,)?) => {
+        (@make_tests $(
+            $name:tt,
+            octets = $octet_count:literal,
+            is_root = $is_root:literal,
+            is_lowercase = $is_lowercase:literal,
+            is_uppercase = $is_uppercase:literal,
+            is_fully_qualified = $is_fully_qualified:literal,
+            is_canonical = $is_canonical:literal
+        ),* $(,)?) => {
             #[rstest]
             $(
                 #[case(CompressibleDomainVec(
@@ -2434,29 +1580,138 @@ mod test {
                 #[case(IncompressibleDomainVec(
                     generate!(@ident DOMAIN_, $name).to_domain_vec()
                 ))]
+                // TODO: serde for array, raw vec, & raw array
             )*
             fn circular_serde_sanity_test<T>(#[case] input: T) where T: Debug + ToWire + FromWire + PartialEq {
                 crate::serde::wire::circular_test::circular_serde_sanity_test::<T>(input)
             }
 
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_labels_iter_test [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_labels_reverse_iter_test [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_labels_nth_iter_test [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_labels_reverse_nth_iter_test [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_ LABEL_STRINGS_; domain_labels_to_str_test [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ u16;     domain_octet_count        [$($name, $octet_count       ),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_label_count        [$($name                     ),*]);
+            generate!(@make_domain_test DOMAIN_ bool;    domain_is_root            [$($name, $is_root           ),*]);
+            generate!(@make_domain_test DOMAIN_ bool;    domain_is_lowercase       [$($name, $is_lowercase      ),*]);
+            generate!(@make_domain_test DOMAIN_ bool;    domain_is_uppercase       [$($name, $is_uppercase      ),*]);
+            generate!(@make_domain_test DOMAIN_ bool;    domain_is_fully_qualified [$($name, $is_fully_qualified),*]);
+            generate!(@make_domain_test DOMAIN_ bool;    domain_is_canonical       [$($name, $is_canonical      ),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_get_label          [$($name                     ),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_first_label        [$($name                     ),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_last_label         [$($name                     ),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_get_length_octet   [$($name                     ),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_first_length_octet [$($name                     ),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_; domain_last_length_octet  [$($name                     ),*]);
+
+            // Iterator tests
+            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_labels_iter_test                [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_labels_reverse_iter_test        [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_labels_nth_iter_test            [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_labels_reverse_nth_iter_test    [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_length_octets_match_labels_test [$($name),*]);
+            generate!(@make_domain_test DOMAIN_ LABELS_ LABEL_STRINGS_; domain_labels_to_str_test              [$($name),*]);
         };
-        ($([$name:tt; $($label:expr),+ $(,)?]),* $(,)?) => {
+        ($([$name:tt; $($attribute_key:tt = $attribute_value:literal),+; $($label:expr),+ $(,)?]),* $(,)?) => {
             generate!(@make_constants $([$name; $($label),*]),+);
             generate!(@validate_test_cases $($name),+);
-            generate!(@make_tests $($name),+);
+            generate!(@make_tests $($name, $($attribute_key = $attribute_value),+),+);
         };
     }
     generate![
-        [ROOT; ""],
-        [2_LABELS; "com", ""],
-        [3_LABELS; "example", "com", ""],
-        [4_LABELS; "www", "example", "com", ""],
+        [ROOT;
+            octets = 1,
+            is_root = true,
+            is_lowercase = true,
+            is_uppercase = true,
+            is_fully_qualified = true,
+            is_canonical = true;
+            ""
+        ],
+        [2_LABELS_UPPER;
+            octets = 5,
+            is_root = false,
+            is_lowercase = false,
+            is_uppercase = true,
+            is_fully_qualified = true,
+            is_canonical = false;
+            "COM", ""
+        ],
+        [2_LABELS_LOWER;
+            octets = 5,
+            is_root = false,
+            is_lowercase = true,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = true;
+            "com", ""
+        ],
+        [2_LABELS_MIXED;
+            octets = 5,
+            is_root = false,
+            is_lowercase = false,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = false;
+            "Com", ""
+        ],
+        [3_LABELS_UPPER;
+            octets = 13,
+            is_root = false,
+            is_lowercase = false,
+            is_uppercase = true,
+            is_fully_qualified = true,
+            is_canonical = false;
+            "EXAMPLE", "COM", ""
+        ],
+        [3_LABELS_LOWER;
+            octets = 13,
+            is_root = false,
+            is_lowercase = true,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = true;
+            "example", "com", ""
+        ],
+        [3_LABELS_MIXED;
+            octets = 13,
+            is_root = false,
+            is_lowercase = false,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = false;
+            "EXAMPLE", "com", ""
+        ],
+        [4_LABELS_UPPER;
+            octets = 17,
+            is_root = false,
+            is_lowercase = false,
+            is_uppercase = true,
+            is_fully_qualified = true,
+            is_canonical = false;
+            "WWW", "EXAMPLE", "COM", ""
+        ],
+        [4_LABELS_LOWER;
+            octets = 17,
+            is_root = false,
+            is_lowercase = true,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = true;
+            "www", "example", "com", ""
+        ],
+        [4_LABELS_MIXED;
+            octets = 17,
+            is_root = false,
+            is_lowercase = false,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = false;
+            "WWW", "example", "Com", ""
+        ],
         [10_LABELS;
+            octets = 62,
+            is_root = false,
+            is_lowercase = true,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = true;
             "label1",
             "next?",
             "another_one",
@@ -2468,14 +1723,52 @@ mod test {
             "org",
             "",
         ],
+        [MAX_LABELS;
+            octets = 255,
+            is_root = false,
+            is_lowercase = true,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = true;
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "",
+        ],
         [REPETITIVE;
+            octets = 177,
+            is_root = false,
+            is_lowercase = true,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = true;
             "www", "example", "org", "www", "example", "org", "www", "example", "org", "www",
             "example", "org", "www", "example", "org", "www", "example", "org", "www", "example",
             "org", "www", "example", "org", "www", "example", "org", "www", "example", "org", "www",
             "example", "org", ""
         ],
-        [1_LONG_LABEL; "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678", ""],
+        [1_LONG_LABEL;
+            octets = 65,
+            is_root = false,
+            is_lowercase = false,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = false;
+            "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678", ""
+        ],
         [2_LONG_LABELS;
+            octets = 129,
+            is_root = false,
+            is_lowercase = false,
+            is_uppercase = false,
+            is_fully_qualified = true,
+            is_canonical = false;
             "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678",
             "9 `~!@#$%^&*()-_=+[]{};:'\",<>/? abcdefghijklmnopqrstuvwxyz ABCD",
             "",
@@ -2521,21 +1814,21 @@ mod test {
         ];
 
         for (domain, expected_search_names) in &domain_search_name_pairs {
-            let domain_name = DomainNameVec::from_utf8(domain).unwrap();
+            let domain_name = DomainVec::from_utf8(domain).unwrap();
             let expected_search_names = expected_search_names
                 .into_iter()
-                .map(|search_name| DomainNameVec::from_utf8(search_name).unwrap())
+                .map(|search_name| DomainVec::from_utf8(search_name).unwrap())
                 .collect::<Vec<_>>();
             let actual_search_names = domain_name.search_domain_iter().collect::<Vec<_>>();
             assert_eq!(expected_search_names, actual_search_names);
         }
 
         for (domain, expected_search_names) in &domain_search_name_pairs {
-            let domain_name = DomainNameVec::from_utf8(domain).unwrap();
+            let domain_name = DomainVec::from_utf8(domain).unwrap();
             let expected_search_names = expected_search_names
                 .into_iter()
                 .rev()
-                .map(|search_name| DomainNameVec::from_utf8(search_name).unwrap())
+                .map(|search_name| DomainVec::from_utf8(search_name).unwrap())
                 .collect::<Vec<_>>();
             let actual_search_names = domain_name.search_domain_iter().rev().collect::<Vec<_>>();
             assert_eq!(expected_search_names, actual_search_names);
