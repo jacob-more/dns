@@ -778,3 +778,518 @@ impl<L: Label + ?Sized> Hash for CaseInsensitive<L> {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use rstest::rstest;
+
+    use crate::{
+        label, ref_label,
+        types::{
+            ascii::AsciiChar, domain_name::MAX_LABEL_OCTETS, label::{Label, MutLabel, RefLabel}
+        },
+    };
+
+    /// Implements `Label` using the default implementations instead of the
+    /// underlying specialized implementation. This allows us to verify the
+    /// default implementations using specialized types.
+    #[derive(Debug)]
+    struct DefaultLabel<L: ?Sized>(L);
+    impl<L: Label + ?Sized> Label for DefaultLabel<L> {
+        fn octets(&self) -> &[AsciiChar] {
+            self.0.octets()
+        }
+    }
+    impl<L: MutLabel + ?Sized> MutLabel for DefaultLabel<L> {
+        fn octets_mut(&mut self) -> &mut [AsciiChar] {
+            self.0.octets_mut()
+        }
+    }
+
+    macro_rules! repeat_for_label_types {
+        (
+            #[rstest]
+            $(
+                #[case(
+                    label!( $label_body:literal )
+                    $(, $remaining_args:expr)*
+                    $(,)?
+                )]
+            )+
+            fn $($def_fn:tt)+
+        ) => {
+            #[rstest]
+            $(
+                #[case(
+                    label!( $label_body ),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    ref_label!( $label_body ),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    DefaultLabel(label!( $label_body )),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    DefaultLabel(ref_label!( $label_body )),
+                    $($remaining_args),*
+                )]
+            )+
+            fn $($def_fn)+
+        };
+    }
+
+    fn assert_label_properties_match(l1: impl Label, l2: impl Label) {
+        assert_eq!(l1.octets(), l2.octets());
+        assert_eq!(l1.len(), l2.len());
+        assert_eq!(l1.is_empty(), l2.is_empty());
+        assert_eq!(l1.is_root(), l2.is_root());
+        assert_eq!(l1.is_lowercase(), l2.is_lowercase());
+        assert_eq!(l1.is_uppercase(), l2.is_uppercase());
+    }
+
+    macro_rules! property_test {
+        (@octets $($label_body:literal, $property_value:expr),+ $(,)?) => {
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), $property_value)] )+
+                fn octets(#[case] label: impl Label, #[case] expected_octets: &[u8]) {
+                    assert_eq!(label.octets(), expected_octets);
+                }
+
+            );
+        };
+        (@len $($label_body:literal, $property_value:expr),+ $(,)?) => {
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), $property_value)] )+
+                fn len(#[case] label: impl Label, #[case] expected_len: u8) {
+                    assert_eq!(label.len(), expected_len);
+                    assert_eq!(label.octets().len(), usize::from(expected_len));
+                }
+            );
+        };
+        (@is_empty $($label_body:literal, $property_value:expr),+ $(,)?) => {
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), $property_value)] )+
+                fn is_empty(#[case] label: impl Label, #[case] expected_is_empty: bool) {
+                    assert_eq!(
+                        label.is_empty(),
+                        expected_is_empty,
+                        "{} is {}expected to be an empty label",
+                        label.as_ref_label(),
+                        if expected_is_empty { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@is_root $($label_body:literal, $property_value:expr),+ $(,)?) => {
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), $property_value)] )+
+                fn is_root(#[case] label: impl Label, #[case] expected_is_root: bool) {
+                    assert_eq!(
+                        label.is_root(),
+                        expected_is_root,
+                        "{} is {}expected to be the root label",
+                        label.as_ref_label(),
+                        if expected_is_root { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@is_lowercase $($label_body:literal, $property_value:expr),+ $(,)?) => {
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), $property_value)] )+
+                fn is_lowercase(#[case] label: impl Label, #[case] expected_lowercase: bool) {
+                    assert_eq!(
+                        label.is_lowercase(),
+                        expected_lowercase,
+                        "{} is {}expected to be lowercase",
+                        label.as_ref_label(),
+                        if expected_lowercase { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@is_uppercase $($label_body:literal, $property_value:expr),+ $(,)?) => {
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), $property_value)] )+
+                fn is_uppercase(#[case] label: impl Label, #[case] expected_uppercase: bool) {
+                    assert_eq!(
+                        label.is_uppercase(),
+                        expected_uppercase,
+                        "{} is {}expected to be uppercase",
+                        label.as_ref_label(),
+                        if expected_uppercase { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@as $call:ident $($label_body:literal),+ $(,)?) => {
+            // Test that properties don't change when converted into some other
+            // concrete type or a slice is taken.
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), label!($label_body))] )+
+                fn $call(#[case] label: impl Label, #[case] expected_label: impl Label) {
+                    assert_label_properties_match(label.$call(), expected_label);
+                }
+            );
+        };
+        (@as_default_impl $($label_body:literal),+ $(,)?) => {
+            // Test that properties of concrete type match that of the default
+            // implementation.
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), DefaultLabel(ref_label!($label_body)))] )+
+                fn as_default_impl(#[case] label: impl Label, #[case] expected_label: impl Label) {
+                    assert_label_properties_match(label, expected_label);
+                }
+            );
+        };
+        (@case_sensitivity $($label_body:literal, $is_lowercase_value:expr, $is_uppercase_value:expr),+ $(,)?) => {
+            repeat_for_label_types!(
+                #[rstest]
+                $( #[case(label!($label_body), label!($label_body), $is_lowercase_value, $is_uppercase_value)] )+
+                fn test_case_sensitivity(
+                    #[case] l1: impl Label,
+                    #[case] l2: impl Label,
+                    #[case] is_lowercase: bool,
+                    #[case] is_uppercase: bool
+                ) {
+                    assert_eq!(l1.as_case_sensitive(), l2.as_case_sensitive());
+                    assert_eq!(l1.as_case_insensitive(), l2.as_case_insensitive());
+
+                    let mut lower = l2.as_owned();
+                    let mut upper = l2.as_owned();
+                    lower.make_lowercase();
+                    upper.make_uppercase();
+                    assert_eq!(l1.as_case_insensitive(), lower.as_case_insensitive());
+                    assert_eq!(l1.as_case_insensitive(), upper.as_case_insensitive());
+
+                    match (is_lowercase, is_uppercase) {
+                        (true, true) => {
+                            assert_eq!(l1.as_case_sensitive(), lower.as_case_sensitive());
+                            assert_eq!(l1.as_case_sensitive(), upper.as_case_sensitive());
+                        },
+                        (true, false) => {
+                            assert_eq!(l1.as_case_sensitive(), lower.as_case_sensitive());
+                            assert_ne!(l1.as_case_sensitive(), upper.as_case_sensitive());
+                        },
+                        (false, true) => {
+                            assert_ne!(l1.as_case_sensitive(), lower.as_case_sensitive());
+                            assert_eq!(l1.as_case_sensitive(), upper.as_case_sensitive());
+                        },
+                        (false, false) => {
+                            assert_ne!(l1.as_case_sensitive(), lower.as_case_sensitive());
+                            assert_ne!(l1.as_case_sensitive(), upper.as_case_sensitive());
+                        },
+                    }
+                }
+            );
+        };
+        (
+            $(
+                label!( $label_body:literal ): {
+                    octets: $octets_value:expr,
+                    len: $len_value:expr,
+                    is_empty: $is_empty_value:expr,
+                    is_root: $is_root_value:expr,
+                    is_lowercase: $is_lowercase_value:expr,
+                    is_uppercase: $is_uppercase_value:expr
+                    $(,)?
+                }
+            ),+
+            $(,)?
+        ) => {
+            property_test!(@octets       $($label_body, $octets_value      ),+);
+            property_test!(@len          $($label_body, $len_value         ),+);
+            property_test!(@is_empty     $($label_body, $is_empty_value    ),+);
+            property_test!(@is_root      $($label_body, $is_root_value     ),+);
+            property_test!(@is_lowercase $($label_body, $is_lowercase_value),+);
+            property_test!(@is_uppercase $($label_body, $is_uppercase_value),+);
+
+            property_test!(@as as_ref_label        $($label_body),+);
+            property_test!(@as as_owned            $($label_body),+);
+            property_test!(@as into_owned          $($label_body),+);
+            property_test!(@as as_case_sensitive   $($label_body),+);
+            property_test!(@as as_case_insensitive $($label_body),+);
+
+            property_test!(@as_default_impl $($label_body),+);
+            property_test!(@case_sensitivity $($label_body, $is_lowercase_value, $is_uppercase_value),+);
+        };
+    }
+
+    property_test!(
+        label!(""): {
+            octets: &[],
+            len: 0,
+            is_empty: true,
+            is_root: true,
+            is_lowercase: true,
+            is_uppercase: true,
+        },
+        label!("a"): {
+            octets: &[b'a'],
+            len: 1,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("A"): {
+            octets: &[b'A'],
+            len: 1,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+        },
+        label!(" "): {
+            octets: &[b' '],
+            len: 1,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: true,
+        },
+        label!("\t"): {
+            octets: &[b'\t'],
+            len: 1,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: true,
+        },
+        label!("\0"): {
+            octets: &[b'\0'],
+            len: 1,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: true,
+        },
+        label!("ab"): {
+            octets: &[b'a', b'b'],
+            len: 2,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("AB"): {
+            octets: &[b'A', b'B'],
+            len: 2,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+        },
+        label!("Ab"): {
+            octets: &[b'A', b'b'],
+            len: 2,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+        },
+        label!("aB"): {
+            octets: &[b'a', b'B'],
+            len: 2,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+        },
+        label!("foo"): {
+            octets: &[b'f', b'o', b'o'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("Foo"): {
+            octets: &[b'F', b'o', b'o'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+        },
+        label!("FOO"): {
+            octets: &[b'F', b'O', b'O'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+        },
+        label!("\tab"): {
+            octets: &[b'\t', b'a', b'b'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("a\tb"): {
+            octets: &[b'a', b'\t', b'b'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("ab\t"): {
+            octets: &[b'a', b'b', b'\t'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("\0ab"): {
+            octets: &[b'\0', b'a', b'b'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("a\0b"): {
+            octets: &[b'a', b'\0', b'b'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("ab\0"): {
+            octets: &[b'a', b'b', b'\0'],
+            len: 3,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz01234567890"): {
+            octets: &[
+                b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', b'i', b'j',
+                b'k', b'l', b'm', b'n', b'o', b'p', b'q', b'r', b's', b't',
+                b'u', b'v', b'w', b'x', b'y', b'z', b'a', b'b', b'c', b'd',
+                b'e', b'f', b'g', b'h', b'i', b'j', b'k', b'l', b'm', b'n',
+                b'o', b'p', b'q', b'r', b's', b't', b'u', b'v', b'w', b'x',
+                b'y', b'z', b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7',
+                b'8', b'9', b'0'
+            ],
+            len: 63,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+        },
+        label!("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890"): {
+            octets: &[
+                b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', b'i', b'j',
+                b'k', b'l', b'm', b'n', b'o', b'p', b'q', b'r', b's', b't',
+                b'u', b'v', b'w', b'x', b'y', b'z', b'A', b'B', b'C', b'D',
+                b'E', b'F', b'G', b'H', b'I', b'J', b'K', b'L', b'M', b'N',
+                b'O', b'P', b'Q', b'R', b'S', b'T', b'U', b'V', b'W', b'X',
+                b'Y', b'Z', b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7',
+                b'8', b'9', b'0'
+            ],
+            len: 63,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+        },
+        label!("ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890"): {
+            octets: &[
+                b'A', b'B', b'C', b'D', b'E', b'F', b'G', b'H', b'I', b'J',
+                b'K', b'L', b'M', b'N', b'O', b'P', b'Q', b'R', b'S', b'T',
+                b'U', b'V', b'W', b'X', b'Y', b'Z', b'A', b'B', b'C', b'D',
+                b'E', b'F', b'G', b'H', b'I', b'J', b'K', b'L', b'M', b'N',
+                b'O', b'P', b'Q', b'R', b'S', b'T', b'U', b'V', b'W', b'X',
+                b'Y', b'Z', b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7',
+                b'8', b'9', b'0'
+            ],
+            len: 63,
+            is_empty: false,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+        },
+    );
+
+    #[test]
+    #[should_panic]
+    fn from_octets_panics() {
+        let bytes = &[0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()];
+        RefLabel::from_octets(bytes);
+    }
+
+    #[test]
+    #[should_panic]
+    fn from_octets_mut_panics() {
+        let bytes = &mut [0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()];
+        RefLabel::from_octets_mut(bytes);
+    }
+
+    /// A type that implements `Label` but which exceeds the maximum octet limit
+    /// for labels. This lets us test that illegal conversions are prevented by
+    /// the default implementation.
+    #[derive(Debug)]
+    struct InvalidLabel {
+        octets: [u8; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()]
+    }
+    impl InvalidLabel {
+        pub fn new() -> Self {
+            Self {
+                octets: [0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()]
+            }
+        }
+    }
+    impl Label for InvalidLabel {
+        fn octets(&self) -> &[AsciiChar] {
+            &self.octets
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn as_ref_label_panics() {
+        InvalidLabel::new().as_ref_label();
+    }
+
+    #[test]
+    #[should_panic]
+    fn as_owned_panics() {
+        InvalidLabel::new().as_owned();
+    }
+
+    #[test]
+    #[should_panic]
+    fn into_owned_panics() {
+        InvalidLabel::new().into_owned();
+    }
+
+    #[test]
+    #[should_panic]
+    fn as_case_sensitive_panics() {
+        InvalidLabel::new().as_case_sensitive();
+    }
+
+    #[test]
+    #[should_panic]
+    fn as_case_insensitive_panics() {
+        InvalidLabel::new().as_case_insensitive();
+    }
+}

@@ -125,9 +125,6 @@ macro_rules! ref_label {
         // expressions have been evaluated
         unsafe { $crate::types::label::RefLabel::from_raw_parts(OCTETS_BUFFER) }
     }};
-    ($label:expr $(,)?) => {
-        $crate::ref_label!($label, $crate::types::label::CaseInsensitive)
-    };
 }
 
 #[macro_export]
