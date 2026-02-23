@@ -1,14 +1,16 @@
 use std::{fmt::Debug, iter::FusedIterator};
 
 use static_assertions::const_assert;
+use tinyvec::TinyVec;
 
 use crate::types::{
     ascii::AsciiChar,
     domain_name::{
-        DomainName, DomainNameMut, LENGTH_OCTET_WIDTH, MAX_LABEL_OCTETS, MAX_LABELS, MAX_OCTETS,
-        MakeCanonicalError, MakeFullyQualifiedError, assert_domain_name_invariants,
+        DomainName, DomainNameMut, DomainNameOwned, InsertError, LENGTH_OCTET_WIDTH,
+        MAX_LABEL_OCTETS, MAX_LABELS, MAX_OCTETS, MakeCanonicalError, MakeFullyQualifiedError,
+        PushBackError, PushFrontError, assert_domain_name_invariants, would_exceed_max_octets,
     },
-    label::RefLabel,
+    label::{Label, OwnedLabel, RefLabel},
 };
 
 /// Assert all invariants required to ensure that the raw parts of a raw domain
@@ -385,12 +387,7 @@ impl<'a> RawMutDomainSlice<'a> {
     }
 
     pub fn as_canonical(&self) -> Result<RawDomainVec, MakeCanonicalError> {
-        let mut domain = match self.as_fully_qualified() {
-            Ok(domain) => domain,
-            Err(MakeFullyQualifiedError::TooManyOctets) => {
-                return Err(MakeCanonicalError::TooManyOctets);
-            }
-        };
+        let mut domain = self.as_fully_qualified()?;
         domain.make_lowercase();
         domain.debug_assert_invariants();
         Ok(domain)
@@ -759,6 +756,136 @@ impl DomainNameMut for RawDomainVec {
     ) -> impl 'a + DoubleEndedIterator<Item = &'a mut RefLabel> + ExactSizeIterator + FusedIterator + Debug
     {
         MutLabelIter::new(self.as_raw_domain_slice_mut())
+    }
+}
+
+impl DomainNameOwned for RawDomainVec {
+    fn insert<L: Label>(&mut self, index: usize, label: L) -> Result<(), InsertError> {
+        let label_count = usize::from(self.label_count());
+        if index > label_count {
+            return Err(InsertError::OutOfBounds);
+        } else if (index == label_count) && self.is_fully_qualified() {
+            return Err(InsertError::FullyQualified);
+        } else if (index < label_count) && label.is_root() {
+            return Err(InsertError::NonTrailingRoot);
+        } else if would_exceed_max_octets(self, &label) {
+            return Err(InsertError::TooManyOctets);
+        }
+
+        self.octets
+            .reserve(LENGTH_OCTET_WIDTH + label.octets().len());
+        // Notes on overflow:
+        //
+        // Since a domain name cannot exceed 256 bytes, the maximum sum of octet
+        // lengths cannot exceed 256 either. Since we bounded the `index` above,
+        // and `length_octets.len() <= MAX_LABELS (128)`, this sum will never
+        // overflow.
+        let octet_insert_index = (index * LENGTH_OCTET_WIDTH)
+            + self
+                .length_octets_iter()
+                .take(index)
+                .map(usize::from)
+                .sum::<usize>();
+        self.octets.splice(
+            octet_insert_index..octet_insert_index,
+            std::iter::once(label.len()).chain(label.octets().iter().copied()),
+        );
+
+        self.debug_assert_invariants();
+        Ok(())
+    }
+
+    // TODO: Does the compiler optimize the default implementation enough that we don't need this?
+    fn push_front<L: Label>(&mut self, label: L) -> Result<(), PushFrontError> {
+        if self.octets.first().is_some() && label.is_root() {
+            return Err(PushFrontError::NonTrailingRoot);
+        } else if would_exceed_max_octets(self, &label) {
+            return Err(PushFrontError::TooManyOctets);
+        }
+
+        self.octets
+            .reserve(LENGTH_OCTET_WIDTH + label.octets().len());
+        self.octets.splice(
+            0..0,
+            std::iter::once(label.len()).chain(label.octets().iter().copied()),
+        );
+
+        self.debug_assert_invariants();
+        Ok(())
+    }
+
+    fn push_back<L: Label>(&mut self, label: L) -> Result<(), PushBackError> {
+        if self.is_fully_qualified() {
+            return Err(PushBackError::FullyQualified);
+        } else if would_exceed_max_octets(self, &label) {
+            return Err(PushBackError::TooManyOctets);
+        }
+
+        self.octets
+            .reserve(LENGTH_OCTET_WIDTH + label.octets().len());
+        self.octets.push(label.len());
+        self.octets.extend_from_slice(label.octets());
+
+        self.debug_assert_invariants();
+        Ok(())
+    }
+
+    fn remove(&mut self, index: usize) -> Option<OwnedLabel> {
+        // TODO: we iterate over the label count several times in this function,
+        //       both through helpers and directly. Check if compiler optimizes
+        //       these. Otherwise, improve.
+        if index >= usize::from(self.label_count()) {
+            return None;
+        }
+
+        // Notes on overflow:
+        //
+        // Since a domain name cannot exceed 256 bytes, the maximum sum of octet
+        // lengths cannot exceed 256 either. Since we bounded the `index` above,
+        // and `length_octets.len() <= MAX_LABELS (128)`, this sum will never
+        // overflow.
+        let octet_remove_index = (index * LENGTH_OCTET_WIDTH)
+            + self
+                .length_octets_iter()
+                .take(index)
+                .map(usize::from)
+                .sum::<usize>();
+        let octet_count = *self
+            .octets
+            .get(octet_remove_index)
+            .expect("BUG: the index must be in range");
+        let cut_octets = self.octets.drain(
+            octet_remove_index
+                ..(octet_remove_index + LENGTH_OCTET_WIDTH + usize::from(octet_count)),
+        );
+        let label = TinyVec::from_iter(cut_octets.skip(LENGTH_OCTET_WIDTH));
+        let label = OwnedLabel::from_octets(label);
+
+        debug_assert_eq!(
+            label.len(),
+            octet_count,
+            "the number of bytes removed must match the removed length byte"
+        );
+        self.debug_assert_invariants();
+        Some(label)
+    }
+
+    // TODO: Does the compiler optimize the default implementation enough that we don't need this?
+    fn pop_front(&mut self) -> Option<OwnedLabel> {
+        let octet_count = *self.octets.first()?;
+        let cut_octets = self
+            .octets
+            .drain(..(LENGTH_OCTET_WIDTH + usize::from(octet_count)));
+        let label = TinyVec::from_iter(cut_octets.skip(LENGTH_OCTET_WIDTH));
+        let label = OwnedLabel::from_octets(label);
+
+        debug_assert_eq!(
+            label.len(),
+            octet_count,
+            "the number of bytes removed must match the removed length byte"
+        );
+        self.debug_assert_invariants();
+        Some(label)
     }
 }
 

@@ -2,7 +2,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
     iter::FusedIterator,
-    ops::{Add, Deref, DerefMut},
+    ops::{Deref, DerefMut},
 };
 
 use static_assertions::const_assert;
@@ -23,11 +23,12 @@ use crate::{
     types::{
         ascii::{AsciiChar, AsciiString, constants::ASCII_PERIOD},
         domain_name::{
-            DomainName, DomainNameError, DomainNameMut, LENGTH_OCTET_WIDTH,
-            MAX_COMPRESSION_POINTERS, MAX_LABEL_OCTETS, MAX_LABELS, MAX_OCTETS, MakeCanonicalError,
-            MakeFullyQualifiedError, RawDomainSlice, RawDomainVec, RawMutDomainSlice,
+            DomainName, DomainNameError, DomainNameMut, DomainNameOwned, InsertError,
+            LENGTH_OCTET_WIDTH, MAX_COMPRESSION_POINTERS, MAX_LABEL_OCTETS, MAX_LABELS, MAX_OCTETS,
+            MakeCanonicalError, MakeFullyQualifiedError, PushBackError, PushFrontError,
+            RawDomainSlice, RawDomainVec, RawMutDomainSlice, would_exceed_max_octets,
         },
-        label::{Label, RefLabel},
+        label::{Label, OwnedLabel, RefLabel},
     },
 };
 
@@ -516,12 +517,7 @@ impl DomainVec {
     /// Converts this domain into its canonical form: lowercase and fully
     /// qualified.
     pub fn make_canonical(&mut self) -> Result<(), MakeCanonicalError> {
-        match self.make_fully_qualified() {
-            Ok(()) => (),
-            Err(MakeFullyQualifiedError::TooManyOctets) => {
-                return Err(MakeCanonicalError::TooManyOctets);
-            }
-        }
+        self.make_fully_qualified()?;
         self.make_lowercase();
         self.debug_assert_invariants();
         Ok(())
@@ -888,7 +884,8 @@ macro_rules! impl_domain_name_mut {
         fn first_mut(&mut self) -> Option<&mut RefLabel> {
             let &length_octet = self.length_octets.first()?;
             Some(RefLabel::from_octets_mut(
-                &mut self.octets[LENGTH_OCTET_WIDTH..((length_octet as usize) + LENGTH_OCTET_WIDTH)],
+                &mut self.octets
+                    [LENGTH_OCTET_WIDTH..((length_octet as usize) + LENGTH_OCTET_WIDTH)],
             ))
         }
 
@@ -899,7 +896,7 @@ macro_rules! impl_domain_name_mut {
                 &mut self.octets[(octets_length - (length_octet as usize))..],
             ))
         }
-    }
+    };
 }
 
 impl DomainNameMut for MutDomainSlice<'_> {
@@ -1047,12 +1044,7 @@ impl<'a> MutDomainSlice<'a> {
     }
 
     pub fn as_canonical(&self) -> Result<DomainVec, MakeCanonicalError> {
-        let mut domain = match self.as_fully_qualified() {
-            Ok(domain) => domain,
-            Err(MakeFullyQualifiedError::TooManyOctets) => {
-                return Err(MakeCanonicalError::TooManyOctets);
-            }
-        };
+        let mut domain = self.as_fully_qualified()?;
         domain.make_lowercase();
         domain.debug_assert_invariants();
         Ok(domain)
@@ -1405,32 +1397,152 @@ impl Hash for DomainVec {
     }
 }
 
-impl Add for DomainVec {
-    type Output = Result<Self, DomainNameError>;
+impl DomainNameOwned for DomainVec {
+    fn insert<L: Label>(&mut self, index: usize, label: L) -> Result<(), InsertError> {
+        if index > usize::from(self.label_count()) {
+            return Err(InsertError::OutOfBounds);
+        } else if (index == usize::from(self.label_count())) && self.is_fully_qualified() {
+            return Err(InsertError::FullyQualified);
+        } else if (index < usize::from(self.label_count())) && label.is_root() {
+            return Err(InsertError::NonTrailingRoot);
+        } else if would_exceed_max_octets(self, &label) {
+            return Err(InsertError::TooManyOctets);
+        }
 
-    #[inline]
-    fn add(self, rhs: Self) -> Self::Output {
+        self.length_octets.insert(index, label.len());
+
+        self.octets
+            .reserve(LENGTH_OCTET_WIDTH + label.octets().len());
+        // Notes on overflow:
+        //
+        // Since a domain name cannot exceed 256 bytes, the maximum sum of octet
+        // lengths cannot exceed 256 either. Since we bounded the `index` above,
+        // and `length_octets.len() <= MAX_LABELS (128)`, this sum will never
+        // overflow.
+        let octet_insert_index = (index * LENGTH_OCTET_WIDTH)
+            + self
+                .length_octets
+                .iter()
+                .take(index)
+                .map(|length_octet| *length_octet as usize)
+                .sum::<usize>();
+        self.octets.splice(
+            octet_insert_index..octet_insert_index,
+            std::iter::once(label.len()).chain(label.octets().iter().copied()),
+        );
+
+        self.debug_assert_invariants();
+        Ok(())
+    }
+
+    // TODO: Does the compiler optimize the default implementation enough that we don't need this?
+    fn push_front<L: Label>(&mut self, label: L) -> Result<(), PushFrontError> {
+        if self.length_octets.first().is_some() && label.is_root() {
+            return Err(PushFrontError::NonTrailingRoot);
+        } else if would_exceed_max_octets(self, &label) {
+            return Err(PushFrontError::TooManyOctets);
+        }
+
+        self.length_octets.insert(0, label.len());
+        self.octets
+            .reserve(LENGTH_OCTET_WIDTH + label.octets().len());
+        self.octets.splice(
+            0..0,
+            std::iter::once(label.len()).chain(label.octets().iter().copied()),
+        );
+
+        self.debug_assert_invariants();
+        Ok(())
+    }
+
+    fn push_back<L: Label>(&mut self, label: L) -> Result<(), PushBackError> {
         if self.is_fully_qualified() {
-            // If it is fully qualified, it already ends in a dot.
-            // To add a domain to the end, you would need to add a dot between
-            // them, resulting in consecutive dots.
-            // This might warrant a new error value.
-            return Err(DomainNameError::ConsecutiveDots);
+            return Err(PushBackError::FullyQualified);
+        } else if would_exceed_max_octets(self, &label) {
+            return Err(PushBackError::TooManyOctets);
         }
 
-        if (self.octet_count() + rhs.octet_count()) > MAX_OCTETS {
-            return Err(DomainNameError::LongDomain);
+        self.length_octets.push(label.len());
+        self.octets
+            .reserve(LENGTH_OCTET_WIDTH + label.octets().len());
+        self.octets.push(label.len());
+        self.octets.extend_from_slice(label.octets());
+
+        self.debug_assert_invariants();
+        Ok(())
+    }
+
+    fn remove(&mut self, index: usize) -> Option<OwnedLabel> {
+        if index >= self.length_octets.len() {
+            return None;
         }
 
-        let mut octets = self.octets.clone();
-        octets.extend(rhs.octets);
-        let mut length_octets = self.length_octets.clone();
-        length_octets.extend(rhs.length_octets);
+        // Notes on overflow:
+        //
+        // Since a domain name cannot exceed 256 bytes, the maximum sum of octet
+        // lengths cannot exceed 256 either. Since we bounded the `index` above,
+        // and `length_octets.len() <= MAX_LABELS (128)`, this sum will never
+        // overflow.
+        let octet_remove_index = (index * LENGTH_OCTET_WIDTH)
+            + self
+                .length_octets
+                .iter()
+                .take(index)
+                .map(|length_octet| *length_octet as usize)
+                .sum::<usize>();
+        let octet_count = self.length_octets.remove(index);
+        let cut_octets = self.octets.drain(
+            octet_remove_index
+                ..(octet_remove_index + LENGTH_OCTET_WIDTH + usize::from(octet_count)),
+        );
+        let label = TinyVec::from_iter(cut_octets.skip(LENGTH_OCTET_WIDTH));
+        let label = OwnedLabel::from_octets(label);
 
-        Ok(Self {
-            octets,
-            length_octets,
-        })
+        debug_assert_eq!(
+            label.len(),
+            octet_count,
+            "the number of bytes removed must match the removed length byte"
+        );
+        self.debug_assert_invariants();
+        Some(label)
+    }
+
+    // TODO: Does the compiler optimize the default implementation enough that we don't need this?
+    fn pop_front(&mut self) -> Option<OwnedLabel> {
+        if self.length_octets.is_empty() {
+            return None;
+        }
+        let octet_count = self.length_octets.remove(0);
+        let cut_octets = self
+            .octets
+            .drain(..(LENGTH_OCTET_WIDTH + usize::from(octet_count)));
+        let label = TinyVec::from_iter(cut_octets.skip(LENGTH_OCTET_WIDTH));
+        let label = OwnedLabel::from_octets(label);
+
+        debug_assert_eq!(
+            label.len(),
+            octet_count,
+            "the number of bytes removed must match the removed length byte"
+        );
+        self.debug_assert_invariants();
+        Some(label)
+    }
+
+    fn pop_back(&mut self) -> Option<OwnedLabel> {
+        let octet_count = self.length_octets.pop()?;
+        let tail_octets = self
+            .octets
+            .drain((self.octets.len() - LENGTH_OCTET_WIDTH - usize::from(octet_count))..);
+        let label = TinyVec::from_iter(tail_octets.skip(LENGTH_OCTET_WIDTH));
+        let label = OwnedLabel::from_octets(label);
+
+        debug_assert_eq!(
+            label.len(),
+            octet_count,
+            "the number of bytes removed must match the removed length byte"
+        );
+        self.debug_assert_invariants();
+        Some(label)
     }
 }
 

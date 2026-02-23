@@ -12,7 +12,7 @@ use crate::{
     serde::presentation::parse_chars::escaped_to_escapable::ParseError,
     types::{
         ascii::AsciiError,
-        label::MutLabel,
+        label::{MutLabel, OwnedLabel},
     },
 };
 
@@ -152,11 +152,46 @@ pub enum MakeCanonicalError {
     #[error("domain name exceeded {} maximum octet count", MAX_OCTETS)]
     TooManyOctets,
 }
+impl From<MakeFullyQualifiedError> for MakeCanonicalError {
+    fn from(value: MakeFullyQualifiedError) -> Self {
+        match value {
+            MakeFullyQualifiedError::TooManyOctets => Self::TooManyOctets,
+        }
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum MakeFullyQualifiedError {
     #[error("domain name exceeded {} maximum octet count", MAX_OCTETS)]
     TooManyOctets,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum PushFrontError {
+    #[error("domain name exceeded {} maximum octet count", MAX_OCTETS)]
+    TooManyOctets,
+    #[error("domain name tried to insert a root label before the end")]
+    NonTrailingRoot,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum PushBackError {
+    #[error("domain name exceeded {} maximum octet count", MAX_OCTETS)]
+    TooManyOctets,
+    #[error("domain name tried to push a label after a root label")]
+    FullyQualified,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum InsertError {
+    #[error("tried to insert label past the end of the domain name")]
+    OutOfBounds,
+    #[error("domain name exceeded {} maximum octet count", MAX_OCTETS)]
+    TooManyOctets,
+    #[error("domain name tried to insert a label after a root label")]
+    FullyQualified,
+    #[error("domain name tried to insert a root label before the end")]
+    NonTrailingRoot,
 }
 
 fn impl_is_parent_of<L>(
@@ -172,6 +207,10 @@ where
         .zip(&mut parent_iter)
         .all(|(child_label, parent_label)| child_label == parent_label)
         && parent_iter.next().is_none()
+}
+
+fn would_exceed_max_octets<D: DomainName, L: Label>(domain: &D, label: &L) -> bool {
+    (domain.octet_count() + (LENGTH_OCTET_WIDTH as u16) + u16::from(label.len())) > MAX_OCTETS
 }
 
 pub trait DomainName {
@@ -790,6 +829,230 @@ pub trait DomainNameMut {
     fn labels_iter_mut<'a>(
         &'a mut self,
     ) -> impl 'a + DoubleEndedIterator<Item = &'a mut RefLabel> + ExactSizeIterator + FusedIterator + Debug;
+}
+
+pub trait DomainNameOwned: DomainName + DomainNameMut {
+    /// Converts this domain into a fully qualified domain. A domain name is
+    /// fully qualified if it ends with the root label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, types::domain_name::DomainNameOwned};
+    ///
+    /// let mut domain = domain!("example", "com");
+    ///
+    /// assert!(domain.make_fully_qualified().is_ok());
+    /// assert_eq!(domain, ref_domain!("example", "com", ""));
+    ///
+    /// assert!(domain.make_fully_qualified().is_ok());
+    /// assert_eq!(domain, ref_domain!("example", "com", ""));
+    /// ```
+    fn make_fully_qualified(&mut self) -> Result<(), MakeFullyQualifiedError> {
+        if self.is_fully_qualified() {
+            return Ok(());
+        }
+        match self.push_back(RefLabel::ROOT) {
+            Ok(()) => Ok(()),
+            Err(PushBackError::TooManyOctets) => Err(MakeFullyQualifiedError::TooManyOctets),
+            Err(PushBackError::FullyQualified) => {
+                panic!("BUG: method exits early of domain is fully qualified")
+            }
+        }
+    }
+
+    /// Converts this domain into its canonical form: lowercase and fully
+    /// qualified.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, types::domain_name::DomainNameOwned};
+    ///
+    /// let mut domain = domain!("EXAMPLE", "COM");
+    ///
+    /// assert!(domain.make_canonical().is_ok());
+    /// assert_eq!(domain, ref_domain!("example", "com", ""));
+    ///
+    /// assert!(domain.make_canonical().is_ok());
+    /// assert_eq!(domain, ref_domain!("example", "com", ""));
+    /// ```
+    fn make_canonical(&mut self) -> Result<(), MakeCanonicalError> {
+        self.make_fully_qualified()?;
+        self.make_lowercase();
+        Ok(())
+    }
+
+    /// Inserts a label at position `index`, shifting all labels after it right.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, ref_label, types::domain_name::DomainNameOwned};
+    ///
+    /// let mut domain = domain!("example", "com");
+    ///
+    /// assert!(domain.insert(1, ref_label!("foo")).is_ok());
+    /// assert_eq!(domain, ref_domain!("example", "foo", "com"));
+    ///
+    /// assert!(domain.insert(3, ref_label!("bar")).is_ok());
+    /// assert_eq!(domain, ref_domain!("example", "foo", "com", "bar"));
+    ///
+    /// assert!(domain.insert(5, ref_label!("bar")).is_err());
+    /// assert!(domain.insert(1, ref_label!("")).is_err());
+    /// assert_eq!(domain, ref_domain!("example", "foo", "com", "bar"));
+    /// ```
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, ref_label, types::domain_name::DomainNameOwned};
+    ///
+    /// let mut domain = domain!("example", "com");
+    ///
+    /// assert!(domain.insert(2, ref_label!("")).is_ok());
+    /// assert_eq!(domain, ref_domain!("example", "com", ""));
+    ///
+    /// assert!(domain.insert(3, ref_label!("")).is_err());
+    /// assert_eq!(domain, ref_domain!("example", "com", ""));
+    /// ```
+    fn insert<L: Label>(&mut self, index: usize, label: L) -> Result<(), InsertError>;
+
+    /// Puts a label at the front (left-most end) of the label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, ref_label, types::domain_name::DomainNameOwned};
+    ///
+    /// let mut domain = domain!("example", "com");
+    ///
+    /// assert!(domain.push_front(ref_label!("www")).is_ok());
+    /// assert_eq!(domain, ref_domain!("www", "example", "com"));
+    ///
+    /// assert!(domain.push_front(ref_label!("")).is_err());
+    /// assert_eq!(domain, ref_domain!("www", "example", "com"));
+    /// ```
+    fn push_front<L: Label>(&mut self, label: L) -> Result<(), PushFrontError> {
+        match self.insert(0, label) {
+            Ok(()) => Ok(()),
+            Err(InsertError::OutOfBounds) => {
+                panic!("BUG: zero is always a valid index for inserting")
+            }
+            Err(InsertError::TooManyOctets) => Err(PushFrontError::TooManyOctets),
+            Err(InsertError::FullyQualified) => {
+                panic!("BUG: method never appends after another label")
+            }
+            Err(InsertError::NonTrailingRoot) => Err(PushFrontError::NonTrailingRoot),
+        }
+    }
+
+    /// Puts a label at the back (right-most end) of the label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, ref_label, types::domain_name::DomainNameOwned};
+    ///
+    /// let mut domain = domain!("www", "example");
+    ///
+    /// assert!(domain.push_back(ref_label!("com")).is_ok());
+    /// assert_eq!(domain, ref_domain!("www", "example", "com"));
+    ///
+    /// assert!(domain.push_back(ref_label!("")).is_ok());
+    /// assert_eq!(domain, ref_domain!("www", "example", "com", ""));
+    ///
+    /// assert!(domain.push_back(ref_label!("")).is_err());
+    /// assert_eq!(domain, ref_domain!("www", "example", "com", ""));
+    /// ```
+    fn push_back<L: Label>(&mut self, label: L) -> Result<(), PushBackError> {
+        let label_count = usize::from(self.label_count());
+        match self.insert(label_count, label) {
+            Ok(()) => Ok(()),
+            Err(InsertError::OutOfBounds) => panic!(
+                "BUG: an index match the length of a domain name is always a valid index for inserting"
+            ),
+            Err(InsertError::TooManyOctets) => Err(PushBackError::TooManyOctets),
+            Err(InsertError::FullyQualified) => Err(PushBackError::FullyQualified),
+            Err(InsertError::NonTrailingRoot) => {
+                panic!("BUG: method never inserts a label before the end")
+            }
+        }
+    }
+
+    /// Removes a label from position `index`, shifting all labels after it
+    /// left.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, label, types::{domain_name::DomainNameOwned, label::Label}};
+    ///
+    /// let mut domain = domain!("www", "example", "com", "");
+    ///
+    /// assert_eq!(domain.remove(1).map(Label::into_case_sensitive), Some(label!("example").into_case_sensitive()));
+    /// assert_eq!(domain, ref_domain!("www", "com", ""));
+    ///
+    /// assert_eq!(domain.remove(2).map(Label::into_case_sensitive), Some(label!("").into_case_sensitive()));
+    /// assert_eq!(domain, ref_domain!("www", "com"));
+    ///
+    /// assert_eq!(domain.remove(2).map(Label::into_case_sensitive), None);
+    /// assert_eq!(domain, ref_domain!("www", "com"));
+    /// ```
+    fn remove(&mut self, index: usize) -> Option<OwnedLabel>;
+
+    /// Removes a label from the front (left-most end) of the label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, label, types::{domain_name::DomainNameOwned, label::Label}};
+    ///
+    /// let mut domain = domain!("www", "example", "com", "");
+    ///
+    /// assert_eq!(domain.pop_front().map(Label::into_case_sensitive), Some(label!("www").into_case_sensitive()));
+    /// assert_eq!(domain, ref_domain!("example", "com", ""));
+    ///
+    /// assert_eq!(domain.pop_front().map(Label::into_case_sensitive), Some(label!("example").into_case_sensitive()));
+    /// assert_eq!(domain, ref_domain!("com", ""));
+    ///
+    /// assert_eq!(domain.pop_front().map(Label::into_case_sensitive), Some(label!("com").into_case_sensitive()));
+    /// assert_eq!(domain, ref_domain!(""));
+    ///
+    /// assert_eq!(domain.pop_front().map(Label::into_case_sensitive), Some(label!("").into_case_sensitive()));
+    /// assert_eq!(domain.pop_front().map(Label::into_case_sensitive), None);
+    /// ```
+    fn pop_front(&mut self) -> Option<OwnedLabel> {
+        self.remove(0)
+    }
+
+    /// Removes a label at the back (right-most end) of the label.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use dns_lib::{domain, ref_domain, label, types::{domain_name::DomainNameOwned, label::Label}};
+    ///
+    /// let mut domain = domain!("www", "example", "com", "");
+    ///
+    /// assert_eq!(domain.pop_back().map(Label::into_case_sensitive), Some(label!("").into_case_sensitive()));
+    /// assert_eq!(domain, ref_domain!("www", "example", "com"));
+    ///
+    /// assert_eq!(domain.pop_back().map(Label::into_case_sensitive), Some(label!("com").into_case_sensitive()));
+    /// assert_eq!(domain, ref_domain!("www", "example"));
+    ///
+    /// assert_eq!(domain.pop_back().map(Label::into_case_sensitive), Some(label!("example").into_case_sensitive()));
+    /// assert_eq!(domain, ref_domain!("www"));
+    ///
+    /// assert_eq!(domain.pop_back().map(Label::into_case_sensitive), Some(label!("www").into_case_sensitive()));
+    /// assert_eq!(domain.pop_back().map(Label::into_case_sensitive), None);
+    /// ```
+    fn pop_back(&mut self) -> Option<OwnedLabel> {
+        let label_count = self.label_count();
+        if 0 == label_count {
+            return None;
+        } else {
+            self.remove(usize::from(label_count) - 1)
+        }
+    }
 }
 
 // Need to explicitly implement each trait method so that if a more efficient
