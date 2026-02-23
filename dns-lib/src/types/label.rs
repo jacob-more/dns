@@ -1347,39 +1347,43 @@ mod test {
         }
     }
 
-    #[test]
-    #[should_panic]
-    fn invalid_label_len() {
-        InvalidLabel::new().len();
+    macro_rules! test_should_panic_for_invalid_labels {
+        ($( fn $fn_name:ident($label_arg:ident: impl Label) { $($fn_body:tt)* } )+) => {
+            $(
+                #[rstest]
+                #[case(InvalidLabel::new())]
+                #[case(DefaultLabel(InvalidLabel::new()))]
+                #[case(InvalidLabel::new().into_case_sensitive())]
+                #[case(InvalidLabel::new().into_case_insensitive())]
+                #[should_panic]
+                fn $fn_name(#[case] $label_arg: impl Label) { $($fn_body)* }
+            )+
+        };
     }
 
-    #[test]
-    #[should_panic]
-    fn invalid_label_as_ref_label_panics() {
-        InvalidLabel::new().as_ref_label();
-    }
+    test_should_panic_for_invalid_labels!(
+        fn invalid_label_len(invalid_label: impl Label) {
+            invalid_label.len();
+        }
 
-    #[test]
-    #[should_panic]
-    fn invalid_label_as_owned_panics() {
-        InvalidLabel::new().as_owned();
-    }
+        fn invalid_label_as_ref_label_panics(invalid_label: impl Label) {
+            invalid_label.as_ref_label();
+        }
 
-    #[test]
-    #[should_panic]
-    fn invalid_label_into_owned_panics() {
-        InvalidLabel::new().into_owned();
-    }
+        fn invalid_label_as_owned_panics(invalid_label: impl Label) {
+            invalid_label.as_owned();
+        }
 
-    #[test]
-    #[should_panic]
-    fn invalid_label_as_case_sensitive_panics() {
-        InvalidLabel::new().as_case_sensitive();
-    }
+        fn invalid_label_into_owned_panics(invalid_label: impl Label) {
+            invalid_label.into_owned();
+        }
 
-    #[test]
-    #[should_panic]
-    fn invalid_label_as_case_insensitive_panics() {
-        InvalidLabel::new().as_case_insensitive();
-    }
+        fn invalid_label_as_case_sensitive_panics(invalid_label: impl Label) {
+            invalid_label.as_case_sensitive();
+        }
+
+        fn invalid_label_as_case_insensitive_panics(invalid_label: impl Label) {
+            invalid_label.as_case_insensitive();
+        }
+    );
 }
