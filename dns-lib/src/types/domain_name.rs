@@ -12,7 +12,7 @@ use crate::{
     serde::presentation::parse_chars::escaped_to_escapable::ParseError,
     types::{
         ascii::AsciiError,
-        label::{CaseInsensitive, CaseSensitive, MutLabel},
+        label::MutLabel,
     },
 };
 
@@ -366,8 +366,8 @@ pub trait DomainName {
     /// ```
     fn is_parent_of<D: DomainName>(&self, other: &D) -> bool {
         impl_is_parent_of(
-            other.labels_iter().map(CaseSensitive),
-            self.labels_iter().map(CaseSensitive),
+            other.labels_iter().map(Label::into_case_sensitive),
+            self.labels_iter().map(Label::into_case_sensitive),
         )
     }
 
@@ -399,8 +399,8 @@ pub trait DomainName {
     /// ```
     fn is_parent_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
         impl_is_parent_of(
-            other.labels_iter().map(CaseInsensitive),
-            self.labels_iter().map(CaseInsensitive),
+            other.labels_iter().map(Label::into_case_insensitive),
+            self.labels_iter().map(Label::into_case_insensitive),
         )
     }
 
@@ -432,8 +432,8 @@ pub trait DomainName {
     /// ```
     fn is_child_of<D: DomainName>(&self, other: &D) -> bool {
         impl_is_parent_of(
-            self.labels_iter().map(CaseSensitive),
-            other.labels_iter().map(CaseSensitive),
+            self.labels_iter().map(Label::into_case_sensitive),
+            other.labels_iter().map(Label::into_case_sensitive),
         )
     }
 
@@ -465,8 +465,8 @@ pub trait DomainName {
     /// ```
     fn is_child_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
         impl_is_parent_of(
-            self.labels_iter().map(CaseInsensitive),
-            other.labels_iter().map(CaseInsensitive),
+            self.labels_iter().map(Label::into_case_insensitive),
+            other.labels_iter().map(Label::into_case_insensitive),
         )
     }
 
@@ -495,8 +495,8 @@ pub trait DomainName {
     /// ```
     fn eq_ignore_case<D: DomainName>(&self, other: &D) -> bool {
         self.labels_iter()
-            .map(CaseInsensitive)
-            .eq(other.labels_iter().map(CaseInsensitive))
+            .map(Label::into_case_insensitive)
+            .eq(other.labels_iter().map(Label::into_case_insensitive))
     }
 
     /// Get the label at the specified index. The left-most label is index 0.
@@ -504,22 +504,22 @@ pub trait DomainName {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::CaseInsensitive}};
+    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::Label}};
     ///
     /// assert_eq!(
-    ///     ref_domain!("example", "com", "").get_label(0).map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!("example"))),
+    ///     ref_domain!("example", "com", "").get_label(0).map(Label::as_case_sensitive),
+    ///     Some(ref_label!("example").as_case_sensitive()),
     /// );
     /// assert_eq!(
-    ///     ref_domain!("example", "com", "").get_label(1).map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!("com"))),
+    ///     ref_domain!("example", "com", "").get_label(1).map(Label::as_case_sensitive),
+    ///     Some(ref_label!("com").as_case_sensitive()),
     /// );
     /// assert_eq!(
-    ///     ref_domain!("example", "com", "").get_label(2).map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!(""))),
+    ///     ref_domain!("example", "com", "").get_label(2).map(Label::as_case_sensitive),
+    ///     Some(ref_label!("").as_case_sensitive()),
     /// );
     /// assert_eq!(
-    ///     ref_domain!("example", "com", "").get_label(3).map(CaseInsensitive),
+    ///     ref_domain!("example", "com", "").get_label(3).map(Label::as_case_sensitive),
     ///     None,
     /// );
     /// ```
@@ -533,19 +533,19 @@ pub trait DomainName {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::CaseInsensitive}};
+    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::Label}};
     ///
     /// assert_eq!(
-    ///     ref_domain!("").first_label().map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!(""))),
+    ///     ref_domain!("").first_label().map(Label::as_case_sensitive),
+    ///     Some(ref_label!("").as_case_sensitive()),
     /// );
     /// assert_eq!(
-    ///     ref_domain!("com", "").first_label().map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!("com"))),
+    ///     ref_domain!("com", "").first_label().map(Label::as_case_sensitive),
+    ///     Some(ref_label!("com").as_case_sensitive()),
     /// );
     /// assert_eq!(
-    ///     ref_domain!("example", "com", "").first_label().map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!("example"))),
+    ///     ref_domain!("example", "com", "").first_label().map(Label::as_case_sensitive),
+    ///     Some(ref_label!("example").as_case_sensitive()),
     /// );
     /// ```
     fn first_label(&self) -> Option<&RefLabel> {
@@ -558,19 +558,19 @@ pub trait DomainName {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::CaseInsensitive}};
+    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::Label}};
     ///
     /// assert_eq!(
-    ///     ref_domain!("").last_label().map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!(""))),
+    ///     ref_domain!("").last_label().map(Label::as_case_sensitive),
+    ///     Some(ref_label!("").as_case_sensitive()),
     /// );
     /// assert_eq!(
-    ///     ref_domain!("com", "").last_label().map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!(""))),
+    ///     ref_domain!("com", "").last_label().map(Label::as_case_sensitive),
+    ///     Some(ref_label!("").as_case_sensitive()),
     /// );
     /// assert_eq!(
-    ///     ref_domain!("example", "com", "").last_label().map(CaseInsensitive),
-    ///     Some(CaseInsensitive(ref_label!(""))),
+    ///     ref_domain!("example", "com", "").last_label().map(Label::as_case_sensitive),
+    ///     Some(ref_label!("").as_case_sensitive()),
     /// );
     /// ```
     fn last_label(&self) -> Option<&RefLabel> {
@@ -642,16 +642,16 @@ pub trait DomainName {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::CaseInsensitive}};
+    /// use dns_lib::{ref_domain, ref_label, types::{domain_name::DomainName, label::Label}};
     ///
     /// let domain_name = ref_domain!("www", "example", "com", "");
     /// let mut labels_iter = domain_name.labels_iter();
     ///
-    /// assert_eq!(labels_iter.next().map(CaseInsensitive), Some(CaseInsensitive(ref_label!("www"))));
-    /// assert_eq!(labels_iter.next().map(CaseInsensitive), Some(CaseInsensitive(ref_label!("example"))));
-    /// assert_eq!(labels_iter.next().map(CaseInsensitive), Some(CaseInsensitive(ref_label!("com"))));
-    /// assert_eq!(labels_iter.next().map(CaseInsensitive), Some(CaseInsensitive(ref_label!(""))));
-    /// assert_eq!(labels_iter.next().map(CaseInsensitive), None);
+    /// assert_eq!(labels_iter.next().map(Label::as_case_sensitive), Some(ref_label!("www").as_case_sensitive()));
+    /// assert_eq!(labels_iter.next().map(Label::as_case_sensitive), Some(ref_label!("example").as_case_sensitive()));
+    /// assert_eq!(labels_iter.next().map(Label::as_case_sensitive), Some(ref_label!("com").as_case_sensitive()));
+    /// assert_eq!(labels_iter.next().map(Label::as_case_sensitive), Some(ref_label!("").as_case_sensitive()));
+    /// assert_eq!(labels_iter.next().map(Label::as_case_sensitive), None);
     /// ```
     fn labels_iter<'a>(
         &'a self,
@@ -725,11 +725,11 @@ pub trait DomainNameMut {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{ref_domain, ref_label, domain, types::domain_name::DomainNameMut};
+    /// use dns_lib::{ref_domain, ref_label, domain, types::{domain_name::DomainNameMut, label::{Label, MutLabel}}};
     ///
     /// let mut domain_name = domain!("www", "example", "com", "");
-    /// let label = domain_name.get_mut(1);
-    /// assert_eq!(label, ref_label!("example"));
+    /// let label = domain_name.get_mut(1).expect("domain has 4 labels");
+    /// assert_eq!(label.as_case_sensitive(), ref_label!("example").as_case_sensitive());
     /// label.make_uppercase();
     /// assert_eq!(domain_name, ref_domain!("www", "EXAMPLE", "com", ""));
     /// ```
@@ -742,11 +742,11 @@ pub trait DomainNameMut {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{ref_domain, ref_label, domain, types::domain_name::DomainNameMut};
+    /// use dns_lib::{ref_domain, ref_label, domain, types::{domain_name::DomainNameMut, label::{Label, MutLabel}}};
     ///
     /// let mut domain_name = domain!("www", "example", "com", "");
-    /// let label = domain_name.first_mut();
-    /// assert_eq!(label, ref_label!("www"));
+    /// let label = domain_name.first_mut().expect("domain has 4 labels");
+    /// assert_eq!(label.as_case_sensitive(), ref_label!("www").as_case_sensitive());
     /// label.make_uppercase();
     /// assert_eq!(domain_name, ref_domain!("WWW", "example", "com", ""));
     /// ```
@@ -759,13 +759,13 @@ pub trait DomainNameMut {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{ref_domain, ref_label, domain, types::domain_name::DomainNameMut};
+    /// use dns_lib::{ref_domain, ref_label, domain, types::{domain_name::DomainNameMut, label::{Label, MutLabel}}};
     ///
     /// let mut domain_name = domain!("www", "example", "com");
-    /// let label = domain_name.last_mut();
-    /// assert_eq!(label, ref_label!("com"));
+    /// let label = domain_name.last_mut().expect("domain has 3 labels");
+    /// assert_eq!(label.as_case_sensitive(), ref_label!("com").as_case_sensitive());
     /// label.make_uppercase();
-    /// assert_eq!(domain_name, ref_domain!("WWW", "example", "COM"));
+    /// assert_eq!(domain_name, ref_domain!("www", "example", "COM"));
     /// ```
     fn last_mut(&mut self) -> Option<&mut RefLabel> {
         self.labels_iter_mut().last()
@@ -783,7 +783,7 @@ pub trait DomainNameMut {
     /// let mut domain_name = domain!("www", "example", "com", "");
     /// domain_name.labels_iter_mut()
     ///     .nth(1)
-    ///     .expect("the domain has 4 labels. Index 1 must be in-range")
+    ///     .expect("the domain has 4 labels")
     ///     .make_uppercase();
     /// assert_eq!(domain_name, ref_domain!("www", "EXAMPLE", "com", ""));
     /// ```
@@ -1101,7 +1101,7 @@ mod test {
                 CompressibleDomainVec, DomainName, DomainNameMut, DomainSlice, DomainVec,
                 IncompressibleDomainVec, MAX_LABEL_OCTETS,
             },
-            label::{CaseSensitive, RefLabel},
+            label::{Label, RefLabel},
         },
     };
 
@@ -1175,7 +1175,7 @@ mod test {
         assert_eq!(
             domain.is_root(),
             is_root,
-            "{} is {}expected to be to be root",
+            "{} is {}expected to be root",
             DomainDisplay(domain),
             if is_root { "" } else { "not " }
         );
@@ -1185,7 +1185,7 @@ mod test {
         assert_eq!(
             domain.is_lowercase(),
             is_lowercase,
-            "{} is {}expected to be to be lowercase",
+            "{} is {}expected to be lowercase",
             DomainDisplay(domain),
             if is_lowercase { "" } else { "not " }
         );
@@ -1195,7 +1195,7 @@ mod test {
         assert_eq!(
             domain.is_uppercase(),
             is_uppercase,
-            "{} is {}expected to be to be uppercase",
+            "{} is {}expected to be uppercase",
             DomainDisplay(domain),
             if is_uppercase { "" } else { "not " }
         );
@@ -1205,7 +1205,7 @@ mod test {
         assert_eq!(
             domain.is_fully_qualified(),
             is_fully_qualified,
-            "{} is {}expected to be to be fully qualified",
+            "{} is {}expected to be fully qualified",
             DomainDisplay(domain),
             if is_fully_qualified { "" } else { "not " }
         );
@@ -1215,7 +1215,7 @@ mod test {
         assert_eq!(
             domain.is_canonical(),
             is_canonical,
-            "{} is {}expected to be to be canonical",
+            "{} is {}expected to be canonical",
             DomainDisplay(domain),
             if is_canonical { "" } else { "not " }
         );
@@ -1224,8 +1224,8 @@ mod test {
     fn impl_domain_get_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
         for (index, expected_label) in expected_labels.iter().enumerate() {
             assert_eq!(
-                domain.get_label(index).map(CaseSensitive),
-                Some(CaseSensitive(*expected_label))
+                domain.get_label(index).map(Label::as_case_sensitive),
+                Some(expected_label.as_case_sensitive())
             );
         }
         assert!(domain.get_label(expected_labels.len()).is_none());
@@ -1234,33 +1234,36 @@ mod test {
 
     fn impl_domain_first_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
         assert_eq!(
-            domain.first_label().map(CaseSensitive),
-            expected_labels.first().copied().map(CaseSensitive)
+            domain.first_label().map(Label::as_case_sensitive),
+            expected_labels.first().map(Label::as_case_sensitive)
         );
         assert_eq!(
-            domain.first_label().map(CaseSensitive),
-            domain.get_label(0).map(CaseSensitive)
+            domain.first_label().map(Label::as_case_sensitive),
+            domain.get_label(0).map(Label::as_case_sensitive)
         );
         assert_eq!(
-            domain.first_label().map(CaseSensitive),
-            domain.labels_iter().next().map(CaseSensitive)
+            domain.first_label().map(Label::as_case_sensitive),
+            domain.labels_iter().next().map(Label::as_case_sensitive)
         );
     }
 
     fn impl_domain_last_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
         assert_eq!(
-            domain.last_label().map(CaseSensitive),
-            expected_labels.last().copied().map(CaseSensitive)
+            domain.last_label().map(Label::as_case_sensitive),
+            expected_labels
+                .last()
+                .copied()
+                .map(Label::as_case_sensitive)
         );
         assert_eq!(
-            domain.last_label().map(CaseSensitive),
+            domain.last_label().map(Label::as_case_sensitive),
             domain
                 .get_label(expected_labels.len() - 1)
-                .map(CaseSensitive)
+                .map(Label::as_case_sensitive)
         );
         assert_eq!(
-            domain.last_label().map(CaseSensitive),
-            domain.labels_iter().last().map(CaseSensitive)
+            domain.last_label().map(Label::as_case_sensitive),
+            domain.labels_iter().last().map(Label::as_case_sensitive)
         );
     }
 
@@ -1339,20 +1342,29 @@ mod test {
         + Clone,
     ) {
         assert_eq!(
-            expected_labels.clone().next().map(CaseSensitive),
-            domain_labels.clone().next().map(CaseSensitive)
+            expected_labels.clone().next().map(Label::as_case_sensitive),
+            domain_labels.clone().next().map(Label::as_case_sensitive)
         );
         assert_eq!(
-            expected_labels.clone().next_back().map(CaseSensitive),
-            domain_labels.clone().next_back().map(CaseSensitive),
+            expected_labels
+                .clone()
+                .next_back()
+                .map(Label::as_case_sensitive),
+            domain_labels
+                .clone()
+                .next_back()
+                .map(Label::as_case_sensitive),
         );
         assert_eq!(
-            expected_labels.clone().last().map(CaseSensitive),
-            domain_labels.clone().last().map(CaseSensitive)
+            expected_labels.clone().last().map(Label::as_case_sensitive),
+            domain_labels.clone().last().map(Label::as_case_sensitive)
         );
         assert_eq!(
-            domain_labels.clone().last().map(CaseSensitive),
-            domain_labels.clone().next_back().map(CaseSensitive),
+            domain_labels.clone().last().map(Label::as_case_sensitive),
+            domain_labels
+                .clone()
+                .next_back()
+                .map(Label::as_case_sensitive),
         );
         assert_eq!(
             expected_labels.clone().count(),
@@ -1369,12 +1381,20 @@ mod test {
         );
         for n in 0..(domain_labels.clone().count() + 1) {
             assert_eq!(
-                expected_labels.clone().nth(n).map(CaseSensitive),
-                domain_labels.clone().nth(n).map(CaseSensitive)
+                expected_labels.clone().nth(n).map(Label::as_case_sensitive),
+                domain_labels.clone().nth(n).map(Label::as_case_sensitive)
             );
             assert_eq!(
-                expected_labels.clone().rev().nth(n).map(CaseSensitive),
-                domain_labels.clone().rev().nth(n).map(CaseSensitive),
+                expected_labels
+                    .clone()
+                    .rev()
+                    .nth(n)
+                    .map(Label::as_case_sensitive),
+                domain_labels
+                    .clone()
+                    .rev()
+                    .nth(n)
+                    .map(Label::as_case_sensitive),
             );
         }
     }
@@ -1383,9 +1403,12 @@ mod test {
         let expected_labels = expected_labels
             .into_iter()
             .copied()
-            .map(CaseSensitive)
+            .map(Label::as_case_sensitive)
             .collect::<Vec<_>>();
-        let actual_labels = domain.labels_iter().map(CaseSensitive).collect::<Vec<_>>();
+        let actual_labels = domain
+            .labels_iter()
+            .map(Label::as_case_sensitive)
+            .collect::<Vec<_>>();
         assert_eq!(expected_labels, actual_labels);
     }
 
@@ -1397,12 +1420,12 @@ mod test {
             .into_iter()
             .rev()
             .copied()
-            .map(CaseSensitive)
+            .map(Label::as_case_sensitive)
             .collect::<Vec<_>>();
         let actual_labels = domain
             .labels_iter()
             .rev()
-            .map(CaseSensitive)
+            .map(Label::as_case_sensitive)
             .collect::<Vec<_>>();
         assert_eq!(expected_labels, actual_labels);
     }
@@ -1413,8 +1436,8 @@ mod test {
             let mut domain_labels = domain.labels_iter();
             for _ in 0..(expected_labels.len() * 2) {
                 assert_eq!(
-                    expected_labels.nth(n).map(CaseSensitive),
-                    domain_labels.nth(n).map(CaseSensitive)
+                    expected_labels.nth(n).map(Label::as_case_sensitive),
+                    domain_labels.nth(n).map(Label::as_case_sensitive)
                 );
                 domain_labels_iter_verify_extra_properties(
                     domain_labels.clone(),
@@ -1436,8 +1459,8 @@ mod test {
             let mut domain_labels = domain.labels_iter().rev();
             for _ in 0..(expected_labels.len() * 2) {
                 assert_eq!(
-                    expected_labels.nth(n).map(CaseSensitive),
-                    domain_labels.nth(n).map(CaseSensitive)
+                    expected_labels.nth(n).map(Label::as_case_sensitive),
+                    domain_labels.nth(n).map(Label::as_case_sensitive)
                 );
                 domain_labels_iter_verify_extra_properties(
                     domain_labels.clone(),
@@ -1459,7 +1482,10 @@ mod test {
             .zip(expected_labels)
             .zip(expected_label_strings)
         {
-            assert_eq!(CaseSensitive(expected_label), CaseSensitive(domain_label));
+            assert_eq!(
+                expected_label.as_case_sensitive(),
+                domain_label.as_case_sensitive()
+            );
             assert_eq!(expected_label_str, domain_label.to_string().as_str());
             assert_eq!(expected_label_str, expected_label.to_string().as_str());
         }
@@ -1472,11 +1498,10 @@ mod test {
         assert_eq!(domain.length_octets_iter().count(), expected_labels.len());
         for (domain_length_octet, expected_length_octet) in domain
             .length_octets_iter()
-            .map(usize::from)
             .zip(expected_labels.iter().map(|label| label.len()))
         {
             assert_eq!(domain_length_octet, expected_length_octet);
-            assert!(domain_length_octet <= usize::from(MAX_LABEL_OCTETS));
+            assert!(u16::from(domain_length_octet) <= MAX_LABEL_OCTETS);
         }
     }
 

@@ -9,7 +9,7 @@ use tinyvec::{TinyVec, tiny_vec};
 
 use crate::{
     serde::presentation::parse_chars::{char_token::EscapableChar, non_escaped_to_escaped},
-    types::ascii::AsciiChar,
+    types::{ascii::AsciiChar, domain_name::MAX_LABEL_OCTETS},
 };
 
 use super::ascii::constants::ASCII_PERIOD;
@@ -31,6 +31,14 @@ pub const fn assert_domain_name_label_invariants(octets: &[u8]) {
         octets.len() <= (crate::types::domain_name::MAX_LABEL_OCTETS as usize),
         "domain name label specified must be valid but it exceeds MAX_LABEL_OCTETS",
     )
+}
+
+/// Like `assert_domain_name_label_invariants()`, but it compiles to a no-op
+/// when debug_assertions is not enabled.
+pub const fn debug_assert_domain_name_label_invariants(octets: &[u8]) {
+    if cfg!(debug_assertions) {
+        assert_domain_name_label_invariants(octets);
+    }
 }
 
 pub trait Label: Debug {
@@ -61,7 +69,11 @@ pub trait Label: Debug {
     /// assert_eq!(label.octets().len(), 3);
     /// ```
     fn len(&self) -> u8 {
-        self.octets().len() as u8
+        let len = self.octets().len();
+        if len > usize::from(MAX_LABEL_OCTETS) {
+            panic!("labels must have a length at most {MAX_LABEL_OCTETS} but it was {len}");
+        }
+        len as u8
     }
 
     /// Returns `true` if a label contains any bytes not including the length
@@ -145,12 +157,15 @@ pub trait Label: Debug {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, Label, OwnedLabel, RefLabel}};
+    /// use dns_lib::{label, ref_label, types::label::{Label, OwnedLabel, RefLabel}};
     ///
     /// let owned_label: OwnedLabel = label!("foo");
     /// let ref_label: &RefLabel = ref_label!("foo");
     ///
-    /// assert_eq!(CaseSensitive(owned_label.as_ref_label()), CaseSensitive(ref_label));
+    /// assert_eq!(
+    ///     owned_label.as_ref_label().as_case_sensitive(),
+    ///     ref_label.as_case_sensitive()
+    /// );
     /// ```
     fn as_ref_label(&self) -> &RefLabel {
         RefLabel::from_octets(self.octets())
@@ -162,13 +177,13 @@ pub trait Label: Debug {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, Label, OwnedLabel, RefLabel}};
+    /// use dns_lib::{label, ref_label, types::label::{Label, OwnedLabel, RefLabel}};
     ///
     /// let owned_label: OwnedLabel = label!("foo");
     /// let ref_label: &RefLabel = ref_label!("foo");
     ///
-    /// assert_eq!(CaseSensitive(ref_label.as_owned()), CaseSensitive(&owned_label));
-    /// assert_eq!(CaseSensitive(ref_label.as_owned()), CaseSensitive(&owned_label));
+    /// assert_eq!(ref_label.as_owned().as_case_sensitive(), owned_label.as_case_sensitive());
+    /// assert_eq!(ref_label.as_owned().as_case_sensitive(), owned_label.as_case_sensitive());
     /// ```
     fn as_owned(&self) -> OwnedLabel {
         OwnedLabel::from_octets(self.octets().into())
@@ -181,15 +196,15 @@ pub trait Label: Debug {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{label, types::label::{CaseSensitive, Label, OwnedLabel}};
+    /// use dns_lib::{label, types::label::{Label, OwnedLabel}};
     ///
     /// let label_a: OwnedLabel = label!("foo");
     /// let label_b: OwnedLabel = label!("foo");
     ///
-    /// assert_eq!(CaseSensitive(label_a.into_owned()), CaseSensitive(&label_b));
+    /// assert_eq!(label_a.into_owned().as_case_sensitive(), label_b.as_case_sensitive());
     /// // Unlike `Label::as_owned()`, calling `Label::into_owned()` again would
     /// // result in a compile-time error because `label_a` was moved.
-    /// //assert_eq!(CaseSensitive(label_a.into_owned()), CaseSensitive(&label_b));
+    /// //assert_eq!(label_a.into_owned().as_case_sensitive(), label_b.as_case_sensitive());
     /// ```
     fn into_owned(self) -> OwnedLabel
     where
@@ -256,6 +271,22 @@ pub trait Label: Debug {
         self.as_ref_label().borrow()
     }
 
+    /// Converts this label into `CaseInsensitive` label.
+    fn into_case_insensitive(self) -> CaseInsensitive<Self>
+    where
+        Self: Sized,
+    {
+        CaseInsensitive(self)
+    }
+
+    /// Converts this label into `CaseInsensitive` label.
+    fn into_case_sensitive(self) -> CaseSensitive<Self>
+    where
+        Self: Sized,
+    {
+        CaseSensitive(self)
+    }
+
     /// Iterates over the bytes that make up the label, not including the length
     /// octet, and returns the escaped form of each.
     fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
@@ -276,13 +307,13 @@ pub trait MutLabel: Debug {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, MutLabel}};
+    /// use dns_lib::{label, ref_label, types::label::{Label, MutLabel}};
     ///
     /// let mut label = label!("foo");
     /// assert_eq!(label.octets_mut(), &mut [b'f', b'o', b'o']);
     ///
     /// label.octets_mut()[0] = b'b';
-    /// assert_eq!(CaseSensitive(label), CaseSensitive(ref_label!("boo")));
+    /// assert_eq!(label.as_case_sensitive(), ref_label!("boo").as_case_sensitive());
     /// ```
     fn octets_mut(&mut self) -> &mut [AsciiChar];
 
@@ -291,11 +322,11 @@ pub trait MutLabel: Debug {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, MutLabel}};
+    /// use dns_lib::{label, ref_label, types::label::{Label, MutLabel}};
     ///
     /// let mut label = label!("foo");
     /// label.as_ref_mut_label().make_uppercase();
-    /// assert_eq!(CaseSensitive(label), CaseSensitive(ref_label!("FOO")));
+    /// assert_eq!(label.as_case_sensitive(), ref_label!("FOO").as_case_sensitive());
     /// ```
     fn as_ref_mut_label(&mut self) -> &mut RefLabel {
         RefLabel::from_octets_mut(self.octets_mut())
@@ -306,13 +337,13 @@ pub trait MutLabel: Debug {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, MutLabel}};
+    /// use dns_lib::{label, ref_label, types::label::{Label, MutLabel}};
     ///
     /// let mut label = label!("foo");
     /// label.make_uppercase();
     /// assert_eq!(
-    ///     CaseSensitive(label),
-    ///     CaseSensitive(ref_label!("FOO")),
+    ///     label.as_case_sensitive(),
+    ///     ref_label!("FOO").as_case_sensitive(),
     /// );
     /// ```
     fn make_uppercase(&mut self) {
@@ -324,13 +355,13 @@ pub trait MutLabel: Debug {
     /// # Examples
     ///
     /// ```
-    /// use dns_lib::{label, ref_label, types::label::{CaseSensitive, MutLabel}};
+    /// use dns_lib::{label, ref_label, types::label::{Label, MutLabel}};
     ///
     /// let mut label = label!("FOO");
     /// label.make_lowercase();
     /// assert_eq!(
-    ///     CaseSensitive(label),
-    ///     CaseSensitive(ref_label!("foo")),
+    ///     label.as_case_sensitive(),
+    ///     ref_label!("foo").as_case_sensitive(),
     /// );
     /// ```
     fn make_lowercase(&mut self) {
@@ -423,17 +454,38 @@ pub struct RefLabel {
 
 impl OwnedLabel {
     pub fn new() -> Self {
-        Self {
-            octets: tiny_vec![],
-        }
+        Self::from_octets(tiny_vec![])
     }
 
-    // `pub(super)` to keep the internal implementation using `TinyVec` out of
-    // the external API.
     pub(super) fn from_octets(octets: TinyVec<[AsciiChar; 14]>) -> Self {
+        // `pub(super)` to keep the internal implementation using `TinyVec` out
+        // of the public API.
         assert_domain_name_label_invariants(&octets);
 
-        OwnedLabel { octets }
+        // Safety: The call to `assert_domain_name_label_invariants()` verifies
+        // that all invariants required to create a valid label are upheld and
+        // panics if they are not.
+        unsafe { Self::from_raw_parts(octets) }
+    }
+
+    /// Create a `OwnedLabel` from its raw components.
+    ///
+    /// # Safety
+    ///
+    /// The `octets` must be a valid non-compressed wire-encoded domain name
+    /// label, excluding the leading length octet.
+    ///
+    /// The label may not exceed a length of `MAX_LABEL_OCTETS` (63) bytes (not
+    /// including the length octet).
+    ///
+    /// See RFC 1035 for details about this encoding scheme used for the
+    /// `octets`.
+    pub(super) unsafe fn from_raw_parts(octets: TinyVec<[AsciiChar; 14]>) -> Self {
+        // `pub(super)` to keep the internal implementation using `TinyVec` out
+        // of the public API.
+        debug_assert_domain_name_label_invariants(&octets);
+
+        Self { octets }
     }
 }
 
@@ -489,6 +541,8 @@ impl RefLabel {
     /// See RFC 1035 for details about this encoding scheme used for the
     /// `octets`.
     pub const unsafe fn from_raw_parts(octets: &[AsciiChar]) -> &Self {
+        debug_assert_domain_name_label_invariants(octets);
+
         // TODO: The unsafe blocks for the ref labels are based on code in the
         //       standard library. Need to go through and make sure I am
         //       upholding the safety guarantees in this particular case.
@@ -508,6 +562,8 @@ impl RefLabel {
     /// See RFC 1035 for details about this encoding scheme used for the
     /// `octets`.
     pub const unsafe fn from_raw_parts_mut(octets: &mut [AsciiChar]) -> &mut Self {
+        debug_assert_domain_name_label_invariants(octets);
+
         // TODO: The unsafe blocks for the ref labels are based on code in the
         //       standard library. Need to go through and make sure I am
         //       upholding the safety guarantees in this particular case.
@@ -520,8 +576,17 @@ impl Label for OwnedLabel {
         &self.octets
     }
 
+    fn len(&self) -> u8 {
+        // `OwnedLabel`s never have more than MAX_LABEL_OCTETS octets. This is
+        // verified when they are instantiated.
+        self.octets().len() as u8
+    }
+
     fn as_ref_label(&self) -> &RefLabel {
-        &*self
+        // Safety: `OwnedLabel` has the same safety constraints as `RefLabel`
+        // for instantiation so it is safe to convert between the two types
+        // without re-checking those constraints.
+        unsafe { RefLabel::from_raw_parts(&self.octets()) }
     }
 
     fn as_owned(&self) -> OwnedLabel {
@@ -537,22 +602,43 @@ impl Label for RefLabel {
         &self.octets
     }
 
+    fn len(&self) -> u8 {
+        // `Label`s never have more than MAX_LABEL_OCTETS octets. This is
+        // verified when they are instantiated.
+        self.octets().len() as u8
+    }
+
     fn as_ref_label(&self) -> &RefLabel {
         self
     }
 
-    // TODO: implement `as_owned()` using unsafe to skip invariant check on
-    //       `octets` since they should be already valid.
+    fn as_owned(&self) -> OwnedLabel {
+        // Safety: `OwnedLabel` has the same safety constraints as `RefLabel`
+        // for instantiation so it is safe to convert between the two types
+        // without re-checking those constraints.
+        unsafe { OwnedLabel::from_raw_parts(self.octets().into()) }
+    }
 }
 
 impl MutLabel for OwnedLabel {
     fn octets_mut(&mut self) -> &mut [AsciiChar] {
         &mut self.octets
     }
+
+    fn as_ref_mut_label(&mut self) -> &mut RefLabel {
+        // Safety: `OwnedLabel` has the same safety constraints as `RefLabel`
+        // for instantiation so it is safe to convert between the two types
+        // without re-checking those constraints.
+        unsafe { RefLabel::from_raw_parts_mut(self.octets_mut()) }
+    }
 }
 impl MutLabel for RefLabel {
     fn octets_mut(&mut self) -> &mut [AsciiChar] {
         &mut self.octets
+    }
+
+    fn as_ref_mut_label(&mut self) -> &mut RefLabel {
+        self
     }
 }
 
@@ -560,28 +646,24 @@ impl Deref for OwnedLabel {
     type Target = RefLabel;
 
     fn deref(&self) -> &Self::Target {
-        // TODO: use unsafe variant `from_raw_parts()` since &self should always
-        //       be a valid label.
-        RefLabel::from_octets(&self.octets)
+        self.as_ref_label()
     }
 }
 impl DerefMut for OwnedLabel {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        // TODO: use unsafe variant `from_raw_parts_mut()` since &self should
-        //       always be a valid label.
-        RefLabel::from_octets_mut(&mut self.octets)
+        self.as_ref_mut_label()
     }
 }
 impl Deref for RefLabel {
     type Target = [AsciiChar];
 
     fn deref(&self) -> &Self::Target {
-        &self.octets
+        self.octets()
     }
 }
 impl DerefMut for RefLabel {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.octets
+        self.octets_mut()
     }
 }
 
@@ -628,14 +710,14 @@ impl Display for RefLabel {
     }
 }
 
-impl From<&RefLabel> for OwnedLabel {
-    fn from(value: &RefLabel) -> Self {
+impl<L: Label> From<&L> for OwnedLabel {
+    fn from(value: &L) -> Self {
         value.as_owned()
     }
 }
-impl<'a> From<&'a OwnedLabel> for &'a RefLabel {
-    fn from(value: &'a OwnedLabel) -> Self {
-        value.deref()
+impl<'a, L: Label> From<&'a L> for &'a RefLabel {
+    fn from(value: &'a L) -> Self {
+        value.as_ref_label()
     }
 }
 
@@ -655,7 +737,7 @@ macro_rules! impl_case_sensitivity {
     ($sensitivity:ident) => {
         #[derive(Debug)]
         #[repr(transparent)]
-        pub struct $sensitivity<L: ?Sized>(pub L);
+        pub struct $sensitivity<L: ?Sized>(L);
 
         impl_label!($sensitivity<L>; {} self {.0});
 
@@ -786,7 +868,9 @@ mod test {
     use crate::{
         label, ref_label,
         types::{
-            ascii::AsciiChar, domain_name::MAX_LABEL_OCTETS, label::{Label, MutLabel, RefLabel}
+            ascii::AsciiChar,
+            domain_name::MAX_LABEL_OCTETS,
+            label::{Label, MutLabel, RefLabel},
         },
     };
 
@@ -1248,12 +1332,12 @@ mod test {
     /// the default implementation.
     #[derive(Debug)]
     struct InvalidLabel {
-        octets: [u8; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()]
+        octets: [u8; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()],
     }
     impl InvalidLabel {
         pub fn new() -> Self {
             Self {
-                octets: [0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()]
+                octets: [0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()],
             }
         }
     }
@@ -1265,31 +1349,37 @@ mod test {
 
     #[test]
     #[should_panic]
-    fn as_ref_label_panics() {
+    fn invalid_label_len() {
+        InvalidLabel::new().len();
+    }
+
+    #[test]
+    #[should_panic]
+    fn invalid_label_as_ref_label_panics() {
         InvalidLabel::new().as_ref_label();
     }
 
     #[test]
     #[should_panic]
-    fn as_owned_panics() {
+    fn invalid_label_as_owned_panics() {
         InvalidLabel::new().as_owned();
     }
 
     #[test]
     #[should_panic]
-    fn into_owned_panics() {
+    fn invalid_label_into_owned_panics() {
         InvalidLabel::new().into_owned();
     }
 
     #[test]
     #[should_panic]
-    fn as_case_sensitive_panics() {
+    fn invalid_label_as_case_sensitive_panics() {
         InvalidLabel::new().as_case_sensitive();
     }
 
     #[test]
     #[should_panic]
-    fn as_case_insensitive_panics() {
+    fn invalid_label_as_case_insensitive_panics() {
         InvalidLabel::new().as_case_insensitive();
     }
 }
