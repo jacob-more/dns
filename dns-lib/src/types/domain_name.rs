@@ -1354,7 +1354,6 @@ mod test {
 
     use concat_idents::concat_idents;
     use rstest::rstest;
-    use static_assertions::const_assert;
 
     use crate::{
         ref_domain, ref_label,
@@ -1362,7 +1361,7 @@ mod test {
         types::{
             domain_name::{
                 CompressibleDomainVec, DomainName, DomainNameMut, DomainSlice, DomainVec,
-                IncompressibleDomainVec, MAX_LABEL_OCTETS,
+                IncompressibleDomainVec, RawDomainSlice, RawDomainVec,
             },
             label::{Label, RefLabel},
         },
@@ -1414,706 +1413,1190 @@ mod test {
         }
     }
 
-    fn impl_domain_octet_count(domain: impl DomainName, octet_count: u16) {
-        assert_eq!(
-            domain.octet_count(),
-            octet_count,
-            "{} is expected to have {octet_count} octets",
-            DomainDisplay(domain)
-        );
-    }
-
-    fn impl_domain_label_count(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        let label_count = u16::try_from(expected_labels.len())
-            .expect("It must be possible to represent the number of labels using a u16");
-        assert_eq!(
-            domain.label_count(),
-            label_count,
-            "{} is expected to have {label_count} labels",
-            DomainDisplay(domain)
-        );
-    }
-
-    fn impl_domain_is_root(domain: impl DomainName, is_root: bool) {
-        assert_eq!(
-            domain.is_root(),
-            is_root,
-            "{} is {}expected to be root",
-            DomainDisplay(domain),
-            if is_root { "" } else { "not " }
-        );
-    }
-
-    fn impl_domain_is_lowercase(domain: impl DomainName, is_lowercase: bool) {
-        assert_eq!(
-            domain.is_lowercase(),
-            is_lowercase,
-            "{} is {}expected to be lowercase",
-            DomainDisplay(domain),
-            if is_lowercase { "" } else { "not " }
-        );
-    }
-
-    fn impl_domain_is_uppercase(domain: impl DomainName, is_uppercase: bool) {
-        assert_eq!(
-            domain.is_uppercase(),
-            is_uppercase,
-            "{} is {}expected to be uppercase",
-            DomainDisplay(domain),
-            if is_uppercase { "" } else { "not " }
-        );
-    }
-
-    fn impl_domain_is_fully_qualified(domain: impl DomainName, is_fully_qualified: bool) {
-        assert_eq!(
-            domain.is_fully_qualified(),
-            is_fully_qualified,
-            "{} is {}expected to be fully qualified",
-            DomainDisplay(domain),
-            if is_fully_qualified { "" } else { "not " }
-        );
-    }
-
-    fn impl_domain_is_canonical(domain: impl DomainName, is_canonical: bool) {
-        assert_eq!(
-            domain.is_canonical(),
-            is_canonical,
-            "{} is {}expected to be canonical",
-            DomainDisplay(domain),
-            if is_canonical { "" } else { "not " }
-        );
-    }
-
-    fn impl_domain_get_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        for (index, expected_label) in expected_labels.iter().enumerate() {
-            assert_eq!(
-                domain.get_label(index).map(Label::as_case_sensitive),
-                Some(expected_label.as_case_sensitive())
-            );
-        }
-        assert!(domain.get_label(expected_labels.len()).is_none());
-        assert!(domain.get_label(usize::MAX).is_none());
-    }
-
-    fn impl_domain_first_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        assert_eq!(
-            domain.first_label().map(Label::as_case_sensitive),
-            expected_labels.first().map(Label::as_case_sensitive)
-        );
-        assert_eq!(
-            domain.first_label().map(Label::as_case_sensitive),
-            domain.get_label(0).map(Label::as_case_sensitive)
-        );
-        assert_eq!(
-            domain.first_label().map(Label::as_case_sensitive),
-            domain.labels_iter().next().map(Label::as_case_sensitive)
-        );
-    }
-
-    fn impl_domain_last_label(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        assert_eq!(
-            domain.last_label().map(Label::as_case_sensitive),
-            expected_labels
-                .last()
-                .copied()
-                .map(Label::as_case_sensitive)
-        );
-        assert_eq!(
-            domain.last_label().map(Label::as_case_sensitive),
-            domain
-                .get_label(expected_labels.len() - 1)
-                .map(Label::as_case_sensitive)
-        );
-        assert_eq!(
-            domain.last_label().map(Label::as_case_sensitive),
-            domain.labels_iter().last().map(Label::as_case_sensitive)
-        );
-    }
-
-    fn impl_domain_get_length_octet(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        for (index, expected_label) in expected_labels.iter().enumerate() {
-            assert_eq!(
-                domain.get_length_octet(index),
-                Some(
-                    u8::try_from(expected_label.len())
-                        .expect("the length of a label must fit into u8")
-                )
-            );
-        }
-        assert!(domain.get_length_octet(expected_labels.len()).is_none());
-        assert!(domain.get_length_octet(usize::MAX).is_none());
-    }
-
-    fn impl_domain_first_length_octet(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        assert_eq!(
-            domain.first_length_octet(),
-            expected_labels
-                .first()
-                .map(|label| u8::try_from(label.len())
-                    .expect("the length of a label must fit into u8"))
-        );
-        assert_eq!(domain.first_length_octet(), domain.get_length_octet(0),);
-        assert_eq!(
-            domain.first_length_octet(),
-            domain
-                .labels_iter()
-                .next()
-                .map(|label| u8::try_from(label.len())
-                    .expect("the length of a label must fit into u8"))
-        );
-
-        if expected_labels.is_empty() {
-            assert!(domain.first_length_octet().is_none());
-        } else {
-            assert!(domain.first_length_octet().is_some());
+    macro_rules! concat {
+        ($($parts:tt)+) => {
+            concat_idents!(name = $($parts),+ { name })
         }
     }
 
-    fn impl_domain_last_length_octet(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        assert_eq!(
-            domain.last_length_octet(),
-            expected_labels
-                .last()
-                .map(|label| u8::try_from(label.len())
-                    .expect("the length of a label must fit into u8"))
-        );
-        assert_eq!(
-            domain.last_length_octet(),
-            domain.get_length_octet(expected_labels.len() - 1),
-        );
-        assert_eq!(
-            domain.last_length_octet(),
-            domain
-                .labels_iter()
-                .last()
-                .map(|label| u8::try_from(label.len())
-                    .expect("the length of a label must fit into u8"))
-        );
-
-        if expected_labels.is_empty() {
-            assert!(domain.last_length_octet().is_none());
-        } else {
-            assert!(domain.last_length_octet().is_some());
-        }
-    }
-
-    fn domain_labels_iter_verify_extra_properties<'a, 'b>(
-        domain_labels: impl DoubleEndedIterator<Item = &'a RefLabel> + Debug + Clone,
-        expected_labels: impl DoubleEndedIterator<Item = &'b RefLabel>
-        + ExactSizeIterator
-        + Debug
-        + Clone,
-    ) {
-        assert_eq!(
-            expected_labels.clone().next().map(Label::as_case_sensitive),
-            domain_labels.clone().next().map(Label::as_case_sensitive)
-        );
-        assert_eq!(
-            expected_labels
-                .clone()
-                .next_back()
-                .map(Label::as_case_sensitive),
-            domain_labels
-                .clone()
-                .next_back()
-                .map(Label::as_case_sensitive),
-        );
-        assert_eq!(
-            expected_labels.clone().last().map(Label::as_case_sensitive),
-            domain_labels.clone().last().map(Label::as_case_sensitive)
-        );
-        assert_eq!(
-            domain_labels.clone().last().map(Label::as_case_sensitive),
-            domain_labels
-                .clone()
-                .next_back()
-                .map(Label::as_case_sensitive),
-        );
-        assert_eq!(
-            expected_labels.clone().count(),
-            domain_labels.clone().count(),
-        );
-        assert!(expected_labels.clone().count() == domain_labels.clone().size_hint().0);
-        assert!(
-            expected_labels.clone().count()
-                == domain_labels
-                    .clone()
-                    .size_hint()
-                    .1
-                    .expect("domain label iterators should always have a known length upper bound")
-        );
-        for n in 0..(domain_labels.clone().count() + 1) {
-            assert_eq!(
-                expected_labels.clone().nth(n).map(Label::as_case_sensitive),
-                domain_labels.clone().nth(n).map(Label::as_case_sensitive)
-            );
-            assert_eq!(
-                expected_labels
-                    .clone()
-                    .rev()
-                    .nth(n)
-                    .map(Label::as_case_sensitive),
-                domain_labels
-                    .clone()
-                    .rev()
-                    .nth(n)
-                    .map(Label::as_case_sensitive),
-            );
-        }
-    }
-
-    fn impl_domain_labels_iter_test(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        let expected_labels = expected_labels
-            .into_iter()
-            .copied()
-            .map(Label::as_case_sensitive)
-            .collect::<Vec<_>>();
-        let actual_labels = domain
-            .labels_iter()
-            .map(Label::as_case_sensitive)
-            .collect::<Vec<_>>();
-        assert_eq!(expected_labels, actual_labels);
-    }
-
-    fn impl_domain_labels_reverse_iter_test(
-        domain: impl DomainName,
-        expected_labels: &[&RefLabel],
-    ) {
-        let expected_labels = expected_labels
-            .into_iter()
-            .rev()
-            .copied()
-            .map(Label::as_case_sensitive)
-            .collect::<Vec<_>>();
-        let actual_labels = domain
-            .labels_iter()
-            .rev()
-            .map(Label::as_case_sensitive)
-            .collect::<Vec<_>>();
-        assert_eq!(expected_labels, actual_labels);
-    }
-
-    fn impl_domain_labels_nth_iter_test(domain: impl DomainName, expected_labels: &[&RefLabel]) {
-        for n in 0..(expected_labels.len() * 2) {
-            let mut expected_labels = expected_labels.into_iter().copied();
-            let mut domain_labels = domain.labels_iter();
-            for _ in 0..(expected_labels.len() * 2) {
-                assert_eq!(
-                    expected_labels.nth(n).map(Label::as_case_sensitive),
-                    domain_labels.nth(n).map(Label::as_case_sensitive)
-                );
-                domain_labels_iter_verify_extra_properties(
-                    domain_labels.clone(),
-                    expected_labels.clone(),
-                );
-            }
-        }
-    }
-
-    fn impl_domain_labels_reverse_nth_iter_test(
-        domain: impl DomainName,
-        expected_labels: &[&RefLabel],
-    ) {
-        let mut expected_labels = expected_labels.to_vec();
-        expected_labels.reverse();
-
-        for n in 0..(expected_labels.len() * 2) {
-            let mut expected_labels = expected_labels.iter().copied();
-            let mut domain_labels = domain.labels_iter().rev();
-            for _ in 0..(expected_labels.len() * 2) {
-                assert_eq!(
-                    expected_labels.nth(n).map(Label::as_case_sensitive),
-                    domain_labels.nth(n).map(Label::as_case_sensitive)
-                );
-                domain_labels_iter_verify_extra_properties(
-                    domain_labels.clone(),
-                    expected_labels.clone(),
-                );
-            }
-        }
-    }
-
-    fn impl_domain_labels_to_str_test(
-        domain: impl DomainName,
-        expected_labels: &[&RefLabel],
-        expected_label_strings: &[&str],
-    ) {
-        assert_eq!(domain.labels_iter().count(), expected_labels.len());
-        assert_eq!(domain.labels_iter().count(), expected_label_strings.len());
-        for ((domain_label, &expected_label), &expected_label_str) in domain
-            .labels_iter()
-            .zip(expected_labels)
-            .zip(expected_label_strings)
-        {
-            assert_eq!(
-                expected_label.as_case_sensitive(),
-                domain_label.as_case_sensitive()
-            );
-            assert_eq!(expected_label_str, domain_label.to_string().as_str());
-            assert_eq!(expected_label_str, expected_label.to_string().as_str());
-        }
-    }
-
-    fn impl_domain_length_octets_match_labels_test(
-        domain: impl DomainName,
-        expected_labels: &[&RefLabel],
-    ) {
-        assert_eq!(domain.length_octets_iter().count(), expected_labels.len());
-        for (domain_length_octet, expected_length_octet) in domain
-            .length_octets_iter()
-            .zip(expected_labels.iter().map(|label| label.len()))
-        {
-            assert_eq!(domain_length_octet, expected_length_octet);
-            assert!(u16::from(domain_length_octet) <= MAX_LABEL_OCTETS);
-        }
-    }
-
-    /// Generates a 3 constants, each with a different prefix:
-    ///
-    /// - DOMAIN_* - has the specified labels in the form of a `DomainSlice`.
-    /// - LABELS_* - has the specified labels in the form of slice of `RefLabel`s.
-    /// - LABEL_STRINGS_* - has the specified labels in the form of a slice of string slices.
-    ///
-    /// Also generates a number of unit tests that use those constants as input.
-    macro_rules! generate {
-        // The @ident rule is used to generate identifiers. It can't be used in
-        // all places like concat_idents!() can but it is a little easier to
-        // read in the places where it is used.
-        (@ident $prefix:tt, $name:tt $(,)?) => {
-            concat_idents!(concatenated_name = $prefix, $name { concatenated_name })
-        };
-        (@make_constants $([$name:tt; $($label:expr),+ $(,)?]),* $(,)?) => {
-            $(
-                concat_idents!(name = DOMAIN_, $name {
-                    const name: DomainSlice<'static> = ref_domain![$($label),+];
-                });
-                concat_idents!(name = LABELS_, $name {
-                    const name: &[&RefLabel] = &[
-                        $(ref_label![$label]),+
-                    ];
-                });
-                concat_idents!(name = LABEL_STRINGS_, $name {
-                    const name: &[&str] = &[$($label),*];
-                });
-            )*
-        };
-        // The @validate_test_cases rule checks the provided test cases to make
-        // sure they are well-formed. Otherwise, there are other valid forms
-        // that domain names can take but which cannot be sent over a wire so
-        // are not tested here.
-        (@validate_test_cases $($name:tt),* $(,)?) => {
-            $(
-                // One easy mistake to make is forgetting to make the test cases
-                // all fully qualified domains. This requirement stems from the
-                // fact that we perform the serialization / deserialization
-                // tests here and all domain names sent over a wire are required
-                // to be fully qualified.
-                const_assert!(
-                    generate!(@ident DOMAIN_, $name).length_octets.len() > 0,
-                    "Test cases in this macro MUST only involve fully qualified names"
-                );
-                const_assert!(
-                    generate!(@ident DOMAIN_, $name).length_octets[generate!(@ident DOMAIN_, $name).length_octets.len() - 1] == 0,
-                    "Test cases in this macro MUST only involve fully qualified names"
-                );
-            )*
-        };
-        (@make_domain_rstest_cases [$($name:tt $(, $remaining_args:expr)* $(,)?);* $(;)?] $($impl_fn:tt)*) => {
+    macro_rules! repeat_for_domain_types {
+        (@full
             #[rstest]
             $(
-                // Test specializations
                 #[case(
-                    generate!(@ident DOMAIN_, $name).to_domain_vec(),
+                    $domain_arg:expr
+                    $(, $remaining_args:expr)*
+                    $(,)?
+                )]
+            )+
+            fn $($def_fn:tt)+
+        ) => {
+            #[rstest]
+            $(
+                // Test domain name specializations
+                #[case(
+                    $domain_arg.to_domain_vec(),
                     $($remaining_args),*
                 )]
                 #[case(
-                    generate!(@ident DOMAIN_, $name).as_domain_slice(),
+                    $domain_arg.as_domain_slice(),
                     $($remaining_args),*
                 )]
                 #[case(
-                    generate!(@ident DOMAIN_, $name).to_raw_domain_vec(),
+                    $domain_arg.to_raw_domain_vec(),
                     $($remaining_args),*
                 )]
                 #[case(
-                    generate!(@ident DOMAIN_, $name).as_raw_domain_slice(),
+                    $domain_arg.as_raw_domain_slice(),
                     $($remaining_args),*
                 )]
 
                 // Test default implementation using specialized iterator
                 #[case(
-                    DefaultDomain(generate!(@ident DOMAIN_, $name).to_domain_vec()),
+                    DefaultDomain($domain_arg.to_domain_vec()),
                     $($remaining_args),*
                 )]
                 #[case(
-                    DefaultDomain(generate!(@ident DOMAIN_, $name).as_domain_slice()),
+                    DefaultDomain($domain_arg.as_domain_slice()),
                     $($remaining_args),*
                 )]
                 #[case(
-                    DefaultDomain(generate!(@ident DOMAIN_, $name).to_raw_domain_vec()),
+                    DefaultDomain($domain_arg.to_raw_domain_vec()),
                     $($remaining_args),*
                 )]
                 #[case(
-                    DefaultDomain(generate!(@ident DOMAIN_, $name).as_raw_domain_slice()),
+                    DefaultDomain($domain_arg.as_raw_domain_slice()),
                     $($remaining_args),*
                 )]
-            )*
-            $($impl_fn)*
+            )+
+            fn $($def_fn)+
         };
-        (@make_domain_test DOMAIN_ $attribute_type:ty; $call:ident [$($name:tt, $attribute_value:literal),* $(,)?]) => {
-            generate!(@make_domain_rstest_cases
-                [$(
-                    $name,
-                    $attribute_value
-                );*]
-                fn $call(
-                    #[case] domain: impl DomainName,
-                    #[case] attribute: $attribute_type,
-                ) {
-                    generate!(@ident impl_, $call)(domain, attribute);
-                }
+        (@labels
+            #[rstest]
+            $(
+                #[case(
+                    $domain_arg:expr
+                    $(, $remaining_args:expr)*
+                    $(,)?
+                )]
+            )+
+            fn $($def_fn:tt)+
+        ) => {
+            #[rstest]
+            $(
+                // Test specialized iterators
+                #[case(
+                    $domain_arg.as_domain_slice(),
+                    $($remaining_args),*
+                )]
+                #[case(
+                    $domain_arg.as_raw_domain_slice(),
+                    $($remaining_args),*
+                )]
+
+                // Test a default implementation using a specialized iterator
+                #[case(
+                    DefaultDomain($domain_arg.as_domain_slice()),
+                    $($remaining_args),*
+                )]
+            )+
+            fn $($def_fn)+
+        };
+    }
+
+    fn assert_domain_properties_match(actual: impl DomainName, expected: impl DomainName) {
+        assert_eq!(actual.octet_count(), expected.octet_count());
+        assert_eq!(actual.label_count(), expected.label_count());
+        assert_eq!(actual.is_root(), expected.is_root());
+        assert_eq!(actual.is_lowercase(), expected.is_lowercase());
+        assert_eq!(actual.is_uppercase(), expected.is_uppercase());
+        assert_eq!(actual.is_fully_qualified(), expected.is_fully_qualified());
+        assert_eq!(actual.is_canonical(), expected.is_canonical());
+        assert_eq!(
+            actual.first_label().map(Label::as_case_sensitive),
+            expected.first_label().map(Label::as_case_sensitive),
+        );
+        assert_eq!(
+            actual.last_label().map(Label::as_case_sensitive),
+            expected.last_label().map(Label::as_case_sensitive),
+        );
+        for i in 0..usize::from(actual.label_count()) {
+            assert_eq!(
+                actual.get_label(i).map(Label::as_case_sensitive),
+                expected.get_label(i).map(Label::as_case_sensitive),
             );
-        };
-        (@make_domain_test DOMAIN_ LABELS_; $call:ident [$($name:tt),* $(,)?]) => {
-            generate!(@make_domain_rstest_cases
-                [$(
-                    $name,
-                    generate!(@ident LABELS_, $name)
-                );*]
-                fn $call(
-                    #[case] domain: impl DomainName,
-                    #[case] expected_labels: &[&RefLabel],
-                ) {
-                    generate!(@ident impl_, $call)(domain, expected_labels);
-                }
+            assert_eq!(actual.get_length_octet(i), expected.get_length_octet(i));
+        }
+        assert_eq!(actual.first_length_octet(), expected.first_length_octet());
+        assert_eq!(actual.last_length_octet(), expected.last_length_octet());
+        assert!(
+            actual
+                .labels_iter()
+                .map(Label::as_case_sensitive)
+                .eq(expected.labels_iter().map(Label::as_case_sensitive))
+        );
+        assert!(
+            actual
+                .length_octets_iter()
+                .eq(expected.length_octets_iter())
+        );
+    }
+
+    fn assert_iter_intermediate_properties<A, B, T: PartialEq + Debug>(
+        actual: impl DoubleEndedIterator<Item = A> + ExactSizeIterator + Debug + Clone,
+        expected: impl DoubleEndedIterator<Item = B> + ExactSizeIterator + Debug + Clone,
+        mut actual_key: impl FnMut(A) -> T,
+        mut expected_key: impl FnMut(B) -> T,
+    ) {
+        fn assert_inner<A, B, T: PartialEq + Debug>(
+            actual: impl DoubleEndedIterator<Item = A> + ExactSizeIterator + Debug + Clone,
+            expected: impl DoubleEndedIterator<Item = B> + ExactSizeIterator + Debug + Clone,
+            mut actual_key: impl FnMut(A) -> T,
+            mut expected_key: impl FnMut(B) -> T,
+        ) {
+            assert_eq!(
+                actual.clone().next().map(&mut actual_key),
+                expected.clone().next().map(&mut expected_key)
             );
-        };
-        (@make_domain_test DOMAIN_ LABELS_ LABEL_STRINGS_; $call:ident [$($name:tt),* $(,)?]) => {
-            generate!(@make_domain_rstest_cases
-                [$(
-                    $name,
-                    generate!(@ident LABELS_, $name),
-                    generate!(@ident LABEL_STRINGS_, $name),
-                );*]
-                fn $call(
-                    #[case] domain: impl DomainName,
-                    #[case] expected_labels: &[&RefLabel],
-                    #[case] expected_label_strings: &[&str],
-                ) {
-                    generate!(@ident impl_, $call)(domain, expected_labels, expected_label_strings);
-                }
+            assert_eq!(
+                actual.clone().next_back().map(&mut actual_key),
+                expected.clone().next_back().map(&mut expected_key),
             );
+            assert_eq!(
+                actual.clone().last().map(&mut actual_key),
+                expected.clone().last().map(&mut expected_key)
+            );
+            assert_eq!(
+                actual.clone().last().map(&mut actual_key),
+                expected.clone().next_back().map(&mut expected_key),
+            );
+            assert_eq!(actual.clone().count(), expected.clone().count(),);
+            assert_eq!(actual.clone().size_hint().0, expected.clone().count(),);
+            assert_eq!(
+                actual
+                    .clone()
+                    .size_hint()
+                    .1
+                    .expect("domain iterators must always have a known length"),
+                expected.clone().count(),
+            );
+            assert_eq!(actual.clone().len(), expected.clone().count(),);
+            for n in 0..(expected.clone().count() + 1) {
+                assert_eq!(
+                    actual.clone().nth(n).map(&mut actual_key),
+                    expected.clone().nth(n).map(&mut expected_key)
+                );
+            }
+        }
+        assert_inner(
+            actual.clone(),
+            expected.clone(),
+            &mut actual_key,
+            &mut expected_key,
+        );
+        assert_inner(
+            actual.rev(),
+            expected.rev(),
+            &mut actual_key,
+            &mut expected_key,
+        );
+    }
+
+    macro_rules! property_test {
+        // @circular_serde cases need to first filter out any inputs where
+        // is_fully_qualified is false since those cannot be serialized or
+        // deserialized.
+        (@circular_serde [$domain_arg:expr, (true) $(, $remaining_domain_arg:expr, ($remaining_property_value:tt))* $(,)?] [$($accepted_domain:expr),* $(,)?]) => {
+            property_test!(@circular_serde [$($remaining_domain_arg, ($remaining_property_value)),*] [$domain_arg, $($accepted_domain),*]);
         };
-        (@make_tests $(
-            $name:tt,
-            octets = $octet_count:literal,
-            is_root = $is_root:literal,
-            is_lowercase = $is_lowercase:literal,
-            is_uppercase = $is_uppercase:literal,
-            is_fully_qualified = $is_fully_qualified:literal,
-            is_canonical = $is_canonical:literal
-        ),* $(,)?) => {
+        (@circular_serde [$domain_arg:expr, (false) $(, $remaining_domain_arg:expr, ($remaining_property_value:tt))* $(,)?] [$($accepted_domain:expr),* $(,)?]) => {
+            property_test!(@circular_serde [$($remaining_domain_arg, ($remaining_property_value)),*] [$($accepted_domain),*]);
+        };
+        (@circular_serde [] [$($domain_arg:expr),* $(,)?]) => {
             #[rstest]
             $(
                 #[case(CompressibleDomainVec(
-                    generate!(@ident DOMAIN_, $name).to_domain_vec()
+                    $domain_arg.to_domain_vec()
                 ))]
                 #[case(IncompressibleDomainVec(
-                    generate!(@ident DOMAIN_, $name).to_domain_vec()
+                    $domain_arg.to_domain_vec()
                 ))]
-                // TODO: serde for array, raw vec, & raw array
+                // TODO: add support for serializing / deserializing other
+                // DomainName types.
             )*
             fn circular_serde_sanity_test<T>(#[case] input: T) where T: Debug + ToWire + FromWire + PartialEq {
-                crate::serde::wire::circular_test::circular_serde_sanity_test::<T>(input)
+                crate::serde::wire::circular_test::circular_serde_sanity_test::<T>(input);
             }
-
-            generate!(@make_domain_test DOMAIN_ u16;     domain_octet_count        [$($name, $octet_count       ),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_label_count        [$($name                     ),*]);
-            generate!(@make_domain_test DOMAIN_ bool;    domain_is_root            [$($name, $is_root           ),*]);
-            generate!(@make_domain_test DOMAIN_ bool;    domain_is_lowercase       [$($name, $is_lowercase      ),*]);
-            generate!(@make_domain_test DOMAIN_ bool;    domain_is_uppercase       [$($name, $is_uppercase      ),*]);
-            generate!(@make_domain_test DOMAIN_ bool;    domain_is_fully_qualified [$($name, $is_fully_qualified),*]);
-            generate!(@make_domain_test DOMAIN_ bool;    domain_is_canonical       [$($name, $is_canonical      ),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_get_label          [$($name                     ),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_first_label        [$($name                     ),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_last_label         [$($name                     ),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_get_length_octet   [$($name                     ),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_first_length_octet [$($name                     ),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_; domain_last_length_octet  [$($name                     ),*]);
-
-            // Iterator tests
-            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_labels_iter_test                [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_labels_reverse_iter_test        [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_labels_nth_iter_test            [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_labels_reverse_nth_iter_test    [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_;                domain_length_octets_match_labels_test [$($name),*]);
-            generate!(@make_domain_test DOMAIN_ LABELS_ LABEL_STRINGS_; domain_labels_to_str_test              [$($name),*]);
         };
-        ($([$name:tt; $($attribute_key:tt = $attribute_value:literal),+; $($label:expr),+ $(,)?]),* $(,)?) => {
-            generate!(@make_constants $([$name; $($label),*]),+);
-            generate!(@validate_test_cases $($name),+);
-            generate!(@make_tests $($name, $($attribute_key = $attribute_value),+),+);
+        (@octet_count $($domain_arg:expr, $property_value:literal),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $property_value)] )+
+                fn octet_count(#[case] domain: impl DomainName, #[case] expected_octet_count: u16) {
+                    assert_eq!(
+                        domain.octet_count(),
+                        expected_octet_count,
+                        "{} is expected to have {expected_octet_count} octets",
+                        DomainDisplay(domain)
+                    );
+                }
+            );
+        };
+        (@label_count $($domain_arg:expr, $property_value:literal),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $property_value)] )+
+                fn label_count(#[case] domain: impl DomainName, #[case] expected_label_count: u16) {
+                    assert_eq!(
+                        domain.label_count(),
+                        expected_label_count,
+                        "{} is expected to have {expected_label_count} labels",
+                        DomainDisplay(domain)
+                    );
+                }
+            );
+        };
+        (@is_root $($domain_arg:expr, $property_value:literal),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $property_value)] )+
+                fn is_root(#[case] domain: impl DomainName, #[case] expected_is_root: bool) {
+                    assert_eq!(
+                        domain.is_root(),
+                        expected_is_root,
+                        "{} is {}expected to be root",
+                        DomainDisplay(domain),
+                        if expected_is_root { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@is_lowercase $($domain_arg:expr, $property_value:literal),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $property_value)] )+
+                fn is_lowercase(#[case] domain: impl DomainName, #[case] expected_is_lowercase: bool) {
+                    assert_eq!(
+                        domain.is_lowercase(),
+                        expected_is_lowercase,
+                        "{} is {}expected to be lowercase",
+                        DomainDisplay(domain),
+                        if expected_is_lowercase { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@is_uppercase $($domain_arg:expr, $property_value:literal),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $property_value)] )+
+                fn is_uppercase(#[case] domain: impl DomainName, #[case] expected_is_uppercase: bool) {
+                    assert_eq!(
+                        domain.is_uppercase(),
+                        expected_is_uppercase,
+                        "{} is {}expected to be uppercase",
+                        DomainDisplay(domain),
+                        if expected_is_uppercase { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@is_fully_qualified $($domain_arg:expr, $property_value:literal),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $property_value)] )+
+                fn is_fully_qualified(#[case] domain: impl DomainName, #[case] expected_is_fully_qualified: bool) {
+                    assert_eq!(
+                        domain.is_fully_qualified(),
+                        expected_is_fully_qualified,
+                        "{} is {}expected to be fully qualified",
+                        DomainDisplay(domain),
+                        if expected_is_fully_qualified { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@is_canonical $($domain_arg:expr, $property_value:literal),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $property_value)] )+
+                fn is_canonical(#[case] domain: impl DomainName, #[case] expected_is_canonical: bool) {
+                    assert_eq!(
+                        domain.is_canonical(),
+                        expected_is_canonical,
+                        "{} is {}expected to be canonical",
+                        DomainDisplay(domain),
+                        if expected_is_canonical { "" } else { "not " }
+                    );
+                }
+            );
+        };
+        (@as $call:ident: $from_type:ty; $unique_ident:ident $($domain_arg:expr),+ $(,)?) => {
+            concat_idents!(fn_name = $call, _, $unique_ident {
+                // Test that properties don't change when converted into some other
+                // concrete type.
+                #[rstest]
+                $( #[case($domain_arg, $domain_arg)] )+
+                fn fn_name(#[case] domain: $from_type, #[case] expected_domain: impl DomainName) {
+                    assert_domain_properties_match(domain.$call(), expected_domain);
+                }
+            });
+        };
+        (@as_default_impl: $from_type:ty; $unique_ident:ident $($domain_arg:expr),+ $(,)?) => {
+            concat_idents!(fn_name = as_default_impl_, $unique_ident {
+                // Test that properties of concrete type match that of the
+                // default implementation.
+                #[rstest]
+                $( #[case($domain_arg, DefaultDomain($domain_arg))] )+
+                fn fn_name(#[case] domain: $from_type, #[case] expected_domain: impl DomainName) {
+                    assert_domain_properties_match(domain, expected_domain);
+                }
+            });
+        };
+        (@get_label $($domain_arg:expr, $labels_arg:expr),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn get_label(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    for (index, expected_label) in expected_labels.iter().enumerate() {
+                        assert_eq!(
+                            domain.get_label(index).map(Label::as_case_sensitive),
+                            Some(expected_label.as_case_sensitive())
+                        );
+                    }
+                    assert!(domain.get_label(expected_labels.len()).is_none());
+                    assert!(domain.get_label(usize::MAX).is_none());
+                }
+            );
+        };
+        (@first_label $($domain_arg:expr, $labels_arg:expr),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn first_label(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert_eq!(
+                        domain.first_label().map(Label::as_case_sensitive),
+                        expected_labels.first().map(Label::as_case_sensitive)
+                    );
+                    assert_eq!(
+                        domain.first_label().map(Label::as_case_sensitive),
+                        domain.get_label(0).map(Label::as_case_sensitive)
+                    );
+                    assert_eq!(
+                        domain.first_label().map(Label::as_case_sensitive),
+                        domain.labels_iter().next().map(Label::as_case_sensitive)
+                    );
+                }
+            );
+        };
+        (@last_label $($domain_arg:expr, $labels_arg:expr),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn last_label(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert_eq!(
+                        domain.last_label().map(Label::as_case_sensitive),
+                        expected_labels.last().map(Label::as_case_sensitive),
+                    );
+                    assert_eq!(
+                        domain.last_label().map(Label::as_case_sensitive),
+                        domain
+                            .get_label(expected_labels.len() - 1)
+                            .map(Label::as_case_sensitive)
+                    );
+                    assert_eq!(
+                        domain.last_label().map(Label::as_case_sensitive),
+                        domain.labels_iter().last().map(Label::as_case_sensitive)
+                    );
+                }
+            );
+        };
+        (@get_length_octet $($domain_arg:expr, $labels_arg:expr),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn get_length_octet(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    for (index, expected_label) in expected_labels.iter().enumerate() {
+                        assert_eq!(
+                            domain.get_length_octet(index),
+                            Some(expected_label.len())
+                        );
+                    }
+                    assert!(domain.get_length_octet(expected_labels.len()).is_none());
+                    assert!(domain.get_length_octet(usize::MAX).is_none());
+                }
+            );
+        };
+        (@first_length_octet $($domain_arg:expr, $labels_arg:expr),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn first_length_octet(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert_eq!(
+                        domain.first_length_octet(),
+                        expected_labels.first().map(Label::len)
+                    );
+                    assert_eq!(domain.first_length_octet(), domain.get_length_octet(0));
+                    assert_eq!(
+                        domain.first_length_octet(),
+                        domain.labels_iter().next().map(Label::len)
+                    );
+
+                    if expected_labels.is_empty() {
+                        assert!(domain.first_length_octet().is_none());
+                    } else {
+                        assert!(domain.first_length_octet().is_some());
+                    }
+                }
+            );
+        };
+        (@last_length_octet $($domain_arg:expr, $labels_arg:expr),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn last_length_octet(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert_eq!(
+                        domain.last_length_octet(),
+                        domain.labels_iter().last().map(Label::len)
+                    );
+                    assert_eq!(
+                        domain.last_length_octet(),
+                        domain.get_length_octet(expected_labels.len() - 1),
+                    );
+                    assert_eq!(
+                        domain.last_length_octet(),
+                        domain.labels_iter().last().map(Label::len)
+                    );
+
+                    if expected_labels.is_empty() {
+                        assert!(domain.last_length_octet().is_none());
+                    } else {
+                        assert!(domain.last_length_octet().is_some());
+                    }
+                }
+            );
+        };
+        (@label_iter $($domain_arg:expr, $labels_arg:expr),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn labels_iter(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert!(domain.labels_iter().map(Label::as_case_sensitive).eq(
+                        expected_labels.into_iter().map(Label::as_case_sensitive)
+                    ));
+                }
+            );
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn reverse_labels_iter(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert!(domain.labels_iter().rev().map(Label::as_case_sensitive).eq(
+                        expected_labels.into_iter().rev().map(Label::as_case_sensitive)
+                    ));
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn labels_iter_counts(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert_eq!(
+                        domain.labels_iter().count(),
+                        expected_labels.into_iter().count(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().count(),
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().size_hint().0,
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().size_hint().1.expect("domain label iterators must always have a known length"),
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().len(),
+                        expected_labels.into_iter().len(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().len(),
+                        usize::from(domain.label_count()),
+                    );
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn reverse_labels_iter_counts(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert_eq!(
+                        domain.labels_iter().rev().count(),
+                        expected_labels.into_iter().rev().count(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().rev().count(),
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().rev().size_hint().0,
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().rev().size_hint().1.expect("domain label iterators must always have a known length"),
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().rev().len(),
+                        expected_labels.into_iter().len(),
+                    );
+                    assert_eq!(
+                        domain.labels_iter().rev().len(),
+                        usize::from(domain.label_count()),
+                    );
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn labels_iter_nth(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    const EXTRA_ITERS: usize = 2;
+
+                    for n in 1..(expected_labels.len() + EXTRA_ITERS) {
+                        let mut domain_labels = domain.labels_iter();
+                        let mut expected_labels = expected_labels.into_iter();
+                        for _ in 0..(expected_labels.len().div_ceil(n) + EXTRA_ITERS) {
+                            assert_eq!(
+                                domain_labels.nth(n).map(Label::as_case_sensitive),
+                                expected_labels.nth(n).map(Label::as_case_sensitive),
+                            );
+                        }
+                    }
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn reverse_labels_iter_nth(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    const EXTRA_ITERS: usize = 2;
+
+                    for n in 1..(expected_labels.len() + EXTRA_ITERS) {
+                        let mut domain_labels = domain.labels_iter().rev();
+                        let mut expected_labels = expected_labels.into_iter().rev();
+                        for _ in 0..(expected_labels.len().div_ceil(n) + EXTRA_ITERS) {
+                            assert_eq!(
+                                domain_labels.nth(n).map(Label::as_case_sensitive),
+                                expected_labels.nth(n).map(Label::as_case_sensitive),
+                            );
+                        }
+                    }
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn labels_iter_intermediate_properties(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    let mut actual_length_octets = domain.length_octets_iter();
+                    let mut expected_labels = expected_labels.into_iter();
+                    assert_iter_intermediate_properties(
+                        actual_length_octets.clone(),
+                        expected_labels.clone(),
+                        |length_octet| length_octet,
+                        Label::len,
+                    );
+                    // Other tests verify that these are the same length. Not
+                    // re-checking that here.
+                    while let (Some(_), Some(_)) = (actual_length_octets.next(), expected_labels.next()) {
+                        assert_iter_intermediate_properties(
+                            actual_length_octets.clone(),
+                            expected_labels.clone(),
+                            |length_octet| length_octet,
+                            Label::len,
+                        );
+                    }
+                    assert_iter_intermediate_properties(
+                        actual_length_octets,
+                        expected_labels,
+                        |length_octet| length_octet,
+                        Label::len,
+                    );
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn reverse_labels_iter_intermediate_properties(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    let mut actual_labels = domain.labels_iter().rev();
+                    let mut expected_labels = expected_labels.into_iter().rev();
+                    assert_iter_intermediate_properties(
+                        actual_labels.clone(),
+                        expected_labels.clone(),
+                        Label::as_case_sensitive,
+                        Label::as_case_sensitive,
+                    );
+                    // Other tests verify that these are the same length. Not
+                    // re-checking that here.
+                    while let (Some(_), Some(_)) = (actual_labels.next(), expected_labels.next()) {
+                        assert_iter_intermediate_properties(
+                            actual_labels.clone(),
+                            expected_labels.clone(),
+                            Label::as_case_sensitive,
+                            Label::as_case_sensitive,
+                        );
+                    }
+                    assert_iter_intermediate_properties(
+                        actual_labels,
+                        expected_labels,
+                        Label::as_case_sensitive,
+                        Label::as_case_sensitive,
+                    );
+                }
+            );
+        };
+        (@length_octets_iter $($domain_arg:expr, $labels_arg:expr),+ $(,)?) => {
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn length_octets_iter(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert!(domain.length_octets_iter().eq(
+                        expected_labels.into_iter().map(Label::len)
+                    ));
+                }
+            );
+            repeat_for_domain_types!(@full
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn reverse_length_octets_iter(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert!(domain.length_octets_iter().rev().eq(
+                        expected_labels.into_iter().rev().map(Label::len)
+                    ));
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn labels_length_octets_counts(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert_eq!(
+                        domain.length_octets_iter().count(),
+                        expected_labels.into_iter().count(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().count(),
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().size_hint().0,
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().size_hint().1.expect("domain length octet iterators must always have a known length"),
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().len(),
+                        expected_labels.into_iter().len(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().len(),
+                        usize::from(domain.label_count()),
+                    );
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn reverse_length_octets_counts(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    assert_eq!(
+                        domain.length_octets_iter().rev().count(),
+                        expected_labels.into_iter().rev().count(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().rev().count(),
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().rev().size_hint().0,
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().rev().size_hint().1.expect("domain length octet iterators must always have a known length"),
+                        expected_labels.len(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().rev().len(),
+                        expected_labels.into_iter().len(),
+                    );
+                    assert_eq!(
+                        domain.length_octets_iter().rev().len(),
+                        usize::from(domain.label_count()),
+                    );
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn length_octets_nth(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    const EXTRA_ITERS: usize = 2;
+
+                    for n in 1..(expected_labels.len() + EXTRA_ITERS) {
+                        let mut domain_length_octets = domain.length_octets_iter();
+                        let mut expected_labels = expected_labels.into_iter();
+                        for _ in 0..(expected_labels.len().div_ceil(n) + EXTRA_ITERS) {
+                            assert_eq!(
+                                domain_length_octets.nth(n),
+                                expected_labels.nth(n).map(Label::len),
+                            );
+                        }
+                    }
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn reverse_length_octets_nth(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    const EXTRA_ITERS: usize = 2;
+
+                    for n in 1..(expected_labels.len() + EXTRA_ITERS) {
+                        let mut domain_length_octets = domain.length_octets_iter().rev();
+                        let mut expected_labels = expected_labels.into_iter().rev();
+                        for _ in 0..(expected_labels.len().div_ceil(n) + EXTRA_ITERS) {
+                            assert_eq!(
+                                domain_length_octets.nth(n),
+                                expected_labels.nth(n).map(Label::len),
+                            );
+                        }
+                    }
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn length_octets_iter_intermediate_properties(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    let mut actual_length_octets = domain.length_octets_iter();
+                    let mut expected_labels = expected_labels.into_iter();
+                    assert_iter_intermediate_properties(
+                        actual_length_octets.clone(),
+                        expected_labels.clone(),
+                        |length_octet| length_octet,
+                        Label::len,
+                    );
+                    // Other tests verify that these are the same length. Not
+                    // re-checking that here.
+                    while let (Some(_), Some(_)) = (actual_length_octets.next(), expected_labels.next()) {
+                        assert_iter_intermediate_properties(
+                            actual_length_octets.clone(),
+                            expected_labels.clone(),
+                            |length_octet| length_octet,
+                            Label::len,
+                        );
+                    }
+                    assert_iter_intermediate_properties(
+                        actual_length_octets,
+                        expected_labels,
+                        |length_octet| length_octet,
+                        Label::len,
+                    );
+                }
+            );
+            repeat_for_domain_types!(@labels
+                #[rstest]
+                $( #[case($domain_arg, $labels_arg)] )+
+                fn reverse_length_octets_iter_intermediate_properties(#[case] domain: impl DomainName, #[case] expected_labels: &[&RefLabel]) {
+                    let mut actual_length_octets = domain.length_octets_iter().rev();
+                    let mut expected_labels = expected_labels.into_iter().rev();
+                    assert_iter_intermediate_properties(
+                        actual_length_octets.clone(),
+                        expected_labels.clone(),
+                        |length_octet| length_octet,
+                        Label::len,
+                    );
+                    // Other tests verify that these are the same length. Not
+                    // re-checking that here.
+                    while let (Some(_), Some(_)) = (actual_length_octets.next(), expected_labels.next()) {
+                        assert_iter_intermediate_properties(
+                            actual_length_octets.clone(),
+                            expected_labels.clone(),
+                            |length_octet| length_octet,
+                            Label::len,
+                        );
+                    }
+                    assert_iter_intermediate_properties(
+                        actual_length_octets,
+                        expected_labels,
+                        |length_octet| length_octet,
+                        Label::len,
+                    );
+                }
+            );
+        };
+        (@pass_by_reference
+            $(
+                $group_name:ident: {
+                    domain: $domain_value:expr,
+                    labels: $labels_value:expr,
+                    octet_count: $octet_count_value:literal,
+                    label_count: $label_count_value:literal,
+                    is_root: $is_root_value:literal,
+                    is_lowercase: $is_lowercase_value:literal,
+                    is_uppercase: $is_uppercase_value:literal,
+                    is_fully_qualified: $is_fully_qualified_value:tt,
+                    is_canonical: $is_canonical_value:literal
+                    $(,)?
+                }
+            ),+
+            $(,)?
+        ) => {
+            property_test!(@circular_serde [$($domain_value, ($is_fully_qualified_value)),+] []);
+
+            property_test!(@octet_count        $($domain_value, $octet_count_value),+       );
+            property_test!(@label_count        $($domain_value, $label_count_value),+       );
+            property_test!(@is_root            $($domain_value, $is_root_value),+           );
+            property_test!(@is_lowercase       $($domain_value, $is_lowercase_value),+      );
+            property_test!(@is_uppercase       $($domain_value, $is_uppercase_value),+      );
+            property_test!(@is_fully_qualified $($domain_value, $is_fully_qualified_value),+);
+            property_test!(@is_canonical       $($domain_value, $is_canonical_value),+      );
+
+            property_test!(@get_label          $($domain_value, $labels_value),+);
+            property_test!(@first_label        $($domain_value, $labels_value),+);
+            property_test!(@last_label         $($domain_value, $labels_value),+);
+            property_test!(@get_length_octet   $($domain_value, $labels_value),+);
+            property_test!(@first_length_octet $($domain_value, $labels_value),+);
+            property_test!(@last_length_octet  $($domain_value, $labels_value),+);
+            property_test!(@label_iter         $($domain_value, $labels_value),+);
+            property_test!(@length_octets_iter $($domain_value, $labels_value),+);
+
+            property_test!(@as_default_impl: DomainVec;          from_domain_vec       $($domain_value.to_domain_vec()),+      );
+            property_test!(@as_default_impl: DomainSlice<'_>;    from_domain_slice     $($domain_value.as_domain_slice()),+    );
+            property_test!(@as_default_impl: RawDomainVec;       from_raw_domain_vec   $($domain_value.to_raw_domain_vec()),+  );
+            property_test!(@as_default_impl: RawDomainSlice<'_>; from_raw_domain_slice $($domain_value.as_raw_domain_slice()),+);
+
+            property_test!(@as to_domain_vec: DomainVec;       from_domain_vec   $($domain_value.to_domain_vec()),+  );
+            property_test!(@as to_domain_vec: DomainSlice<'_>; from_domain_slice $($domain_value.as_domain_slice()),+);
+
+            property_test!(@as as_domain_slice: DomainVec;       from_domain_vec   $($domain_value.to_domain_vec()),+  );
+            property_test!(@as as_domain_slice: DomainSlice<'_>; from_domain_slice $($domain_value.as_domain_slice()),+);
+
+            property_test!(@as to_raw_domain_vec: DomainVec;          from_domain_vec       $($domain_value.to_domain_vec()),+      );
+            property_test!(@as to_raw_domain_vec: DomainSlice<'_>;    from_domain_slice     $($domain_value.as_domain_slice()),+    );
+            property_test!(@as to_raw_domain_vec: RawDomainVec;       from_raw_domain_vec   $($domain_value.to_raw_domain_vec()),+  );
+            property_test!(@as to_raw_domain_vec: RawDomainSlice<'_>; from_raw_domain_slice $($domain_value.as_raw_domain_slice()),+);
+
+            property_test!(@as as_raw_domain_slice: DomainVec;          from_domain_vec       $($domain_value.to_domain_vec()),+      );
+            property_test!(@as as_raw_domain_slice: DomainSlice<'_>;    from_domain_slice     $($domain_value.as_domain_slice()),+    );
+            property_test!(@as as_raw_domain_slice: RawDomainVec;       from_raw_domain_vec   $($domain_value.to_raw_domain_vec()),+  );
+            property_test!(@as as_raw_domain_slice: RawDomainSlice<'_>; from_raw_domain_slice $($domain_value.as_raw_domain_slice()),+);
+        };
+        (
+            $(
+                $group_name:ident: {
+                    domain!($($domain_body:literal),+ $(,)?),
+                    octet_count: $octet_count_value:literal,
+                    label_count: $label_count_value:literal,
+                    is_root: $is_root_value:literal,
+                    is_lowercase: $is_lowercase_value:literal,
+                    is_uppercase: $is_uppercase_value:literal,
+                    is_fully_qualified: $is_fully_qualified_value:tt,
+                    is_canonical: $is_canonical_value:literal
+                    $(,)?
+                }
+            ),+
+            $(,)?
+        ) => {
+            // For the sake of compile times, we need to evaluate the domain!()
+            // and label!() patterns early and pass references to the results
+            // around.
+            $(
+                concat_idents!(domain = DOMAIN_, $group_name {
+                    const domain: DomainSlice = ref_domain!( $($domain_body),* );
+                });
+                concat_idents!(labels = LABELS_, $group_name {
+                    const labels: &[&RefLabel] = &[
+                        $(ref_label!($domain_body)),*
+                    ];
+                });
+            )+
+
+            property_test!(@pass_by_reference
+                $(
+                    $group_name: {
+                        domain: concat!(DOMAIN_ $group_name),
+                        labels: concat!(LABELS_ $group_name),
+                        octet_count: $octet_count_value,
+                        label_count: $label_count_value,
+                        is_root: $is_root_value,
+                        is_lowercase: $is_lowercase_value,
+                        is_uppercase: $is_uppercase_value,
+                        is_fully_qualified: $is_fully_qualified_value,
+                        is_canonical: $is_canonical_value,
+                    }
+                ),+
+            );
         };
     }
-    generate![
-        [ROOT;
-            octets = 1,
-            is_root = true,
-            is_lowercase = true,
-            is_uppercase = true,
-            is_fully_qualified = true,
-            is_canonical = true;
-            ""
-        ],
-        [2_LABELS_UPPER;
-            octets = 5,
-            is_root = false,
-            is_lowercase = false,
-            is_uppercase = true,
-            is_fully_qualified = true,
-            is_canonical = false;
-            "COM", ""
-        ],
-        [2_LABELS_LOWER;
-            octets = 5,
-            is_root = false,
-            is_lowercase = true,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = true;
-            "com", ""
-        ],
-        [2_LABELS_MIXED;
-            octets = 5,
-            is_root = false,
-            is_lowercase = false,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = false;
-            "Com", ""
-        ],
-        [3_LABELS_UPPER;
-            octets = 13,
-            is_root = false,
-            is_lowercase = false,
-            is_uppercase = true,
-            is_fully_qualified = true,
-            is_canonical = false;
-            "EXAMPLE", "COM", ""
-        ],
-        [3_LABELS_LOWER;
-            octets = 13,
-            is_root = false,
-            is_lowercase = true,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = true;
-            "example", "com", ""
-        ],
-        [3_LABELS_MIXED;
-            octets = 13,
-            is_root = false,
-            is_lowercase = false,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = false;
-            "EXAMPLE", "com", ""
-        ],
-        [4_LABELS_UPPER;
-            octets = 17,
-            is_root = false,
-            is_lowercase = false,
-            is_uppercase = true,
-            is_fully_qualified = true,
-            is_canonical = false;
-            "WWW", "EXAMPLE", "COM", ""
-        ],
-        [4_LABELS_LOWER;
-            octets = 17,
-            is_root = false,
-            is_lowercase = true,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = true;
-            "www", "example", "com", ""
-        ],
-        [4_LABELS_MIXED;
-            octets = 17,
-            is_root = false,
-            is_lowercase = false,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = false;
-            "WWW", "example", "Com", ""
-        ],
-        [10_LABELS;
-            octets = 62,
-            is_root = false,
-            is_lowercase = true,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = true;
-            "label1",
-            "next?",
-            "another_one",
-            "more-labels",
-            "com",
-            "1",
-            "sub",
-            "subdomain",
-            "org",
-            "",
-        ],
-        [MAX_LABELS;
-            octets = 255,
-            is_root = false,
-            is_lowercase = true,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = true;
-            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
-            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
-            "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "",
-        ],
-        [REPETITIVE;
-            octets = 177,
-            is_root = false,
-            is_lowercase = true,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = true;
-            "www", "example", "org", "www", "example", "org", "www", "example", "org", "www",
-            "example", "org", "www", "example", "org", "www", "example", "org", "www", "example",
-            "org", "www", "example", "org", "www", "example", "org", "www", "example", "org", "www",
-            "example", "org", ""
-        ],
-        [1_LONG_LABEL;
-            octets = 65,
-            is_root = false,
-            is_lowercase = false,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = false;
-            "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678", ""
-        ],
-        [2_LONG_LABELS;
-            octets = 129,
-            is_root = false,
-            is_lowercase = false,
-            is_uppercase = false,
-            is_fully_qualified = true,
-            is_canonical = false;
-            "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678",
-            "9 `~!@#$%^&*()-_=+[]{};:'\",<>/? abcdefghijklmnopqrstuvwxyz ABCD",
-            "",
-        ],
-    ];
+
+    property_test!(
+        ROOT: {
+            domain!(""),
+            octet_count: 1,
+            label_count: 1,
+            is_root: true,
+            is_lowercase: true,
+            is_uppercase: true,
+            is_fully_qualified: true,
+            is_canonical: true,
+        },
+        UPPER_COM: {
+            domain!("COM"),
+            octet_count: 4,
+            label_count: 1,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+            is_fully_qualified: false,
+            is_canonical: false,
+        },
+        MIXED_COM: {
+            domain!("Com"),
+            octet_count: 4,
+            label_count: 1,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+            is_fully_qualified: false,
+            is_canonical: false,
+        },
+        LOWER_COM: {
+            domain!("com"),
+            octet_count: 4,
+            label_count: 1,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+            is_fully_qualified: false,
+            is_canonical: false,
+        },
+        MAX_LABEL_LEN: {
+            domain!("abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678"),
+            octet_count: 64,
+            label_count: 1,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+            is_fully_qualified: false,
+            is_canonical: false,
+        },
+        FQ_UPPER_COM: {
+            domain!("COM", ""),
+            octet_count: 5,
+            label_count: 2,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+            is_fully_qualified: true,
+            is_canonical: false,
+        },
+        FQ_MIXED_COM: {
+            domain!("Com", ""),
+            octet_count: 5,
+            label_count: 2,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: false,
+        },
+        FQ_LOWER_COM: {
+            domain!("com", ""),
+            octet_count: 5,
+            label_count: 2,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: true,
+        },
+        FQ_MAX_LABEL_LEN: {
+            domain!("abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678", ""),
+            octet_count: 65,
+            label_count: 2,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: false,
+        },
+        TWO_MAX_LABEL_LEN: {
+            domain!(
+               "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678",
+                "9 `~!@#$%^&*()-_=+[]{};:'\",<>/? abcdefghijklmnopqrstuvwxyz ABCD",
+            ),
+            octet_count: 128,
+            label_count: 2,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+            is_fully_qualified: false,
+            is_canonical: false,
+        },
+        FQ_UPPER_EXAMPLE_COM: {
+            domain!("EXAMPLE", "COM", ""),
+            octet_count: 13,
+            label_count: 3,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+            is_fully_qualified: true,
+            is_canonical: false,
+        },
+        FQ_MIXED_EXAMPLE_COM: {
+            domain!("EXAMPLE", "com", ""),
+            octet_count: 13,
+            label_count: 3,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: false,
+        },
+        FQ_LOWER_EXAMPLE_COM: {
+            domain!("example", "com", ""),
+            octet_count: 13,
+            label_count: 3,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: true,
+        },
+        FQ_TWO_MAX_LABEL_LEN: {
+            domain!(
+                "abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ 012345678",
+                "9 `~!@#$%^&*()-_=+[]{};:'\",<>/? abcdefghijklmnopqrstuvwxyz ABCD",
+                "",
+            ),
+            octet_count: 129,
+            label_count: 3,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: false,
+        },
+        FQ_LOWER_WWW_EXAMPLE_COM: {
+            domain!("www", "example", "com", ""),
+            octet_count: 17,
+            label_count: 4,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: true,
+        },
+        FQ_SPECIAL_CHARACTERS: {
+            domain!(
+                "label1",
+                "next?",
+                "another_one",
+                "more-labels",
+                "com",
+                "1",
+                "sub",
+                "subdomain",
+                "org",
+                "",
+            ),
+            octet_count: 62,
+            label_count: 10,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: true,
+        },
+        FQ_LOWER_MAX_LABEL_COUNT: {
+            domain!(
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "",
+            ),
+            octet_count: 255,
+            label_count: 128,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+            is_fully_qualified: true,
+            is_canonical: true,
+        },
+        FQ_UPPER_MAX_LABEL_COUNT: {
+            domain!(
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "",
+            ),
+            octet_count: 255,
+            label_count: 128,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+            is_fully_qualified: true,
+            is_canonical: false,
+        },
+        LOWER_MAX_LABEL_COUNT: {
+            domain!(
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+                "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                "n", "o", "p", "q", "r", "s", "t", "u", "v", "w",
+            ),
+            octet_count: 254,
+            label_count: 127,
+            is_root: false,
+            is_lowercase: true,
+            is_uppercase: false,
+            is_fully_qualified: false,
+            is_canonical: false,
+        },
+        UPPER_MAX_LABEL_COUNT: {
+            domain!(
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+                "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W",
+            ),
+            octet_count: 254,
+            label_count: 127,
+            is_root: false,
+            is_lowercase: false,
+            is_uppercase: true,
+            is_fully_qualified: false,
+            is_canonical: false,
+        },
+    );
 
     #[test]
     fn domain_name_to_search_names() {
