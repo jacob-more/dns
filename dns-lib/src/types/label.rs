@@ -41,7 +41,18 @@ pub const fn debug_assert_domain_name_label_invariants(octets: &[u8]) {
     }
 }
 
-pub trait Label: Debug {
+/// # Safety
+///
+/// The `Label::octets()` must be a valid non-compressed wire-encoded domain
+/// name label without the leading length octet.
+///
+/// The length of `Label::octets()` may not exceed a length of
+/// `MAX_LABEL_OCTETS` (63) bytes and the value returned by `Label::len()` must
+/// always be equivalent to that length.
+///
+/// See RFC 1035 for details about this encoding scheme used for the
+/// `Label::octets()`.
+pub unsafe trait Label: Display + Debug {
     /// Get the slice of bytes that represent the underlying label, not
     /// including the length octet.
     ///
@@ -69,11 +80,14 @@ pub trait Label: Debug {
     /// assert_eq!(label.octets().len(), 3);
     /// ```
     fn len(&self) -> u8 {
-        let len = self.octets().len();
-        if len > usize::from(MAX_LABEL_OCTETS) {
-            panic!("labels must have a length at most {MAX_LABEL_OCTETS} but it was {len}");
-        }
-        len as u8
+        debug_assert!(
+            self.octets().len() <= usize::from(MAX_LABEL_OCTETS),
+            "labels must have a length at most {MAX_LABEL_OCTETS} but \"{self}\" has length {}",
+            self.octets().len(),
+        );
+        // TODO: does asserting (possibly unsafely) that the length is at most
+        // `MAX_LABEL_OCTETS` have any performance or layout benefit here?
+        self.octets().len() as u8
     }
 
     /// Returns `true` if a label contains any bytes not including the length
@@ -168,7 +182,7 @@ pub trait Label: Debug {
     /// );
     /// ```
     fn as_ref_label(&self) -> &RefLabel {
-        RefLabel::from_octets(self.octets())
+        RefLabel::from_label(self)
     }
 
     /// Creates a `OwnedLabel` from `self`'s octets. This always allocates a new
@@ -186,7 +200,7 @@ pub trait Label: Debug {
     /// assert_eq!(ref_label.as_owned().as_case_sensitive(), owned_label.as_case_sensitive());
     /// ```
     fn as_owned(&self) -> OwnedLabel {
-        OwnedLabel::from_octets(self.octets().into())
+        OwnedLabel::from_label(self)
     }
 
     /// Creates a `OwnedLabel` from `self`'s octets. This may re-use the current
@@ -300,7 +314,20 @@ pub trait Label: Debug {
     }
 }
 
-pub trait MutLabel: Debug {
+/// # Safety
+///
+/// The `MutLabel::octets_mut()` must be a valid non-compressed wire-encoded domain
+/// name label without the leading length octet.
+///
+/// The length of `MutLabel::octets_mut()` may not exceed a length of
+/// `MAX_LABEL_OCTETS` (63) bytes.
+///
+/// If `Label` is also implemented for the type, `Label::octets()` must also be
+/// equivalent to `Label::octets_mut()`, baring mutability.
+///
+/// See RFC 1035 for details about this encoding scheme used for the
+/// `MutLabel::octets()`.
+pub unsafe trait MutLabel: Display + Debug {
     /// Get the mutable slice of bytes that represent the underlying label, not
     /// including the length octet.
     ///
@@ -329,7 +356,7 @@ pub trait MutLabel: Debug {
     /// assert_eq!(label.as_case_sensitive(), ref_label!("FOO").as_case_sensitive());
     /// ```
     fn as_ref_mut_label(&mut self) -> &mut RefLabel {
-        RefLabel::from_octets_mut(self.octets_mut())
+        RefLabel::from_label_mut(self)
     }
 
     /// Converts the body of the label to ASCII uppercase.
@@ -371,29 +398,12 @@ pub trait MutLabel: Debug {
 
 macro_rules! impl_label {
     ($($label_type:ty)*; {$($pre_self:tt)*} self {$($post_self:tt)*}) => {
-        impl<L: Label + ?Sized> Label for $($label_type)* {
+        // Safety: The type `L` enforces the safety rules for `Label`. All
+        // operations are implemented in terms of the underlying type, so the
+        // safety requirements are upheld by it.
+        unsafe impl<L: Label + ?Sized> Label for $($label_type)* {
             fn octets(&self) -> &[AsciiChar] {
                 ($($pre_self)* self $($post_self)*).octets()
-            }
-
-            fn len(&self) -> u8 {
-                ($($pre_self)* self $($post_self)*).len()
-            }
-
-            fn is_empty(&self) -> bool {
-                ($($pre_self)* self $($post_self)*).is_empty()
-            }
-
-            fn is_root(&self) -> bool {
-                ($($pre_self)* self $($post_self)*).is_root()
-            }
-
-            fn is_lowercase(&self) -> bool {
-                ($($pre_self)* self $($post_self)*).is_lowercase()
-            }
-
-            fn is_uppercase(&self) -> bool {
-                ($($pre_self)* self $($post_self)*).is_uppercase()
             }
 
             fn as_ref_label(&self) -> &RefLabel {
@@ -403,41 +413,29 @@ macro_rules! impl_label {
             fn as_owned(&self) -> OwnedLabel {
                 ($($pre_self)* self $($post_self)*).as_owned()
             }
-
-            fn as_case_sensitive(&self) -> &CaseSensitive<RefLabel> {
-                ($($pre_self)* self $($post_self)*).as_case_sensitive()
-            }
-
-            fn as_case_insensitive(&self) -> &CaseInsensitive<RefLabel> {
-                ($($pre_self)* self $($post_self)*).as_case_insensitive()
-            }
-
-            fn iter_escaped<'a>(&'a self) -> impl Iterator<Item = EscapableChar> + 'a {
-                ($($pre_self)* self $($post_self)*).iter_escaped()
-            }
         }
     };
 }
 impl_label!(&L;     {*}   self {});
 impl_label!(&mut L; {&**} self {});
 
-impl<T: MutLabel + ?Sized> MutLabel for &mut T {
-    fn octets_mut(&mut self) -> &mut [AsciiChar] {
-        (*self).octets_mut()
-    }
+macro_rules! impl_mut_label {
+    ($($label_type:ty)*; {$($pre_self:tt)*} self {$($post_self:tt)*}) => {
+        // Safety: The type `L` enforces the safety rules for `MutLabel`. All
+        // operations are implemented in terms of the underlying type, so the
+        // safety requirements are upheld by it.
+        unsafe impl<L: MutLabel + ?Sized> MutLabel for $($label_type)* {
+            fn octets_mut(&mut self) -> &mut [AsciiChar] {
+                ($($pre_self)* self $($post_self)*).octets_mut()
+            }
 
-    fn as_ref_mut_label(&mut self) -> &mut RefLabel {
-        (*self).as_ref_mut_label()
-    }
-
-    fn make_uppercase(&mut self) {
-        (*self).make_uppercase()
-    }
-
-    fn make_lowercase(&mut self) {
-        (*self).make_lowercase()
-    }
+            fn as_ref_mut_label(&mut self) -> &mut RefLabel {
+                ($($pre_self)* self $($post_self)*).as_ref_mut_label()
+            }
+        }
+    };
 }
+impl_mut_label!(&mut L; {*} self {});
 
 #[derive(Clone, Debug)]
 pub struct OwnedLabel {
@@ -468,6 +466,14 @@ impl OwnedLabel {
         unsafe { Self::from_raw_parts(octets) }
     }
 
+    /// Converts any label into a `OwnedLabel`
+    fn from_label<L: Label + ?Sized>(label: &L) -> Self {
+        // Safety: all types that implement `Label` enforce the same validity
+        // rules. These are checked upon creation and during modification. These
+        // don't need to be re-checked when converting between the label types.
+        unsafe { Self::from_raw_parts(label.octets().into()) }
+    }
+
     /// Create a `OwnedLabel` from its raw components.
     ///
     /// # Safety
@@ -486,6 +492,10 @@ impl OwnedLabel {
         debug_assert_domain_name_label_invariants(&octets);
 
         Self { octets }
+
+        // TODO: does asserting (possibly unsafely) that the length of octets is
+        // at most `MAX_LABEL_OCTETS` have any performance or layout benefits
+        // here?
     }
 }
 
@@ -510,6 +520,14 @@ impl RefLabel {
         unsafe { Self::from_raw_parts(octets) }
     }
 
+    /// Converts any label into a `&RefLabel`
+    fn from_label<L: Label + ?Sized>(label: &L) -> &Self {
+        // Safety: all types that implement `Label` enforce the same validity
+        // rules. These are checked upon creation and during modification. These
+        // don't need to be re-checked when converting between the label types.
+        unsafe { Self::from_raw_parts(label.octets()) }
+    }
+
     /// Creates a mutable reference to `RefLabel` from a slice of bytes.
     ///
     /// # Panics
@@ -526,6 +544,14 @@ impl RefLabel {
         // that all invariants required to create a valid label are upheld and
         // panics if they are not.
         unsafe { Self::from_raw_parts_mut(octets) }
+    }
+
+    /// Converts any label into a `OwnedLabel`
+    fn from_label_mut<L: MutLabel + ?Sized>(label: &mut L) -> &mut Self {
+        // Safety: all types that implement `MutLabel` enforce the same validity
+        // rules. These are checked upon creation and during modification. These
+        // don't need to be re-checked when converting between the label types.
+        unsafe { Self::from_raw_parts_mut(label.octets_mut()) }
     }
 
     /// Create a `RefLabel` from its raw components.
@@ -547,6 +573,10 @@ impl RefLabel {
         //       standard library. Need to go through and make sure I am
         //       upholding the safety guarantees in this particular case.
         unsafe { &*(octets as *const [AsciiChar] as *const RefLabel) }
+
+        // TODO: does asserting (possibly unsafely) that the length of octets is
+        // at most `MAX_LABEL_OCTETS` have any performance or layout benefits
+        // here?
     }
 
     /// Create a `RefLabel` from its raw components.
@@ -568,25 +598,23 @@ impl RefLabel {
         //       standard library. Need to go through and make sure I am
         //       upholding the safety guarantees in this particular case.
         unsafe { &mut *(octets as *mut [AsciiChar] as *mut RefLabel) }
+
+        // TODO: does asserting (possibly unsafely) that the length of octets is
+        // at most `MAX_LABEL_OCTETS` have any performance or layout benefits
+        // here?
     }
 }
 
-impl Label for OwnedLabel {
+/// # Safety
+///
+/// All functions for creating an `OwnedLabel` enforce the safety constraints
+/// for `Label`.
+///
+/// Currently, no operations exist for changing the length of the octets, but
+/// once created, those will need to check for lengths greater than 63.
+unsafe impl Label for OwnedLabel {
     fn octets(&self) -> &[AsciiChar] {
         &self.octets
-    }
-
-    fn len(&self) -> u8 {
-        // `OwnedLabel`s never have more than MAX_LABEL_OCTETS octets. This is
-        // verified when they are instantiated.
-        self.octets().len() as u8
-    }
-
-    fn as_ref_label(&self) -> &RefLabel {
-        // Safety: `OwnedLabel` has the same safety constraints as `RefLabel`
-        // for instantiation so it is safe to convert between the two types
-        // without re-checking those constraints.
-        unsafe { RefLabel::from_raw_parts(&self.octets()) }
     }
 
     fn as_owned(&self) -> OwnedLabel {
@@ -597,42 +625,39 @@ impl Label for OwnedLabel {
         self
     }
 }
-impl Label for RefLabel {
+/// # Safety
+///
+/// `RefLabel` does not own any data itself, it just references a fixed-length
+/// portion of other buffers. The guarantees of `Label` are enforced by the
+/// functions used to create new `RefLabel`s.
+unsafe impl Label for RefLabel {
     fn octets(&self) -> &[AsciiChar] {
         &self.octets
-    }
-
-    fn len(&self) -> u8 {
-        // `Label`s never have more than MAX_LABEL_OCTETS octets. This is
-        // verified when they are instantiated.
-        self.octets().len() as u8
     }
 
     fn as_ref_label(&self) -> &RefLabel {
         self
     }
-
-    fn as_owned(&self) -> OwnedLabel {
-        // Safety: `OwnedLabel` has the same safety constraints as `RefLabel`
-        // for instantiation so it is safe to convert between the two types
-        // without re-checking those constraints.
-        unsafe { OwnedLabel::from_raw_parts(self.octets().into()) }
-    }
 }
 
-impl MutLabel for OwnedLabel {
+/// # Safety
+///
+/// All functions for creating an `OwnedLabel` enforce the safety constraints
+/// for `Label`.
+///
+/// Currently, no operations exist for changing the length of the octets, but
+/// once created, those will need to check for lengths greater than 63.
+unsafe impl MutLabel for OwnedLabel {
     fn octets_mut(&mut self) -> &mut [AsciiChar] {
         &mut self.octets
     }
-
-    fn as_ref_mut_label(&mut self) -> &mut RefLabel {
-        // Safety: `OwnedLabel` has the same safety constraints as `RefLabel`
-        // for instantiation so it is safe to convert between the two types
-        // without re-checking those constraints.
-        unsafe { RefLabel::from_raw_parts_mut(self.octets_mut()) }
-    }
 }
-impl MutLabel for RefLabel {
+/// # Safety
+///
+/// `RefLabel` does not own any data itself, it just references a fixed-length
+/// portion of other buffers. The guarantees of `Label` are enforced by the
+/// functions used to create new `RefLabel`s
+unsafe impl MutLabel for RefLabel {
     fn octets_mut(&mut self) -> &mut [AsciiChar] {
         &mut self.octets
     }
@@ -740,8 +765,9 @@ macro_rules! impl_case_sensitivity {
         pub struct $sensitivity<L: ?Sized>(L);
 
         impl_label!($sensitivity<L>; {} self {.0});
+        impl_mut_label!($sensitivity<L>; {} self {.0});
 
-        impl<L: Label + ?Sized> Deref for $sensitivity<L> {
+        impl<L: ?Sized> Deref for $sensitivity<L> {
             type Target = L;
 
             fn deref(&self) -> &Self::Target {
@@ -749,7 +775,7 @@ macro_rules! impl_case_sensitivity {
             }
         }
 
-        impl<L: Label + ?Sized, T: ?Sized> AsRef<T> for $sensitivity<L>
+        impl<L: ?Sized, T: ?Sized> AsRef<T> for $sensitivity<L>
         where
             <Self as Deref>::Target: AsRef<T>,
         {
@@ -758,14 +784,14 @@ macro_rules! impl_case_sensitivity {
             }
         }
 
-        impl<L: Label + Clone + ?Sized> Clone for $sensitivity<L> {
+        impl<L: Clone + ?Sized> Clone for $sensitivity<L> {
             fn clone(&self) -> Self {
                 Self(self.0.clone())
             }
         }
-        impl<L: Label + Copy + ?Sized> Copy for $sensitivity<L> {}
+        impl<L: Copy + ?Sized> Copy for $sensitivity<L> {}
 
-        impl<L: Label + Display + ?Sized> Display for $sensitivity<L> {
+        impl<L: Display + ?Sized> Display for $sensitivity<L> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", &self.0)
             }
@@ -773,9 +799,10 @@ macro_rules! impl_case_sensitivity {
 
         impl Borrow<$sensitivity<RefLabel>> for RefLabel {
             fn borrow(&self) -> &$sensitivity<RefLabel> {
-                // TODO: The unsafe blocks for the ref labels are based on code in the
-                //       standard library. Need to go through and make sure I am
-                //       upholding the safety guarantees in this particular case.
+                // TODO: The unsafe blocks for the ref labels are based on code
+                //       in the standard library. Need to go through and make
+                //       sure I am upholding the safety guarantees in this
+                //       particular case.
                 unsafe { &*(&self.octets as *const [AsciiChar] as *const $sensitivity<RefLabel>) }
             }
         }
@@ -861,6 +888,37 @@ impl<L: Label + ?Sized> Hash for CaseInsensitive<L> {
     }
 }
 
+/// Implements `Label` using the default implementations instead of the
+/// underlying specialized implementation. This allows us to verify the default
+/// implementations using specialized types.
+#[cfg(test)]
+#[derive(Debug)]
+struct DefaultLabel<L: ?Sized>(L);
+// Safety: The type `L` enforces the safety rules for `Label`. All operations
+// are implemented in terms of the underlying types octets, so the safety
+// requirements are upheld by that type.
+#[cfg(test)]
+unsafe impl<L: Label + ?Sized> Label for DefaultLabel<L> {
+    fn octets(&self) -> &[AsciiChar] {
+        self.0.octets()
+    }
+}
+// Safety: The type `L` enforces the safety rules for `MutLabel`. All operations
+// are implemented in terms of the underlying types octets, so the safety
+// requirements are upheld by that type.
+#[cfg(test)]
+unsafe impl<L: MutLabel + ?Sized> MutLabel for DefaultLabel<L> {
+    fn octets_mut(&mut self) -> &mut [AsciiChar] {
+        self.0.octets_mut()
+    }
+}
+#[cfg(test)]
+impl<L: Display + ?Sized> Display for DefaultLabel<L> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &self.0)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use rstest::rstest;
@@ -868,27 +926,10 @@ mod test {
     use crate::{
         label, ref_label,
         types::{
-            ascii::AsciiChar,
             domain_name::MAX_LABEL_OCTETS,
-            label::{Label, MutLabel, RefLabel},
+            label::{DefaultLabel, Label, MutLabel, OwnedLabel, RefLabel},
         },
     };
-
-    /// Implements `Label` using the default implementations instead of the
-    /// underlying specialized implementation. This allows us to verify the
-    /// default implementations using specialized types.
-    #[derive(Debug)]
-    struct DefaultLabel<L: ?Sized>(L);
-    impl<L: Label + ?Sized> Label for DefaultLabel<L> {
-        fn octets(&self) -> &[AsciiChar] {
-            self.0.octets()
-        }
-    }
-    impl<L: MutLabel + ?Sized> MutLabel for DefaultLabel<L> {
-        fn octets_mut(&mut self) -> &mut [AsciiChar] {
-            self.0.octets_mut()
-        }
-    }
 
     macro_rules! repeat_for_label_types {
         (
@@ -963,8 +1004,7 @@ mod test {
                     assert_eq!(
                         label.is_empty(),
                         expected_is_empty,
-                        "{} is {}expected to be an empty label",
-                        label.as_ref_label(),
+                        "{label} is {}expected to be an empty label",
                         if expected_is_empty { "" } else { "not " }
                     );
                 }
@@ -978,8 +1018,7 @@ mod test {
                     assert_eq!(
                         label.is_root(),
                         expected_is_root,
-                        "{} is {}expected to be the root label",
-                        label.as_ref_label(),
+                        "{label} is {}expected to be the root label",
                         if expected_is_root { "" } else { "not " }
                     );
                 }
@@ -993,8 +1032,7 @@ mod test {
                     assert_eq!(
                         label.is_lowercase(),
                         expected_lowercase,
-                        "{} is {}expected to be lowercase",
-                        label.as_ref_label(),
+                        "{label} is {}expected to be lowercase",
                         if expected_lowercase { "" } else { "not " }
                     );
                 }
@@ -1008,8 +1046,7 @@ mod test {
                     assert_eq!(
                         label.is_uppercase(),
                         expected_uppercase,
-                        "{} is {}expected to be uppercase",
-                        label.as_ref_label(),
+                        "{label} is {}expected to be uppercase",
                         if expected_uppercase { "" } else { "not " }
                     );
                 }
@@ -1313,77 +1350,33 @@ mod test {
         },
     );
 
-    #[test]
+    #[rstest]
+    #[case(&[0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()])]
+    #[case(&[0; (MAX_LABEL_OCTETS as usize).checked_add(2).unwrap()])]
+    #[case(&[0; (MAX_LABEL_OCTETS as usize).checked_add(3).unwrap()])]
+    #[case(&[0; (MAX_LABEL_OCTETS as usize).checked_add(4).unwrap()])]
     #[should_panic]
-    fn from_octets_panics() {
-        let bytes = &[0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()];
-        RefLabel::from_octets(bytes);
+    fn reflabel_from_octets_panics(#[case] octets: &[u8]) {
+        RefLabel::from_octets(octets);
     }
 
-    #[test]
+    #[rstest]
+    #[case(&mut [0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()])]
+    #[case(&mut [0; (MAX_LABEL_OCTETS as usize).checked_add(2).unwrap()])]
+    #[case(&mut [0; (MAX_LABEL_OCTETS as usize).checked_add(3).unwrap()])]
+    #[case(&mut [0; (MAX_LABEL_OCTETS as usize).checked_add(4).unwrap()])]
     #[should_panic]
-    fn from_octets_mut_panics() {
-        let bytes = &mut [0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()];
-        RefLabel::from_octets_mut(bytes);
+    fn reflabel_from_octets_mut_panics(#[case] octets: &mut [u8]) {
+        RefLabel::from_octets_mut(octets);
     }
 
-    /// A type that implements `Label` but which exceeds the maximum octet limit
-    /// for labels. This lets us test that illegal conversions are prevented by
-    /// the default implementation.
-    #[derive(Debug)]
-    struct InvalidLabel {
-        octets: [u8; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()],
+    #[rstest]
+    #[case(&[0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()])]
+    #[case(&[0; (MAX_LABEL_OCTETS as usize).checked_add(2).unwrap()])]
+    #[case(&[0; (MAX_LABEL_OCTETS as usize).checked_add(3).unwrap()])]
+    #[case(&[0; (MAX_LABEL_OCTETS as usize).checked_add(4).unwrap()])]
+    #[should_panic]
+    fn ownedlabel_from_octets_panics(#[case] octets: &[u8]) {
+        OwnedLabel::from_octets(octets.into());
     }
-    impl InvalidLabel {
-        pub fn new() -> Self {
-            Self {
-                octets: [0; (MAX_LABEL_OCTETS as usize).checked_add(1).unwrap()],
-            }
-        }
-    }
-    impl Label for InvalidLabel {
-        fn octets(&self) -> &[AsciiChar] {
-            &self.octets
-        }
-    }
-
-    macro_rules! test_should_panic_for_invalid_labels {
-        ($( fn $fn_name:ident($label_arg:ident: impl Label) { $($fn_body:tt)* } )+) => {
-            $(
-                #[rstest]
-                #[case(InvalidLabel::new())]
-                #[case(DefaultLabel(InvalidLabel::new()))]
-                #[case(InvalidLabel::new().into_case_sensitive())]
-                #[case(InvalidLabel::new().into_case_insensitive())]
-                #[should_panic]
-                fn $fn_name(#[case] $label_arg: impl Label) { $($fn_body)* }
-            )+
-        };
-    }
-
-    test_should_panic_for_invalid_labels!(
-        fn invalid_label_len(invalid_label: impl Label) {
-            invalid_label.len();
-        }
-
-        fn invalid_label_as_ref_label_panics(invalid_label: impl Label) {
-            invalid_label.as_ref_label();
-        }
-
-        fn invalid_label_as_owned_panics(invalid_label: impl Label) {
-            invalid_label.as_owned();
-        }
-
-        fn invalid_label_into_owned_panics(invalid_label: impl Label) {
-            invalid_label.into_owned();
-        }
-
-        fn invalid_label_as_case_sensitive_panics(invalid_label: impl Label) {
-            invalid_label.as_case_sensitive();
-        }
-
-        fn invalid_label_as_case_insensitive_panics(invalid_label: impl Label) {
-            invalid_label.as_case_insensitive();
-        }
-    );
 }
