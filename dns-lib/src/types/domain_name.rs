@@ -1058,192 +1058,107 @@ pub trait DomainNameOwned: DomainName + DomainNameMut {
 // Need to explicitly implement each trait method so that if a more efficient
 // implementation is available for that particular type, it gets used instead of
 // the default one.
-impl<T: DomainName> DomainName for &T {
-    fn octet_count(&self) -> u16 {
-        (*self).octet_count()
-    }
+macro_rules! impl_domain_name {
+    ($($domain_type:ty)*; {$($pre_self:tt)*} self {$($post_self:tt)*}) => {
+        impl<T: DomainName> DomainName for $($domain_type)* {
+            fn octet_count(&self) -> u16 {
+                ($($pre_self)* self $($post_self)*).octet_count()
+            }
 
-    fn label_count(&self) -> u16 {
-        (*self).label_count()
-    }
+            fn label_count(&self) -> u16 {
+                ($($pre_self)* self $($post_self)*).label_count()
+            }
 
-    fn is_root(&self) -> bool {
-        (*self).is_root()
-    }
+            fn is_root(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_root()
+            }
 
-    fn is_lowercase(&self) -> bool {
-        (*self).is_lowercase()
-    }
+            fn is_lowercase(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_lowercase()
+            }
 
-    fn is_uppercase(&self) -> bool {
-        (*self).is_uppercase()
-    }
+            fn is_uppercase(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_uppercase()
+            }
 
-    fn is_fully_qualified(&self) -> bool {
-        (*self).is_fully_qualified()
-    }
+            fn is_fully_qualified(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_fully_qualified()
+            }
 
-    fn is_canonical(&self) -> bool {
-        (*self).is_canonical()
-    }
+            fn is_canonical(&self) -> bool {
+                ($($pre_self)* self $($post_self)*).is_canonical()
+            }
 
-    fn is_parent_of<D: DomainName>(&self, other: &D) -> bool {
-        (*self).is_parent_of(other)
-    }
+            fn is_parent_of<D: DomainName>(&self, other: &D) -> bool {
+                ($($pre_self)* self $($post_self)*).is_parent_of(other)
+            }
 
-    fn is_parent_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
-        (*self).is_parent_of_ignore_case(other)
-    }
+            fn is_parent_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+                ($($pre_self)* self $($post_self)*).is_parent_of_ignore_case(other)
+            }
 
-    fn is_child_of<D: DomainName>(&self, other: &D) -> bool {
-        (*self).is_child_of(other)
-    }
+            fn is_child_of<D: DomainName>(&self, other: &D) -> bool {
+                ($($pre_self)* self $($post_self)*).is_child_of(other)
+            }
 
-    fn is_child_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
-        (*self).is_child_of_ignore_case(other)
-    }
+            fn is_child_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+                ($($pre_self)* self $($post_self)*).is_child_of_ignore_case(other)
+            }
 
-    fn eq_ignore_case<D: DomainName>(&self, other: &D) -> bool {
-        (*self).eq_ignore_case(other)
-    }
+            fn eq_ignore_case<D: DomainName>(&self, other: &D) -> bool {
+                ($($pre_self)* self $($post_self)*).eq_ignore_case(other)
+            }
 
-    fn get_label(&self, index: usize) -> Option<&RefLabel> {
-        (*self).get_label(index)
-    }
+            fn get_label(&self, index: usize) -> Option<&RefLabel> {
+                ($($pre_self)* self $($post_self)*).get_label(index)
+            }
 
-    fn first_label(&self) -> Option<&RefLabel> {
-        (*self).first_label()
-    }
+            fn first_label(&self) -> Option<&RefLabel> {
+                ($($pre_self)* self $($post_self)*).first_label()
+            }
 
-    fn last_label(&self) -> Option<&RefLabel> {
-        (*self).last_label()
-    }
+            fn last_label(&self) -> Option<&RefLabel> {
+                ($($pre_self)* self $($post_self)*).last_label()
+            }
 
-    fn get_length_octet(&self, index: usize) -> Option<u8> {
-        (*self).get_length_octet(index)
-    }
+            fn get_length_octet(&self, index: usize) -> Option<u8> {
+                ($($pre_self)* self $($post_self)*).get_length_octet(index)
+            }
 
-    fn first_length_octet(&self) -> Option<u8> {
-        (*self).first_length_octet()
-    }
+            fn first_length_octet(&self) -> Option<u8> {
+                ($($pre_self)* self $($post_self)*).first_length_octet()
+            }
 
-    fn last_length_octet(&self) -> Option<u8> {
-        (*self).last_length_octet()
-    }
+            fn last_length_octet(&self) -> Option<u8> {
+                ($($pre_self)* self $($post_self)*).last_length_octet()
+            }
 
-    fn labels_iter<'a>(
-        &'a self,
-    ) -> impl 'a
-    + DoubleEndedIterator<Item = &'a RefLabel>
-    + ExactSizeIterator
-    + FusedIterator
-    + Debug
-    + Clone {
-        (*self).labels_iter()
-    }
+            fn labels_iter<'a>(
+                &'a self,
+            ) -> impl 'a
+            + DoubleEndedIterator<Item = &'a RefLabel>
+            + ExactSizeIterator
+            + FusedIterator
+            + Debug
+            + Clone {
+                ($($pre_self)* self $($post_self)*).labels_iter()
+            }
 
-    fn length_octets_iter(
-        &self,
-    ) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + FusedIterator + Debug + Clone
-    {
-        (*self).length_octets_iter()
-    }
+            fn length_octets_iter(
+                &self,
+            ) -> impl DoubleEndedIterator<Item = u8>
+            + ExactSizeIterator
+            + FusedIterator
+            + Debug
+            + Clone
+            {
+                ($($pre_self)* self $($post_self)*).length_octets_iter()
+            }
+        }
+    };
 }
-
-// Need to explicitly implement each trait method so that if a more efficient
-// implementation is available for that particular type, it gets used instead of
-// the default one.
-impl<T: DomainName> DomainName for &mut T {
-    fn octet_count(&self) -> u16 {
-        (&**self).octet_count()
-    }
-
-    fn label_count(&self) -> u16 {
-        (&**self).label_count()
-    }
-
-    fn is_root(&self) -> bool {
-        (&**self).is_root()
-    }
-
-    fn is_lowercase(&self) -> bool {
-        (&**self).is_lowercase()
-    }
-
-    fn is_uppercase(&self) -> bool {
-        (&**self).is_uppercase()
-    }
-
-    fn is_fully_qualified(&self) -> bool {
-        (&**self).is_fully_qualified()
-    }
-
-    fn is_canonical(&self) -> bool {
-        (&**self).is_canonical()
-    }
-
-    fn is_parent_of<D: DomainName>(&self, other: &D) -> bool {
-        (&**self).is_parent_of(other)
-    }
-
-    fn is_parent_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
-        (&**self).is_parent_of_ignore_case(other)
-    }
-
-    fn is_child_of<D: DomainName>(&self, other: &D) -> bool {
-        (&**self).is_child_of(other)
-    }
-
-    fn is_child_of_ignore_case<D: DomainName>(&self, other: &D) -> bool {
-        (&**self).is_child_of_ignore_case(other)
-    }
-
-    fn eq_ignore_case<D: DomainName>(&self, other: &D) -> bool {
-        (&**self).eq_ignore_case(other)
-    }
-
-    fn get_label(&self, index: usize) -> Option<&RefLabel> {
-        (&**self).get_label(index)
-    }
-
-    fn first_label(&self) -> Option<&RefLabel> {
-        (&**self).first_label()
-    }
-
-    fn last_label(&self) -> Option<&RefLabel> {
-        (&**self).last_label()
-    }
-
-    fn get_length_octet(&self, index: usize) -> Option<u8> {
-        (&**self).get_length_octet(index)
-    }
-
-    fn first_length_octet(&self) -> Option<u8> {
-        (&**self).first_length_octet()
-    }
-
-    fn last_length_octet(&self) -> Option<u8> {
-        (&**self).last_length_octet()
-    }
-
-    fn labels_iter<'a>(
-        &'a self,
-    ) -> impl 'a
-    + DoubleEndedIterator<Item = &'a RefLabel>
-    + ExactSizeIterator
-    + FusedIterator
-    + Debug
-    + Clone {
-        (&**self).labels_iter()
-    }
-
-    fn length_octets_iter(
-        &self,
-    ) -> impl DoubleEndedIterator<Item = u8> + ExactSizeIterator + FusedIterator + Debug + Clone
-    {
-        (&**self).length_octets_iter()
-    }
-}
+impl_domain_name!(&T;     {*}   self {});
+impl_domain_name!(&mut T; {&**} self {});
 
 // Need to explicitly implement each trait method so that if a more efficient
 // implementation is available for that particular type, it gets used instead of
