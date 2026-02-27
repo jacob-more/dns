@@ -831,7 +831,7 @@ pub trait DomainNameMut {
     ) -> impl 'a + DoubleEndedIterator<Item = &'a mut RefLabel> + ExactSizeIterator + FusedIterator + Debug;
 }
 
-pub trait DomainNameOwned: DomainName + DomainNameMut {
+pub trait DomainNameOwned: DomainName {
     /// Converts this domain into a fully qualified domain. A domain name is
     /// fully qualified if it ends with the root label.
     ///
@@ -848,7 +848,10 @@ pub trait DomainNameOwned: DomainName + DomainNameMut {
     /// assert!(domain.make_fully_qualified().is_ok());
     /// assert_eq!(domain, ref_domain!("example", "com", ""));
     /// ```
-    fn make_fully_qualified(&mut self) -> Result<(), MakeFullyQualifiedError> {
+    fn make_fully_qualified(&mut self) -> Result<(), MakeFullyQualifiedError>
+    where
+        Self: DomainNameMut,
+    {
         if self.is_fully_qualified() {
             return Ok(());
         }
@@ -877,7 +880,10 @@ pub trait DomainNameOwned: DomainName + DomainNameMut {
     /// assert!(domain.make_canonical().is_ok());
     /// assert_eq!(domain, ref_domain!("example", "com", ""));
     /// ```
-    fn make_canonical(&mut self) -> Result<(), MakeCanonicalError> {
+    fn make_canonical(&mut self) -> Result<(), MakeCanonicalError>
+    where
+        Self: DomainNameMut,
+    {
         self.make_fully_qualified()?;
         self.make_lowercase();
         Ok(())
