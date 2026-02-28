@@ -184,7 +184,7 @@ mod circular_serde_sanity_test {
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
         types::{
             character_string::CharacterString,
-            domain_name::{DomainVec, IncompressibleDomainVec},
+            domain_name::{DomainNameInitialize, DomainVec, IncompressibleDomainVec},
         },
     };
 

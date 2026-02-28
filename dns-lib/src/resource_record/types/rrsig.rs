@@ -31,7 +31,7 @@ mod circular_serde_sanity_test {
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
         types::{
             base64::Base64,
-            domain_name::{DomainVec, IncompressibleDomainVec},
+            domain_name::{DomainNameInitialize, DomainVec, IncompressibleDomainVec},
         },
     };
 

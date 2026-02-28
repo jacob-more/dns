@@ -4,7 +4,7 @@ use dns_macros::{FromWire, ToWire};
 
 use crate::{
     resource_record::{rclass::RClass, rtype::RType},
-    types::domain_name::{CompressibleDomainVec, DomainVec},
+    types::domain_name::{CompressibleDomainVec, DomainNameInitialize, DomainVec},
 };
 
 /// https://datatracker.ietf.org/doc/html/rfc1035#section-4.1.2
@@ -19,7 +19,7 @@ impl Default for Question {
     #[inline]
     fn default() -> Self {
         Self {
-            qname: CompressibleDomainVec(DomainVec::new_root()),
+            qname: CompressibleDomainVec(DomainVec::root()),
             qtype: RType::Unknown(0),
             qclass: RClass::Unknown(0),
         }

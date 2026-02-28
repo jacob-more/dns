@@ -2516,7 +2516,7 @@ mod mixed_udp_tcp_tests {
             rtype::RType, time::Time, types::a::A,
         },
         serde::wire::{from_wire::FromWire, read_wire::ReadWire, to_wire::ToWire},
-        types::domain_name::DomainVec,
+        types::domain_name::{DomainNameInitialize, DomainVec},
     };
     use tinyvec::TinyVec;
     use tokio::{io::AsyncReadExt, select};

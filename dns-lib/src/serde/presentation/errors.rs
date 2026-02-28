@@ -171,6 +171,11 @@ impl From<DomainNameError> for TokenError {
         Self::DomainNameError(value)
     }
 }
+impl From<crate::types::domain_name::FromAsciiError> for TokenError {
+    fn from(value: crate::types::domain_name::FromAsciiError) -> Self {
+        Self::DomainNameError(DomainNameError::from(value))
+    }
+}
 impl From<Base16Error> for TokenError {
     fn from(value: Base16Error) -> Self {
         Self::Base16Error(value)

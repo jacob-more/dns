@@ -243,7 +243,7 @@ mod circular_serde_sanity_test {
     use super::{AMTRELAY, RelayType};
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::DomainVec,
+        types::domain_name::{DomainNameInitialize, DomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
@@ -300,7 +300,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::DomainVec,
+        types::domain_name::{DomainNameInitialize, DomainVec},
     };
 
     const GOOD_PRECEDENCE: &str = "1";

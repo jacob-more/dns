@@ -49,7 +49,7 @@ mod circular_serde_sanity_test {
         resource_record::rtype::RType,
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
         types::{
-            domain_name::{DomainVec, IncompressibleDomainVec},
+            domain_name::{DomainNameInitialize, DomainVec, IncompressibleDomainVec},
             rtype_bitmap::RTypeBitmap,
         },
     };

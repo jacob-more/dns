@@ -4,14 +4,16 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     iter::FusedIterator,
+    str::Utf8Error,
 };
 
 use static_assertions::const_assert;
 
 use crate::{
+    ref_label,
     serde::presentation::parse_chars::escaped_to_escapable::ParseError,
     types::{
-        ascii::AsciiError,
+        ascii::{AsciiChar, AsciiError},
         label::{MutLabel, OwnedLabel},
     },
 };
@@ -146,6 +148,27 @@ impl From<AsciiError> for DomainNameError {
         Self::AsciiError(value)
     }
 }
+impl From<FromAsciiError> for DomainNameError {
+    fn from(value: FromAsciiError) -> Self {
+        match value {
+            FromAsciiError::EmptyString => Self::EmptyString,
+            FromAsciiError::LeadingDot => Self::LeadingDot,
+            FromAsciiError::ConsecutiveDots => Self::ConsecutiveDots,
+            FromAsciiError::LongDomain => Self::LongDomain,
+            FromAsciiError::LongLabel => Self::LongLabel,
+            FromAsciiError::ParseError(error) => Self::ParseError(error),
+        }
+    }
+}
+impl From<FromLabelsError> for DomainNameError {
+    fn from(value: FromLabelsError) -> Self {
+        match value {
+            FromLabelsError::NoLabels => Self::EmptyString,
+            FromLabelsError::TooManyOctets => Self::LongDomain,
+            FromLabelsError::NonTrailingRoot => Self::ConsecutiveDots,
+        }
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum MakeCanonicalError {
@@ -192,6 +215,69 @@ pub enum InsertError {
     FullyQualified,
     #[error("domain name tried to insert a root label before the end")]
     NonTrailingRoot,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum FromLabelsError {
+    #[error("domain name must have at least one label")]
+    NoLabels,
+    #[error("domain name exceeded {} maximum octet count", MAX_OCTETS)]
+    TooManyOctets,
+    #[error("domain name contains a root label before the end")]
+    NonTrailingRoot,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum FromAsciiError {
+    #[error("domain name cannot be parsed from an empty string")]
+    EmptyString,
+    #[error("domain name must not begin with a '.' except for in the root zone")]
+    LeadingDot,
+    #[error("domain name cannot contain two consecutive dots '..' unless one of them is escaped")]
+    ConsecutiveDots,
+    #[error("domain name exceeded {} maximum octet count", MAX_OCTETS)]
+    LongDomain,
+    #[error(
+        "domain name label exceeded {} maximum label octet count",
+        MAX_LABEL_OCTETS
+    )]
+    LongLabel,
+    #[error("domain name parse error {0}")]
+    ParseError(ParseError),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum FromUtf8Error {
+    #[error("domain name cannot be parsed from an empty string")]
+    EmptyString,
+    #[error("domain name must not begin with a '.' except for in the root zone")]
+    LeadingDot,
+    #[error("domain name cannot contain two consecutive dots '..' unless one of them is escaped")]
+    ConsecutiveDots,
+    #[error("domain name exceeded {} maximum octet count", MAX_OCTETS)]
+    LongDomain,
+    #[error(
+        "domain name label exceeded {} maximum label octet count",
+        MAX_LABEL_OCTETS
+    )]
+    LongLabel,
+    #[error("domain name parse error {0}")]
+    ParseError(ParseError),
+    #[error("domain name utf8 parse error {0}")]
+    Utf8ParseError(#[from] Utf8Error),
+}
+
+impl From<FromAsciiError> for FromUtf8Error {
+    fn from(value: FromAsciiError) -> Self {
+        match value {
+            FromAsciiError::EmptyString => Self::EmptyString,
+            FromAsciiError::LeadingDot => Self::LeadingDot,
+            FromAsciiError::ConsecutiveDots => Self::ConsecutiveDots,
+            FromAsciiError::LongDomain => Self::LongDomain,
+            FromAsciiError::LongLabel => Self::LongLabel,
+            FromAsciiError::ParseError(e) => Self::ParseError(e),
+        }
+    }
 }
 
 fn impl_is_parent_of<L>(
@@ -1061,6 +1147,45 @@ pub trait DomainNameOwned: DomainName {
     }
 }
 
+pub trait DomainNameInitialize: DomainName {
+    fn root() -> Self
+    where
+        Self: Sized,
+    {
+        match Self::from_labels(std::iter::once(ref_label!(""))) {
+            Ok(domain) => domain,
+            Err(FromLabelsError::NoLabels) => {
+                panic!("BUG: a root domain name always has one label")
+            }
+            Err(FromLabelsError::TooManyOctets) => {
+                panic!("BUG: a root domain name should never exceed the octet limit")
+            }
+            Err(FromLabelsError::NonTrailingRoot) => {
+                panic!("BUG: a root domain name cannot have a non-trailing root label")
+            }
+        }
+    }
+
+    fn from_labels<L, I>(labels: I) -> Result<Self, FromLabelsError>
+    where
+        Self: Sized,
+        L: Label,
+        I: IntoIterator<Item = L>;
+
+    fn from_ascii(string: &[AsciiChar]) -> Result<Self, FromAsciiError>
+    where
+        Self: Sized;
+
+    fn from_utf8(string: &str) -> Result<Self, FromUtf8Error>
+    where
+        Self: Sized,
+    {
+        // TODO: domain names can be arbitrary bytes. Should we be trying to do
+        //       any extra error checks when going from UTF-8 to 8-bit ASCII?
+        Ok(Self::from_ascii(string.as_bytes())?)
+    }
+}
+
 // Need to explicitly implement each trait method so that if a more efficient
 // implementation is available for that particular type, it gets used instead of
 // the default one.
@@ -1281,8 +1406,9 @@ mod test {
         serde::wire::{from_wire::FromWire, to_wire::ToWire},
         types::{
             domain_name::{
-                CompressibleDomainVec, DomainName, DomainNameMut, DomainSlice, DomainVec,
-                IncompressibleDomainVec, RawDomainSlice, RawDomainVec,
+                CompressibleDomainVec, DomainName, DomainNameInitialize, DomainNameMut,
+                DomainNameOwned, DomainSlice, DomainVec, IncompressibleDomainVec, RawDomainSlice,
+                RawDomainVec,
             },
             label::{Label, RefLabel},
         },
@@ -1331,6 +1457,34 @@ mod test {
         + FusedIterator
         + Debug {
             self.0.labels_iter_mut()
+        }
+    }
+    impl<D: DomainNameOwned> DomainNameOwned for DefaultDomain<D> {
+        fn insert<L: Label>(&mut self, index: usize, label: L) -> Result<(), super::InsertError> {
+            self.0.insert(index, label)
+        }
+
+        fn remove(&mut self, index: usize) -> Option<crate::types::label::OwnedLabel> {
+            self.0.remove(index)
+        }
+    }
+    impl<D: DomainNameInitialize> DomainNameInitialize for DefaultDomain<D> {
+        fn from_labels<L, I>(labels: I) -> Result<Self, super::FromLabelsError>
+        where
+            Self: Sized,
+            L: Label,
+            I: IntoIterator<Item = L>,
+        {
+            Ok(Self(D::from_labels(labels)?))
+        }
+
+        fn from_ascii(
+            string: &[crate::types::ascii::AsciiChar],
+        ) -> Result<Self, super::FromAsciiError>
+        where
+            Self: Sized,
+        {
+            Ok(Self(D::from_ascii(string)?))
         }
     }
 

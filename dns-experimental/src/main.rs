@@ -12,7 +12,7 @@ use dns_lib::{
     },
     query::question::Question,
     resource_record::{rclass::RClass, rtype::RType},
-    types::domain_name::DomainVec,
+    types::domain_name::{DomainNameInitialize, DomainNameOwned, DomainVec},
 };
 use futures::StreamExt;
 

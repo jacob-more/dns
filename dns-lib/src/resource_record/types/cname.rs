@@ -28,7 +28,7 @@ mod circular_serde_sanity_test {
     use super::CNAME;
     use crate::{
         serde::wire::circular_test::gen_test_circular_serde_sanity_test,
-        types::domain_name::{CompressibleDomainVec, DomainVec},
+        types::domain_name::{CompressibleDomainVec, DomainNameInitialize, DomainVec},
     };
 
     gen_test_circular_serde_sanity_test!(
@@ -46,7 +46,7 @@ mod tokenizer_tests {
         serde::presentation::test_from_tokenized_rdata::{
             gen_fail_record_test, gen_ok_record_test,
         },
-        types::domain_name::{CompressibleDomainVec, DomainVec},
+        types::domain_name::{CompressibleDomainVec, DomainNameInitialize, DomainVec},
     };
 
     const GOOD_DOMAIN: &str = "www.example.com.";

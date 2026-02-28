@@ -9,7 +9,7 @@ use dns_lib::{
     query::question::Question,
     resource_record::{rclass::RClass, rtype::RType},
     types::{
-        domain_name::{DomainName, DomainVec},
+        domain_name::{DomainName, DomainNameInitialize, DomainVec},
         label::{CaseInsensitive, Label, OwnedLabel},
     },
 };
@@ -301,7 +301,7 @@ where
                                 DomainVec::from_labels(domain_name).ok()
                             }),
                     );
-                    write_domains.insert(DomainVec::new_root());
+                    write_domains.insert(DomainVec::root());
                     drop(write_domains);
                     drop(domains);
                 }

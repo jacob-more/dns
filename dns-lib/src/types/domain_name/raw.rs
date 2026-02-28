@@ -3,14 +3,20 @@ use std::{fmt::Debug, iter::FusedIterator};
 use static_assertions::const_assert;
 use tinyvec::TinyVec;
 
-use crate::types::{
-    ascii::AsciiChar,
-    domain_name::{
-        DomainName, DomainNameMut, DomainNameOwned, InsertError, LENGTH_OCTET_WIDTH,
-        MAX_LABEL_OCTETS, MAX_LABELS, MAX_OCTETS, MakeCanonicalError, MakeFullyQualifiedError,
-        PushBackError, PushFrontError, assert_domain_name_invariants, would_exceed_max_octets,
+use crate::{
+    serde::presentation::parse_chars::{
+        char_token::EscapableChar, escaped_to_escapable::EscapedCharsEnumerateIter,
     },
-    label::{Label, OwnedLabel, RefLabel},
+    types::{
+        ascii::{AsciiChar, constants::ASCII_PERIOD},
+        domain_name::{
+            DomainName, DomainNameInitialize, DomainNameMut, DomainNameOwned, FromAsciiError,
+            FromLabelsError, InsertError, LENGTH_OCTET_WIDTH, MAX_LABEL_OCTETS, MAX_LABELS,
+            MAX_OCTETS, MakeCanonicalError, MakeFullyQualifiedError, PushBackError, PushFrontError,
+            assert_domain_name_invariants, would_exceed_max_octets,
+        },
+        label::{Label, OwnedLabel, RefLabel},
+    },
 };
 
 /// Assert all invariants required to ensure that the raw parts of a raw domain
@@ -886,6 +892,108 @@ impl DomainNameOwned for RawDomainVec {
         );
         self.debug_assert_invariants();
         Some(label)
+    }
+}
+
+impl DomainNameInitialize for RawDomainVec {
+    fn root() -> Self
+    where
+        Self: Sized,
+    {
+        Self { octets: vec![0] }.and_debug_assert_invariants()
+    }
+
+    fn from_labels<L, I>(labels: I) -> Result<Self, FromLabelsError>
+    where
+        Self: Sized,
+        L: Label,
+        I: IntoIterator<Item = L>,
+    {
+        // TODO: should we check against `MAX_LABELS`? That limit is probably
+        //       enforced just by not being able to push more than 256 bytes to
+        //       the `octets` vector.
+
+        let mut domain = Self { octets: Vec::new() };
+        let mut last_length_octet = None;
+        for label in labels.into_iter() {
+            if last_length_octet.is_some_and(|length| 0 == length) {
+                return Err(FromLabelsError::NonTrailingRoot);
+            } else if would_exceed_max_octets(&domain, &label) {
+                return Err(FromLabelsError::TooManyOctets);
+            }
+
+            domain
+                .octets
+                .reserve(LENGTH_OCTET_WIDTH + label.octets().len());
+            domain.octets.push(label.len());
+            domain.octets.extend_from_slice(label.octets());
+
+            last_length_octet = Some(label.len());
+        }
+        if domain.octets.is_empty() {
+            return Err(FromLabelsError::NoLabels);
+        }
+        Ok(domain.and_debug_assert_invariants())
+    }
+
+    fn from_ascii(string: &[AsciiChar]) -> Result<Self, FromAsciiError>
+    where
+        Self: Sized,
+    {
+        if string.is_empty() {
+            return Err(FromAsciiError::EmptyString);
+        }
+        // As long as there are no escaped characters in the string and the name
+        // is fully qualified, we expect the length to just about match the
+        // number of characters + 1 for the root label.
+        let mut octets = Vec::with_capacity(string.len() + LENGTH_OCTET_WIDTH);
+        // The first byte represents the length of the first label.
+        octets.push(0);
+        let mut length_octet_index = 0;
+
+        for escaped_char_result in
+            EscapedCharsEnumerateIter::from(string.iter().copied().enumerate())
+        {
+            match (escaped_char_result, (octets.len() - length_octet_index)) {
+                (Ok((0, EscapableChar::Ascii(ASCII_PERIOD))), _) => {
+                    // leading dots are illegal except for the root zone
+                    if string.len() > 1 {
+                        return Err(FromAsciiError::LeadingDot);
+                    }
+                    break;
+                }
+                // consecutive dots are never legal
+                (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 1) => {
+                    return Err(FromAsciiError::ConsecutiveDots);
+                }
+                // a label is found
+                (Ok((1.., EscapableChar::Ascii(ASCII_PERIOD))), 2..) => {
+                    if octets.len() > MAX_OCTETS as usize {
+                        return Err(FromAsciiError::LongDomain);
+                    }
+
+                    length_octet_index = octets.len();
+                    octets.push(0);
+                }
+                (Ok((_, escapable_char)), _) => {
+                    octets.push(escapable_char.into_unescaped_character());
+                    octets[length_octet_index] += 1;
+
+                    // TODO: Can we optimize this check? It might be able to do once per label as
+                    // long as we still check against the maximum number of octets every time.
+                    if u16::from(octets[length_octet_index]) > MAX_LABEL_OCTETS {
+                        return Err(FromAsciiError::LongLabel);
+                    }
+
+                    if octets.len() > MAX_OCTETS as usize {
+                        return Err(FromAsciiError::LongDomain);
+                    }
+                }
+                (Err(error), _) => return Err(FromAsciiError::ParseError(error)),
+            }
+        }
+
+        Ok(Self { octets }.and_debug_assert_invariants())
     }
 }
 

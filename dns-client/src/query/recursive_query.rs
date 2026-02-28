@@ -13,7 +13,7 @@ use dns_lib::{
         types::ns::NS,
     },
     types::
-        domain_name::{DomainName, DomainVec}
+        domain_name::{DomainName, DomainNameInitialize, DomainVec}
     ,
 };
 use log::{debug, trace};
@@ -407,14 +407,13 @@ where
                     .labels_iter()
                     .take(record.get_name().label_count() as usize)
                     .chain(dname_rdata.target_name().labels_iter())
-                    .collect(),
             );
 
             let dname = match dname {
                 Ok(dname) => dname,
                 Err(error) => {
                     trace!(context:?; "Recursive search new cname error: {error}");
-                    return QError::DomainNameErr(error).into();
+                    return QError::DomainNameErr(error.into()).into();
                 }
             };
 
